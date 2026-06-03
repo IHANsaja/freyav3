@@ -1,4 +1,4 @@
-# freyav3 (Freya)
+# Freya 3.0
 
 freyav3 is a local, real-time voice assistant that streams microphone audio to Google Gemini Live (native audio output) and plays the returned audio through your speakers using PyAudio.
 
