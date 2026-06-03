@@ -2,3 +2,5 @@ google-genai
 python-dotenv
 pyaudio
 keyboard
+pyautogui
+pillow

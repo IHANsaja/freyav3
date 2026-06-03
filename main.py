@@ -23,7 +23,8 @@ async def main():
         api_key=api_key,
         model_id=model_id,
         voice=voice,
-        personality=personality
+        personality=personality,
+        config=config
     )
 
     try:

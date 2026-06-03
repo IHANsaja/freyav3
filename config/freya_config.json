@@ -16,7 +16,7 @@
         },
         {
           "id": "gemini-2.5-flash-native-audio-preview-12-2025",
-          "label": "Gemini 2.5 Flash Native Audio"
+          "label": "Gemini 2.5 Flash Native Audio (fallback)"
         }
       ],
       "voices": ["Aoede", "Kore", "Zephyr"],
@@ -24,16 +24,21 @@
     }
   },
   "apps": {
-    "valorant": "",
-    "photoshop": "",
-    "illustrator": "",
-    "discord": "",
-    "telegram": "",
-    "steam": "",
-    "word": "",
-    "powerpoint": "",
-    "outlook": "",
-    "edge": ""
+    "valorant":    "C:/Riot Games/Riot Client/RiotClientServices.exe",
+    "photoshop":   "C:/Program Files/Adobe/Adobe Photoshop 2025/Photoshop.exe",
+    "illustrator": "C:/Program Files/Adobe/Adobe Illustrator 2025/Support Files/Contents/Windows/Illustrator.exe",
+    "discord":     "C:/Users/IHAN HANSAJA/AppData/Local/Discord/app-1.0.9177/Discord.exe",
+    "telegram":    "C:/Users/IHAN HANSAJA/AppData/Roaming/Telegram Desktop/Telegram.exe",
+    "steam":       "C:/Program Files (x86)/Steam/steam.exe",
+    "word":        "C:/Program Files/Microsoft Office/root/Office16/WINWORD.EXE",
+    "powerpoint":  "C:/Program Files/Microsoft Office/root/Office16/POWERPNT.EXE",
+    "outlook":     "C:/Program Files/Microsoft Office/root/Office16/OUTLOOK.EXE",
+    "edge":        "C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe",
+    "vscode":      "C:/Users/IHAN HANSAJA/AppData/Local/Programs/Microsoft VS Code/Code.exe",
+    "work":        "F:/Your/Work/Folder/Path"
+  },
+  "projects": {
+    "freyav3":     "F:/Projects/Freya/freyav3"
   },
   "audio": {
     "input_device_index": 0,
