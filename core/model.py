@@ -1,3 +1,4 @@
+from asyncio import selector_events
 import asyncio
 import json
 from google import genai
@@ -193,12 +194,13 @@ TOOL_DECLARATIONS = [
 
 
 class FreyaModel:
-    def __init__(self, api_key, model_id, voice, personality, config):
+    def __init__(self, api_key, model_id, voice, personality, config, transcript=None):
         self.client = genai.Client(api_key=api_key)
         self.model_id = model_id
         self.voice = voice
         self.personality = personality
-        self.config = config  # needed for tools that read app paths
+        self.config = config
+        self.transcript = transcript
         self.session = None
 
     def get_config(self):
@@ -277,12 +279,16 @@ class FreyaModel:
                             text = getattr(inp, 'text', str(inp)).strip()
                             if text:
                                 print(f"  You  : {text}")
-
+                                if self.transcript:
+                                    self.transcript.add("Ihan", text)   
+                    
                         out = getattr(sc, 'output_transcription', None)
                         if out:
                             text = getattr(out, 'text', str(out)).strip()
                             if text:
                                 print(f"  Freya: {text}")
+                                if self.transcript:
+                                    self.transcript.add("Freya", text)
 
                         # Turn complete → unmute mic
                         if getattr(sc, 'turn_complete', False):

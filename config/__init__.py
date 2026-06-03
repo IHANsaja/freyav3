@@ -28,3 +28,10 @@ def get_personality(config):
 
 def get_app_path(config, app_name):
     return config["apps"].get(app_name, "")
+
+def get_memory_api_key():
+    """Get a separate API key for memory updates (falls back to main key)."""
+    key = os.getenv("GEMINI_MEMORY_API_KEY") or os.getenv("GEMINI_API_KEY")
+    if not key:
+        raise ValueError("No API key found for memory updates!")
+    return key
