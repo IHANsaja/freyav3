@@ -1,0 +1,4 @@
+google-genai
+python-dotenv
+pyaudio
+keyboard

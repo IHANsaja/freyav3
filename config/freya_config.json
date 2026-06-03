@@ -1,0 +1,42 @@
+{
+  "freya": {
+    "name": "Freya",
+    "personality": "You are Freya, a smart and friendly personal AI voice assistant built for Ihan. You are helpful, concise, and slightly witty. You respond in short natural sentences since your responses are spoken out loud — never use bullet points, markdown, or long paragraphs.",
+    "input_mode": "vad",
+    "hotkey": "alt"
+  },
+  "active_provider": "gemini",
+  "active_model": "gemini-3.1-flash-live-preview",
+  "providers": {
+    "gemini": {
+      "models": [
+        {
+          "id": "gemini-3.1-flash-live-preview",
+          "label": "Gemini 3.1 Flash Live Preview"
+        },
+        {
+          "id": "gemini-2.5-flash-native-audio-preview-12-2025",
+          "label": "Gemini 2.5 Flash Native Audio"
+        }
+      ],
+      "voices": ["Aoede", "Kore", "Zephyr"],
+      "active_voice": "Zephyr"
+    }
+  },
+  "apps": {
+    "valorant": "",
+    "photoshop": "",
+    "illustrator": "",
+    "discord": "",
+    "telegram": "",
+    "steam": "",
+    "word": "",
+    "powerpoint": "",
+    "outlook": "",
+    "edge": ""
+  },
+  "audio": {
+    "input_device_index": 0,
+    "output_device_index": 3
+  }
+}
