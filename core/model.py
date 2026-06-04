@@ -221,6 +221,16 @@ class FreyaModel:
             tools=[types.Tool(function_declarations=TOOL_DECLARATIONS)],
         )
 
+    # Add these to FreyaModel class — override in subclass for UI broadcasting
+    async def on_transcript(self, speaker_name: str, text: str):
+        pass  # overridden in server.py
+
+    async def on_tool(self, name: str, args: dict, result: str):
+        pass  # overridden in server.py
+
+    async def on_state(self, value: str):
+        pass  # overridden in server.py
+
     async def run(self, mic_stream, speaker_stream):
         print(f"\nConnecting to {self.model_id}...")
 
@@ -244,24 +254,19 @@ class FreyaModel:
                         )
 
             async def receive_audio():
+                freya_buffer = ""
                 while True:
                     async for response in session.receive():
                         if response.server_content is None:
-
-                            # ── TOOL CALL HANDLING ──
                             if response.tool_call is not None:
                                 for fc in response.tool_call.function_calls:
                                     tool_name = fc.name
                                     tool_args = dict(fc.args) if fc.args else {}
-                                    call_id   = fc.id
-
+                                    call_id = fc.id
                                     print(f"  Tool : {tool_name}({tool_args})")
-
-                                    # Run the tool
                                     result = dispatch(tool_name, tool_args, self.config)
                                     print(f"  Result: {result}")
-
-                                    # Send result back to Gemini
+                                    await self.on_tool(tool_name, tool_args, result)
                                     await session.send_tool_response(
                                         function_responses=[types.FunctionResponse(
                                             id=call_id,
@@ -273,35 +278,43 @@ class FreyaModel:
 
                         sc = response.server_content
 
-                        # Transcription logging
+                        # Buffer input transcription (your words)
                         inp = getattr(sc, 'input_transcription', None)
                         if inp:
                             text = getattr(inp, 'text', str(inp)).strip()
                             if text:
                                 print(f"  You  : {text}")
                                 if self.transcript:
-                                    self.transcript.add("Ihan", text)   
-                    
+                                    self.transcript.add("Ihan", text)
+                                await self.on_transcript("Ihan", text)
+
+                        # Buffer Freya's words — don't emit yet
                         out = getattr(sc, 'output_transcription', None)
                         if out:
                             text = getattr(out, 'text', str(out)).strip()
                             if text:
-                                print(f"  Freya: {text}")
-                                if self.transcript:
-                                    self.transcript.add("Freya", text)
+                                freya_buffer += " " + text
 
-                        # Turn complete → unmute mic
+                        # Turn complete → emit full buffered sentence
                         if getattr(sc, 'turn_complete', False):
+                            full_text = freya_buffer.strip()
+                            if full_text:
+                                print(f"  Freya: {full_text}")
+                                if self.transcript:
+                                    self.transcript.add("Freya", full_text)
+                                await self.on_transcript("Freya", full_text)
+                            freya_buffer = ""  # reset for next turn
                             model_speaking.clear()
+                            await self.on_state("listening")
                             continue
 
                         if sc.model_turn is None:
                             continue
 
-                        # Stream audio to speaker
                         for part in sc.model_turn.parts:
                             if part.inline_data is not None:
                                 model_speaking.set()
+                                await self.on_state("speaking")
                                 await audio_queue.put(part.inline_data.data)
 
             async def play_audio():

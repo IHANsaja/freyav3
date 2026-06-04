@@ -4,3 +4,6 @@ pyaudio
 keyboard
 pyautogui
 pillow
+fastapi
+uvicorn
+websockets
