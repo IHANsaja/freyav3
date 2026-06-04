@@ -1,26 +1,85 @@
 @import "tailwindcss";
 
+@theme {
+  --color-surface: #131313;
+  --color-surface-dim: #131313;
+  --color-surface-bright: #393939;
+  --color-surface-container-lowest: #0e0e0e;
+  --color-surface-container-low: #1c1b1b;
+  --color-surface-container: #201f1f;
+  --color-surface-container-high: #2a2a2a;
+  --color-surface-container-highest: #353534;
+  
+  --color-primary: #ffb3ac; /* Light peach/crimson accent */
+  --color-primary-container: #d32f2f; /* Deep brand crimson */
+  --color-secondary: #ffb4a8;
+  --color-secondary-container: #920703; /* Muted blood red */
+  
+  --color-on-surface: #e5e2e1;
+  --color-on-surface-variant: #e4beba;
+  
+  --color-outline: #ab8985;
+  --color-outline-variant: #5b403d;
+  
+  --color-parchment: #f5f5dc; /* Warm parchment ink */
+  --color-muted-blood: #8b0000;
+  --color-deep-charcoal: #1a1a1a;
+  
+  --font-sans: var(--font-sans), sans-serif;
+  --font-mono: var(--font-mono), monospace;
+}
+
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
-}
-
-@theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
-}
-
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
+  background-color: #131313;
+  color: #f5f5dc;
 }
 
 body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  background-color: #131313;
+  color: #f5f5dc;
+  font-family: var(--font-sans), sans-serif;
 }
+
+/* Custom animations for Crimson Archival theme */
+@keyframes blink {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0; }
+}
+
+.terminal-cursor {
+  animation: blink 1s step-end infinite;
+  display: inline-block;
+  width: 8px;
+  height: 15px;
+  background-color: #ffb3ac;
+  vertical-align: middle;
+  margin-left: 4px;
+}
+
+@keyframes pulse-line {
+  0%, 100% { transform: scaleY(0.3); opacity: 0.4; }
+  50% { transform: scaleY(1); opacity: 1; }
+}
+
+.animate-pulse-line-1 { animation: pulse-line 1.2s ease-in-out infinite; }
+.animate-pulse-line-2 { animation: pulse-line 0.8s ease-in-out infinite 0.2s; }
+.animate-pulse-line-3 { animation: pulse-line 1.5s ease-in-out infinite 0.4s; }
+.animate-pulse-line-4 { animation: pulse-line 1s ease-in-out infinite 0.1s; }
+.animate-pulse-line-5 { animation: pulse-line 1.3s ease-in-out infinite 0.3s; }
+
+/* Custom scrollbar */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: #131313;
+}
+::-webkit-scrollbar-thumb {
+  background: #2a2a2a;
+  border-radius: 0px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #8b0000;
+}
+
