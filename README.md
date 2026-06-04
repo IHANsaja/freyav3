@@ -1,108 +1,169 @@
-# Freya 3.0
+# 🌌 Freya v3.0
 
-Freya 3.0 is a local, real-time voice assistant that streams microphone audio to Google Gemini Live (native audio output) and plays the returned audio through your speakers using PyAudio.
+🚀 **The Cybernetic Voice Assistant — Powered by Gemini Live API**
 
-## What it does
-- Captures microphone audio at **16kHz (PCM, mono)**.
-- Connects to **Google Gemini Live** with **AUDIO** response modality.
-- Streams the model’s realtime audio back to a speaker output stream at **24kHz**.
+[![Python Version](https://img.shields.io/badge/Python-3.10%2B-blue?style=for-the-badge&logo=python&logoColor=white)](https://www.python.org/)
+[![Gemini API](https://img.shields.io/badge/Google_Gemini-Live_API-orange?style=for-the-badge&logo=google-gemini&logoColor=white)](https://ai.google.dev/)
+[![Modality](https://img.shields.io/badge/Modality-Realtime_Audio-purple?style=for-the-badge&logo=audio&logoColor=white)](#)
+[![OS](https://img.shields.io/badge/Platform-Windows-0078D4?style=for-the-badge&logo=windows&logoColor=white)](#)
+[![License](https://img.shields.io/badge/License-MIT-green?style=for-the-badge)](./LICENSE)
 
-## Project structure
-See [`ARCHITECTURE.md`](./ARCHITECTURE.md) for the high-level layout:
-- `main.py` – app entry point
-- `config/freya_config.json` – assistant config (model, voice, personality, device indices)
-- `core/audio.py` – PyAudio microphone/speaker streaming utilities
-- `core/model.py` – Gemini Live connection + realtime send/receive loop
-- `list_models.py` – prints available Gemini model names
-- `test_devices.py` – quick input-device validation
+---
 
-## Requirements
-### Software
-- Python 3.10+ (recommended)
-- A working audio setup (microphone + output device)
-- Google Gemini API access
+Freya 3.0 is a local, real-time voice assistant that establishes a low-latency bi-directional stream with Google Gemini Live API. Running directly on your Windows desktop, Freya continuously feeds microphone input to the model and streams high-fidelity synthetic voice output back to your speakers, creating an interactive, hands-free conversational loop.
 
-### Dependencies
-Install via:
+Armed with **15 custom local system tools** and a **dynamic self-updating memory system**, Freya remembers details about you and executes operating-system-level automation on command.
+
+---
+
+## 🌟 Key Capabilities
+
+*   🔊 **Zero-Latency Live Conversation**: Captures microphone audio at **16kHz (PCM, mono)** and plays speaker output at **24kHz** for natural, uninterrupted conversations.
+*   🧠 **Self-Updating Synaptic Memory**: Auto-saves details about your preferences. On session shutdown, a secondary model (`gemini-2.5-flash-lite`) compiles the chat logs and appends new facts directly to Freya's memory bank (`memory/freya_memory.md`).
+*   🛠️ **Deep OS & Web Integration**:
+    *   **App Control**: Launch or shut down programs (e.g., Valorant, Photoshop, VS Code, Discord, Steam).
+    *   **Developer Toolkit**: Run safe terminal commands, search official documentations (Python, React, Docker, etc.), and diagnose code tracebacks directly using StackOverflow integration.
+    *   **Desktop Utilities**: Take screenshots, open file folders, set speak-back voice reminders, and retrieve current weather or news.
+
+---
+
+## 🛰️ Architecture Overview
+
+Freya’s architecture decouples hardware audio streaming from the core WebSocket event loops.
+
+```
+freyav3/
+├── config/
+│   ├── __init__.py           # Config loading helpers
+│   └── freya_config.json     # Device indices, app paths, voice models
+│
+├── core/
+│   ├── audio.py              # Low-latency Mic & Speaker streams (PyAudio)
+│   ├── memory.py             # Context building & auto-updating memory engine
+│   ├── model.py              # Gemini Live WebSocket event loop handlers
+│   └── tools.py              # Function calling dispatcher (15 system tools)
+│
+├── memory/
+│   └── freya_memory.md       # Long-term knowledge base about the user
+│
+├── test_scripts/
+│   ├── list_models.py        # Utility to list available Gemini model IDs
+│   ├── test_devices.py       # Audio I/O validation tool
+│   ├── test_interrupt.py     # Interrupt testing script
+│   └── test_memory_api.py    # Memory engine validation script
+│
+├── .env                      # API Credentials (ignored by git)
+├── main.py                   # System entrypoint
+└── requirements.txt          # Python dependencies
+```
+
+> [!NOTE]
+> For a detailed dive into the modular design, thread topologies, and data pathways, see the [Architecture Documentation](./ARCHITECTURE.md).
+
+---
+
+## ⚡ Quick Start
+
+### 1️⃣ Clone and Prepare Environment
+
+Ensure you have **Python 3.10+** and a working C/C++ compiler installed on your system (required to build `pyaudio` on Windows).
+
 ```bash
+# Clone the repository
+git clone https://github.com/your-username/freyav3.git
+cd freyav3
+
+# Create and activate virtual environment
+python -m venv venv
+venv\Scripts\activate
+
+# Install required dependencies
 pip install -r requirements.txt
 ```
 
-`requirements.txt` includes:
-- `google-genai`
-- `python-dotenv`
-- `pyaudio`
-- `keyboard` (note: hotkey behavior is not implemented in the code shown here)
+### 2️⃣ Configure API Keys
 
-## Setup
-### 1) Configure your API key
-`main.py` loads the API key via `GEMINI_API_KEY` from your environment (`.env` is supported).
+Create a `.env` file in the root directory:
 
-Create a `.env` file in the project root:
 ```env
-GEMINI_API_KEY=your_real_key_here
+# Primary API Key for Gemini Live API
+GEMINI_API_KEY=AIzaSyYourGeminiApiKeyHere
+
+# Optional: Separate key for memory extraction (defaults to GEMINI_API_KEY)
+GEMINI_MEMORY_API_KEY=AIzaSyYourSeparateApiKeyHere
 ```
 
-> Do not commit your `.env` file.
+> [!WARNING]
+> Keep your API keys private. Never commit the `.env` file to public repositories.
 
-### 2) Configure Freya
-Edit `config/freya_config.json`:
-- `active_model` – which Gemini live model to use
-- `providers.gemini.active_voice` – the prebuilt voice name for Gemini speech
-- `freya.personality` – the system instruction (tone + speaking style)
-- `audio.input_device_index` / `audio.output_device_index` – PyAudio device indices
-- `freya.hotkey` / `freya.input_mode` are present in config, but the current runtime flow shown in `main.py` does not implement hotkey/VAD logic; audio streaming starts immediately.
+---
 
-## Run
+## 🎛️ Configuration & Audio Routing
+
+Configure the assistant behavior, device paths, and hardware bindings in [config/freya_config.json](file:///f:/Projects/Freya/freyav3/config/freya_config.json):
+
+```json
+{
+  "freya": {
+    "name": "Freya",
+    "personality": "You are Freya, a smart and friendly personal AI voice assistant built for Ihan..."
+  },
+  "active_provider": "gemini",
+  "active_model": "gemini-3.1-flash-live-preview",
+  "audio": {
+    "input_device_index": 0,
+    "output_device_index": 3
+  }
+}
+```
+
+### 🎙️ Audio Hardware Calibration
+
+To locate the correct index for your microphone and speaker devices, run:
+
+```bash
+python test_scripts/test_devices.py
+```
+
+This utility will list all index numbers corresponding to the active audio hardware connected to your machine. Bind these values inside `config/freya_config.json` under `"audio"`.
+
+---
+
+## 🚀 Execution
+
+Launch Freya with the active python runtime:
+
 ```bash
 python main.py
 ```
 
-Expected behavior:
-- The app connects to the selected Gemini live model.
-- “Freya is live! Start talking.” appears.
-- Press `Ctrl+C` to stop.
+### Conversational Mechanics
+*   Once launched, you will see `Freya is live! Start talking.`
+*   Simply speak into your microphone. Freya will process your voice and speak back to you in real-time.
+*   **Echo Protection**: The microphone input automatically ignores audio captured while the speaker is active, preventing feedback loops.
+*   Press `Ctrl + C` in the terminal to stop the assistant safely. This triggers the memory engine to persist session logs.
 
-## Audio device selection (important)
-If you get errors, silence, or wrong-device audio, update device indices in `config/freya_config.json`.
+---
 
-### Find working input devices
-Run:
-```bash
-python test_devices.py
-```
+## 🛠️ Diagnostics & Utilities
 
-It will print which input device indices can be opened and read successfully.
+The project includes pre-configured utility scripts inside the `test_scripts/` directory:
 
-Then set:
-- `config/freya_config.json -> audio.input_device_index`
-- `config/freya_config.json -> audio.output_device_index`
+*   **List Gemini Models**: Validate API keys and list available model versions.
+    ```bash
+    python test_scripts/list_models.py
+    ```
+*   **Verify Audio Channels**: Verify your hardware input devices are recording successfully.
+    ```bash
+    python test_scripts/test_devices.py
+    ```
+*   **Verify Memory API**: Test your API connection and ensure the fact-extraction loops execute smoothly.
+    ```bash
+    python test_scripts/test_memory_api.py
+    ```
 
-## Useful scripts
-### List available Gemini models
-```bash
-python list_models.py
-```
+---
 
-### Test microphone/device I/O
-```bash
-python test_devices.py
-```
+## 🪐 License
 
-## Troubleshooting
-### “GEMINI_API_KEY not found in .env file!”
-- Ensure your `.env` file exists in the repo root.
-- Ensure it contains `GEMINI_API_KEY=...`.
-- Ensure you are running commands from the project root.
-
-### PyAudio device index issues
-- Re-run `python test_devices.py`.
-- Update `audio.input_device_index` / `audio.output_device_index` in `config/freya_config.json`.
-
-### Connection / realtime streaming issues
-- Verify the `active_model` value is correct for Gemini Live audio.
-- Ensure your voice name exists in `providers.gemini.voices` and matches what Gemini expects.
-
-## License
-See [`LICENSE`](./LICENSE).
-
+This project is licensed under the MIT License - see the [LICENSE](./LICENSE) file for details.
