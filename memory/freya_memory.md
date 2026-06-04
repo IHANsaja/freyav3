@@ -1,4 +1,4 @@
-# Freya Memory — Ihan
+# Freya Memory — User
 
 ## Personal
 - Name:
