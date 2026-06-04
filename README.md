@@ -44,7 +44,8 @@ freyav3/
 │   └── tools.py              # Function calling dispatcher (15 system tools)
 │
 ├── memory/
-│   └── freya_memory.md       # Long-term knowledge base about the user
+│   ├── freya_memory.example.md # Template memory configuration (tracked)
+│   └── freya_memory.md       # Personal memory storage (git-ignored)
 │
 ├── test_scripts/
 │   ├── list_models.py        # Utility to list available Gemini model IDs
@@ -95,6 +96,20 @@ GEMINI_MEMORY_API_KEY=AIzaSyYourSeparateApiKeyHere
 
 > [!WARNING]
 > Keep your API keys private. Never commit the `.env` file to public repositories.
+
+### 3️⃣ Initialize Personal Memory
+
+Freya uses a local Markdown file to build and recall facts about you. This file is excluded from version control (`.gitignore`) to keep your data private.
+
+1. Locate the template file [memory/freya_memory.example.md](file:///f:/Projects/Freya/freyav3/memory/freya_memory.example.md).
+2. Copy the template to create your active memory file:
+   ```bash
+   cp memory/freya_memory.example.md memory/freya_memory.md
+   ```
+3. Open `memory/freya_memory.md` and modify the placeholders to match your name, location, preferred software tools, and settings.
+
+### 🧠 How the Memory Engine Works
+When you start a session, Freya parses `freya_memory.md` and injects its contents directly into the system personality prompt. During your conversation, a thread collector logs the dialogue. Once you shut down the assistant using `Ctrl + C`, Freya automatically sends the session transcript to `gemini-2.5-flash-lite`, which filters out new facts, writes a short bullet-point summary of the session, and appends it to your `freya_memory.md` file.
 
 ---
 
