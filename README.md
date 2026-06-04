@@ -1,6 +1,6 @@
 # 🌌 Freya v3.0
 
-🚀 **The Cybernetic Voice Assistant — Powered by Gemini Live API**
+🚀 **The Cybernetic Voice Assistant**
 
 [![Python Version](https://img.shields.io/badge/Python-3.10%2B-blue?style=for-the-badge&logo=python&logoColor=white)](https://www.python.org/)
 [![Gemini API](https://img.shields.io/badge/Google_Gemini-Live_API-orange?style=for-the-badge&logo=google-gemini&logoColor=white)](https://ai.google.dev/)
