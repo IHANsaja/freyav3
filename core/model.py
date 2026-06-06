@@ -190,6 +190,15 @@ TOOL_DECLARATIONS = [
             required=["query"]
         )
     ),
+    types.FunctionDeclaration(
+        name="dance_for_user",
+        description="Make Freya perform a random dance animation when the user asks her to dance (e.g., 'can you dance for me', 'show me a dance', 'dance').",
+        parameters=types.Schema(
+            type=types.Type.OBJECT,
+            properties={},
+            required=[]
+        )
+    ),
 ]
 
 

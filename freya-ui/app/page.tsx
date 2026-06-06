@@ -5,6 +5,7 @@ import { useFreyaSocket } from "./hooks/useFreyaSocket";
 import SettingsModal from "./components/SettingsModal";
 import ArchivalPanel from "./components/ArchivalPanel";
 import ActivityIndicator from "./components/ActivityIndicator";
+import FreyaModel from "./components/FreyaModel";
 
 export default function Home() {
   const {
@@ -27,7 +28,7 @@ export default function Home() {
   const isRunning = state !== "idle";
 
   return (
-    <main className="min-h-screen bg-surface text-parchment flex flex-col font-sans selection:bg-primary-container/30 selection:text-parchment">
+    <main className="h-screen max-h-screen overflow-hidden bg-surface text-parchment flex flex-col font-sans selection:bg-primary-container/30 selection:text-parchment">
       
       {/* Top Header Bar */}
       <header className="border-b border-outline-variant/20 px-8 py-4 flex items-center justify-between">
@@ -38,7 +39,7 @@ export default function Home() {
               F.R.E.Y.A v3.0
             </h1>
           </div>
-
+ 
           {/* Connection status tag */}
           <div className="flex items-center gap-6 text-[10px] tracking-widest font-mono uppercase text-outline">
             <div className="flex items-center gap-2">
@@ -109,17 +110,12 @@ export default function Home() {
           </div>
         </div>
 
-        {/* Center Column — Empty companion space with System Standby status */}
+        {/* Center Column — Companion space with Freya 3D Model */}
         <div className="col-span-6 p-8 flex flex-col justify-between items-center relative">
           
-          {/* Middle empty space (Neglected AI Companion Area) */}
+          {/* Middle 3D Companion Area */}
           <div className="flex-1 flex items-center justify-center w-full max-w-lg">
-            {/* Keeping it clean and empty per user specifications */}
-            <div className="w-[300px] h-[300px] border border-outline-variant/10 flex items-center justify-center opacity-25">
-              <span className="text-[10px] font-mono tracking-widest text-outline uppercase">
-                [ SECURE_AI_CORE_LINK_STANDBY ]
-              </span>
-            </div>
+            <FreyaModel state={state} toolLog={toolLog} />
           </div>
 
           {/* System Standby Details & Start/Stop Controls */}

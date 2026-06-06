@@ -104,7 +104,7 @@ export default function ArchivalPanel({
       </div>
 
       {/* Main tab content container */}
-      <div className="flex-1 min-h-0 flex flex-col p-6 font-mono text-xs overflow-y-auto">
+      <div className="flex-1 min-h-0 flex flex-col p-6 font-mono text-xs overflow-hidden">
         {/* VIEW 1: CONVERSATIONS TERMINAL LOG */}
         {activeTab === "conversations" && (
           <div className="flex flex-col h-full">

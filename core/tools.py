@@ -325,6 +325,24 @@ def search_stackoverflow(query: str) -> str:
 
 
 # ══════════════════════════════════════════════
+#  16. DANCE FOR USER
+# ══════════════════════════════════════════════
+def dance_for_user() -> str:
+    """Make Freya perform a random dance animation."""
+    import random
+    dances = [
+        "Denim_Pop_Dance",
+        "Joyful_Dance_with_Hand_Sway",
+        "Love_You_Pop_Dance",
+        "Pod_Baby_Groove",
+        "You_Groove",
+        "Pop_Dance_LSA2"
+    ]
+    chosen = random.choice(dances)
+    return f"DANCING:{chosen}"
+
+
+# ══════════════════════════════════════════════
 #  TOOL DISPATCHER
 #  Called by model.py when Gemini picks a tool
 # ══════════════════════════════════════════════
@@ -361,6 +379,8 @@ def dispatch(tool_name: str, tool_args: dict, config: dict) -> str:
             return run_terminal_command(tool_args.get("command", ""))
         elif tool_name == "search_stackoverflow":
             return search_stackoverflow(tool_args.get("query", ""))
+        elif tool_name == "dance_for_user":
+            return dance_for_user()
         else:
             return f"Unknown tool: {tool_name}"
     except Exception as e:
