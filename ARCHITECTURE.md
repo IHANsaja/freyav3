@@ -115,7 +115,7 @@ Allows Freya to build a long-term profile of the user without databases:
 - **Minimum Threshold**: Sessions with fewer than 3 transcript lines are skipped to avoid noise.
 
 ### 5. Tool Integration Subsystem (`core/tools.py`)
-Freya is empowered with **15 operating system and web-integrated capabilities** exposed to Gemini via function declarations:
+Freya is empowered with **16 operating system and web-integrated capabilities** exposed to Gemini via function declarations:
 
 | Tool Name | Parameters | Action |
 | :--- | :--- | :--- |
@@ -134,11 +134,12 @@ Freya is empowered with **15 operating system and web-integrated capabilities** 
 | `open_project` | `project_name` | Opens designated coding workspace in VS Code. |
 | `run_terminal_command`| `command` | Runs safe developer utility commands with 15s timeout and output trimming. Blocks dangerous commands (`rm`, `del`, `format`, `shutdown`, etc.). |
 | `search_stackoverflow`| `query` | Resolves programming queries via StackExchange API, opens top result. |
+| `dance_for_user` | *None* | Instructs Freya to perform one of six randomized 3D dance animations. |
 
 All tools are dispatched through a central `dispatch()` router function called by `FreyaModel.receive_audio()` when Gemini issues a function call.
 
 ### 6. Web Dashboard (`freya-ui/`)
-A **Next.js 16** single-page application built with **React 19** and **Tailwind CSS 4**, providing a cyberpunk-themed mission control interface.
+A **Next.js 16** single-page application built with **React 19** and **Tailwind CSS 4**, providing a cyberpunk-themed mission control interface and interactive 3D companion render.
 
 | Component | File | Purpose |
 | :--- | :--- | :--- |
@@ -147,6 +148,7 @@ A **Next.js 16** single-page application built with **React 19** and **Tailwind 
 | **Archival Panel** | `app/components/ArchivalPanel.tsx` | Tabbed panel with live transcript feed, tool execution log, and memory viewer. |
 | **Settings Modal** | `app/components/SettingsModal.tsx` | Modal for switching Gemini models, voice presets, and editing the memory file. |
 | **Activity Indicator** | `app/components/ActivityIndicator.tsx` | Animated status indicator reflecting Freya's current state (idle/listening/speaking). |
+| **Freya Model Render** | `app/components/FreyaModel.tsx` | Interactive 3D component rendering the character model (`Freya.glb`) using `@react-three/fiber` and `@react-three/drei`. Handles rotation controls and maps system status and dance events to character animation loops. |
 
 **Transcript Buffering**: The frontend buffers Freya's streaming transcription fragments and only renders the complete sentence when a `state: "listening"` event signals turn completion, preventing fragmented UI updates.
 
