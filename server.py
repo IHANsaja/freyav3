@@ -6,6 +6,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from config import load_config, get_api_key, get_active_model, get_active_voice, get_personality
+from config import get_mode_personality, get_mode_model
 from core.audio import MicStream, SpeakerStream
 from core.memory import load_memory, build_system_prompt, update_memory, TranscriptCollector
 from core.model import FreyaModel
@@ -49,11 +50,11 @@ async def run_freya():
 
     config = load_config()
     api_key = get_api_key()
-    model_id = get_active_model(config)
+    model_id = get_mode_model(config)
     voice = get_active_voice(config)
     base_personality = get_personality(config)
     memory = load_memory()
-    personality = build_system_prompt(base_personality, memory)
+    personality = build_system_prompt(get_mode_personality(config, base_personality), memory)
     transcript = TranscriptCollector()
 
     input_idx = config["audio"]["input_device_index"]
@@ -77,12 +78,10 @@ async def run_freya():
             })
 
         async def on_tool(self, name: str, args: dict, result: str):
-            await broadcast({
-                "type": "tool",
-                "name": name,
-                "args": args,
-                "result": result
-            })
+            await broadcast({"type": "tool", "name": name, "args": args, "result": result})
+            if result.startswith("MODE_SWITCHED:"):
+                new_mode = result.split(":")[1]
+                await broadcast({"type": "mode", "value": new_mode})
 
         async def on_state(self, value: str):
             await broadcast({"type": "state", "value": value})

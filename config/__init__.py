@@ -19,6 +19,25 @@ def get_api_key():
 def get_active_model(config):
     return config["active_model"]
 
+def get_active_mode(config):
+    return config.get("active_mode", "default")
+
+def get_mode_personality(config, base_personality):
+    """Returns mode-specific personality if set, otherwise falls back to base."""
+    mode_id = get_active_mode(config)
+    modes = config.get("modes", {})
+    mode = modes.get(mode_id, {})
+    override = mode.get("personality_override")
+    return override if override else base_personality
+
+def get_mode_model(config):
+    """Returns mode-specific model override if set, otherwise returns active_model."""
+    mode_id = get_active_mode(config)
+    modes = config.get("modes", {})
+    mode = modes.get(mode_id, {})
+    override = mode.get("model_override")
+    return override if override else config["active_model"]
+
 def get_active_voice(config):
     provider = config["active_provider"]
     return config["providers"][provider]["active_voice"]

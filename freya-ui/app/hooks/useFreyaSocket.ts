@@ -35,6 +35,7 @@ export function useFreyaSocket() {
     const [transcript, setTranscript] = useState<TranscriptEntry[]>([]);
     const [toolLog, setToolLog] = useState<ToolEntry[]>([]);
     const [config, setConfig] = useState<FreyaConfig | null>(null);
+    const [activeMode, setActiveMode] = useState<string>("default");
     const [memory, setMemory] = useState<string>("");
     const [connected, setConnected] = useState(false);
 
@@ -90,6 +91,8 @@ export function useFreyaSocket() {
                         ]);
                         freyaBuffer.current = "";
                     }
+                } else if (msg.type === "mode") {
+                    setActiveMode(msg.value);
                 } else if (msg.type === "transcript") {
                     if (msg.speaker === "Freya") {
                         // Buffer Freya's words

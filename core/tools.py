@@ -341,6 +341,91 @@ def dance_for_user() -> str:
     chosen = random.choice(dances)
     return f"DANCING:{chosen}"
 
+# ══════════════════════════════════════════════
+#  17. CAPTURE SCREEN (sends to Gemini)
+# ══════════════════════════════════════════════
+def capture_screen_tool() -> str:
+    """Capture the screen — returns signal for model.py to send image to Gemini."""
+    # The actual capture + send happens in model.py
+    # This just signals that vision was requested
+    return "VISION_REQUESTED"
+
+
+# ══════════════════════════════════════════════
+#  18. MOVE MOUSE (scales coordinates from 1280px grid)
+# ══════════════════════════════════════════════
+def scale_coords(x: int, y: int) -> tuple[int, int]:
+    from core.vision import get_screen_size
+    screen_w, screen_h = get_screen_size()
+    # Scale from 1280 reference width, preserving aspect ratio scaling for height
+    scale = screen_w / 1280.0
+    scaled_x = int(x * scale)
+    scaled_y = int(y * scale)
+    return scaled_x, scaled_y
+
+
+def move_mouse_tool(x: int, y: int) -> str:
+    from core.vision import move_mouse
+    sx, sy = scale_coords(x, y)
+    return move_mouse(sx, sy)
+
+
+# ══════════════════════════════════════════════
+#  19. CLICK (scales coordinates from 1280px grid)
+# ══════════════════════════════════════════════
+def click_tool(x: int, y: int, button: str = "left", double: bool = False) -> str:
+    from core.vision import click
+    sx, sy = scale_coords(x, y)
+    return click(sx, sy, button, double)
+
+
+# ══════════════════════════════════════════════
+#  20. TYPE TEXT
+# ══════════════════════════════════════════════
+def type_text_tool(text: str) -> str:
+    from core.vision import type_text
+    return type_text(text)
+
+
+# ══════════════════════════════════════════════
+#  21. PRESS KEY
+# ══════════════════════════════════════════════
+def press_key_tool(key: str) -> str:
+    from core.vision import press_key
+    return press_key(key)
+
+
+# ══════════════════════════════════════════════
+#  22. SCROLL (scales coordinates from 1280px grid)
+# ══════════════════════════════════════════════
+def scroll_tool(x: int, y: int, direction: str = "down", amount: int = 3) -> str:
+    from core.vision import scroll
+    sx, sy = scale_coords(x, y)
+    return scroll(sx, sy, direction, amount)
+
+# ══════════════════════════════════════════════
+#  23. MODE SWITCHER (updates config to change Freya's mode/personality)
+# ══════════════════════════════════════════════
+
+def switch_mode(mode: str) -> str:
+    """Switch Freya's active mode by updating config."""
+    import json, os
+    valid_modes = ["default", "language_learning", "coding"]
+    if mode not in valid_modes:
+        return f"Unknown mode: {mode}. Valid modes are: {', '.join(valid_modes)}"
+    
+    config_path = os.path.join(os.path.dirname(__file__), '..', 'config', 'freya_config.json')
+    try:
+        with open(config_path, 'r') as f:
+            config = json.load(f)
+        config['active_mode'] = mode
+        with open(config_path, 'w') as f:
+            json.dump(config, f, indent=2)
+        labels = {"default": "Default", "language_learning": "Language Tutor", "coding": "Coding Mode"}
+        return f"MODE_SWITCHED:{mode}"
+    except Exception as e:
+        return f"Mode switch failed: {str(e)}"
+
 
 # ══════════════════════════════════════════════
 #  TOOL DISPATCHER
@@ -353,6 +438,8 @@ def dispatch(tool_name: str, tool_args: dict, config: dict) -> str:
             return open_app(tool_args.get("name", ""), config)
         elif tool_name == "close_app":
             return close_app(tool_args.get("name", ""))
+        elif tool_name == "switch_mode":
+            return switch_mode(tool_args.get("mode", "default"))
         elif tool_name == "web_search":
             return web_search(tool_args.get("query", ""))
         elif tool_name == "play_youtube":
@@ -381,6 +468,28 @@ def dispatch(tool_name: str, tool_args: dict, config: dict) -> str:
             return search_stackoverflow(tool_args.get("query", ""))
         elif tool_name == "dance_for_user":
             return dance_for_user()
+        elif tool_name == "capture_screen":
+            return capture_screen_tool()
+        elif tool_name == "move_mouse":
+            return move_mouse_tool(int(tool_args.get("x", 0)), int(tool_args.get("y", 0)))
+        elif tool_name == "click":
+            return click_tool(
+                int(tool_args.get("x", 0)),
+                int(tool_args.get("y", 0)),
+                tool_args.get("button", "left"),
+                bool(tool_args.get("double", False))
+            )
+        elif tool_name == "type_text":
+            return type_text_tool(tool_args.get("text", ""))
+        elif tool_name == "press_key":
+            return press_key_tool(tool_args.get("key", ""))
+        elif tool_name == "scroll":
+            return scroll_tool(
+                int(tool_args.get("x", 0)),
+                int(tool_args.get("y", 0)),
+                tool_args.get("direction", "down"),
+                int(tool_args.get("amount", 3))
+            )
         else:
             return f"Unknown tool: {tool_name}"
     except Exception as e:

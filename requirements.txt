@@ -7,3 +7,5 @@ pillow
 fastapi
 uvicorn
 websockets
+mss
+pytesseract

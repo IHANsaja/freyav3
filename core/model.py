@@ -4,6 +4,7 @@ import json
 from google import genai
 from google.genai import types
 from core.tools import dispatch
+import base64
 
 # ─────────────────────────────────────────────
 #  TOOL DEFINITIONS  (Gemini function calling)
@@ -31,6 +32,20 @@ TOOL_DECLARATIONS = [
                     description="App name e.g. valorant, discord, steam")
             },
             required=["name"]
+        )
+    ),
+    types.FunctionDeclaration(
+        name="switch_mode",
+        description="Switch Freya into a different operational mode. Use when Ihan says 'switch to coding mode', 'language learning mode', 'go back to normal', etc.",
+        parameters=types.Schema(
+            type=types.Type.OBJECT,
+            properties={
+                "mode": types.Schema(
+                    type=types.Type.STRING,
+                    description="Mode identifier: 'default', 'language_learning', or 'coding'"
+                )
+            },
+            required=["mode"]
         )
     ),
     types.FunctionDeclaration(
@@ -199,6 +214,77 @@ TOOL_DECLARATIONS = [
             required=[]
         )
     ),
+    types.FunctionDeclaration(
+        name="capture_screen",
+        description="Capture the user's screen so you can see what's on it. Use when user says 'look at my screen', 'what do you see', 'can you see this', 'look at this'.",
+        parameters=types.Schema(
+            type=types.Type.OBJECT,
+            properties={},
+            required=[]
+        )
+    ),
+    types.FunctionDeclaration(
+        name="move_mouse",
+        description="Move the mouse cursor to screen coordinates.",
+        parameters=types.Schema(
+            type=types.Type.OBJECT,
+            properties={
+                "x": types.Schema(type=types.Type.INTEGER, description="X coordinate in pixels"),
+                "y": types.Schema(type=types.Type.INTEGER, description="Y coordinate in pixels"),
+            },
+            required=["x", "y"]
+        )
+    ),
+    types.FunctionDeclaration(
+        name="click",
+        description="Click the mouse at screen coordinates. Use after capture_screen so you know where to click.",
+        parameters=types.Schema(
+            type=types.Type.OBJECT,
+            properties={
+                "x": types.Schema(type=types.Type.INTEGER, description="X coordinate"),
+                "y": types.Schema(type=types.Type.INTEGER, description="Y coordinate"),
+                "button": types.Schema(type=types.Type.STRING, description="left, right, or middle"),
+                "double": types.Schema(type=types.Type.BOOLEAN, description="True for double click"),
+            },
+            required=["x", "y"]
+        )
+    ),
+    types.FunctionDeclaration(
+        name="type_text",
+        description="Type text using the keyboard.",
+        parameters=types.Schema(
+            type=types.Type.OBJECT,
+            properties={
+                "text": types.Schema(type=types.Type.STRING, description="Text to type"),
+            },
+            required=["text"]
+        )
+    ),
+    types.FunctionDeclaration(
+        name="press_key",
+        description="Press a keyboard key or hotkey. e.g. 'enter', 'escape', 'ctrl+c', 'ctrl+shift+t'.",
+        parameters=types.Schema(
+            type=types.Type.OBJECT,
+            properties={
+                "key": types.Schema(type=types.Type.STRING, description="Key or hotkey combo e.g. enter, ctrl+c"),
+            },
+            required=["key"]
+        )
+    ),
+    types.FunctionDeclaration(
+        name="scroll",
+        description="Scroll the mouse wheel at screen coordinates.",
+        parameters=types.Schema(
+            type=types.Type.OBJECT,
+            properties={
+                "x": types.Schema(type=types.Type.INTEGER, description="X coordinate"),
+                "y": types.Schema(type=types.Type.INTEGER, description="Y coordinate"),
+                "direction": types.Schema(type=types.Type.STRING, description="up or down"),
+                "amount": types.Schema(type=types.Type.INTEGER, description="Number of scroll clicks"),
+            },
+            required=["x", "y"]
+        )
+    ),
 ]
 
 
@@ -276,13 +362,41 @@ class FreyaModel:
                                     result = dispatch(tool_name, tool_args, self.config)
                                     print(f"  Result: {result}")
                                     await self.on_tool(tool_name, tool_args, result)
-                                    await session.send_tool_response(
-                                        function_responses=[types.FunctionResponse(
-                                            id=call_id,
-                                            name=tool_name,
-                                            response={"result": result}
-                                        )]
-                                    )
+
+                                    # ── VISION: send screenshot to Gemini as image ──
+                                    if result == "VISION_REQUESTED":
+                                        from core.vision import capture_screen
+                                        import base64
+                                        print("  Capturing screen...")
+                                        b64_image = capture_screen()
+
+                                        # Send tool response + image together
+                                        await session.send_tool_response(
+                                            function_responses=[types.FunctionResponse(
+                                                id=call_id,
+                                                name=tool_name,
+                                                response={"result": "Screen captured. Analyzing now."}
+                                            )]
+                                        )
+                                        # Send the actual image as a follow-up input
+                                        await session.send_realtime_input(
+                                            video=types.Blob(
+                                                data=base64.b64decode(b64_image),
+                                                mime_type="image/jpeg"
+                                            )
+                                        )
+                                        print("  Screen sent to Gemini.")
+                                    else:
+                                        await session.send_tool_response(
+                                            function_responses=[types.FunctionResponse(
+                                                id=call_id,
+                                                name=tool_name,
+                                                response={"result": result}
+                                            )]
+                                        )
+                                        # Clear speaking block to unmute mic if the tool execution finishes
+                                        model_speaking.clear()
+                                        await self.on_state("listening")
                             continue
 
                         sc = response.server_content
