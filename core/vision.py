@@ -1,10 +1,66 @@
 import base64
-import pyautogui
+import ctypes
+import sys
+import threading
 import time
 from io import BytesIO
-from PIL import Image
+
 import mss
 import mss.tools
+import pyautogui
+from PIL import Image
+
+# ══════════════════════════════════════════════
+#  DPI AWARENESS (Windows)
+#  Without this, pyautogui reports the *logical* resolution
+#  (e.g. 1536x864 at 125% scaling) while mss captures *physical*
+#  pixels (1920x1080) — which made every click land short.
+# ══════════════════════════════════════════════
+if sys.platform == "win32":
+    try:
+        ctypes.windll.shcore.SetProcessDpiAwareness(2)  # PER_MONITOR_DPI_AWARE
+    except Exception:
+        try:
+            ctypes.windll.user32.SetProcessDPIAware()
+        except Exception:
+            pass
+
+
+# ══════════════════════════════════════════════
+#  CAPTURE GEOMETRY STATE
+#  Records exactly what Gemini "sees" so grid coordinates can be
+#  mapped back to real screen pixels with no guesswork.
+# ══════════════════════════════════════════════
+_capture_lock = threading.Lock()
+_capture_state = {
+    "grid_w": None,    # width of the image sent to Gemini
+    "grid_h": None,    # height of the image sent to Gemini
+    "screen_w": None,  # physical screen size at capture time
+    "screen_h": None,
+}
+
+
+def grid_to_screen(x: int, y: int) -> tuple[int, int]:
+    """Map a coordinate from Gemini's screenshot grid to real screen pixels.
+
+    Uses the exact geometry recorded by the last capture_screen() call
+    (resized image size vs. physical monitor size), so clicks land
+    precisely regardless of resolution or Windows DPI scaling.
+    """
+    with _capture_lock:
+        gw, gh = _capture_state["grid_w"], _capture_state["grid_h"]
+        sw, sh = _capture_state["screen_w"], _capture_state["screen_h"]
+
+    if not gw or not sw:
+        # No capture yet this session — assume the documented 1280-wide grid.
+        sw, sh = get_screen_size()
+        scale = sw / 1280.0
+        return int(round(x * scale)), int(round(y * scale))
+
+    sx = int(round(x * (sw / gw)))
+    sy = int(round(y * (sh / gh)))
+    return sx, sy
+
 
 # ══════════════════════════════════════════════
 #  SCREEN CAPTURE
@@ -13,6 +69,7 @@ def capture_screen(quality: int = 60) -> str:
     """
     Capture the full screen and return as base64 encoded JPEG.
     Lower quality = smaller payload = faster to send to Gemini.
+    Also records the capture geometry used by grid_to_screen().
     """
     with mss.mss() as sct:
         # Capture primary monitor
@@ -22,12 +79,21 @@ def capture_screen(quality: int = 60) -> str:
         # Convert to PIL Image
         img = Image.frombytes("RGB", screenshot.size, screenshot.bgra, "raw", "BGRX")
 
+        native_w, native_h = img.width, img.height
+
         # Resize to reduce payload (Gemini doesn't need full 4K)
         max_width = 1280
         if img.width > max_width:
             ratio = max_width / img.width
             new_size = (max_width, int(img.height * ratio))
             img = img.resize(new_size, Image.LANCZOS)
+
+        # Record exactly what Gemini will see vs. the real screen
+        with _capture_lock:
+            _capture_state["grid_w"] = img.width
+            _capture_state["grid_h"] = img.height
+            _capture_state["screen_w"] = native_w
+            _capture_state["screen_h"] = native_h
 
         # Encode as JPEG base64
         buffer = BytesIO()
@@ -46,13 +112,13 @@ def capture_screen(quality: int = 60) -> str:
 
 
 def get_screen_size() -> tuple[int, int]:
-    """Return current screen resolution."""
+    """Return current screen resolution (physical pixels, DPI-aware)."""
     size = pyautogui.size()
     return size.width, size.height
 
 
 # ══════════════════════════════════════════════
-#  MOUSE CONTROL
+#  MOUSE CONTROL  (all coordinates are real screen pixels)
 # ══════════════════════════════════════════════
 def move_mouse(x: int, y: int) -> str:
     """Move mouse cursor to screen coordinates."""

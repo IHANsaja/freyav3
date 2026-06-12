@@ -299,6 +299,16 @@ class FreyaModel:
         self.session = None
 
     def get_config(self):
+        # ── Native VAD tuning: tighter, more human turn-taking ──
+        vad_cfg = (self.config or {}).get("vad", {})
+        start_map = {
+            "LOW": types.StartSensitivity.START_SENSITIVITY_LOW,
+            "HIGH": types.StartSensitivity.START_SENSITIVITY_HIGH,
+        }
+        end_map = {
+            "LOW": types.EndSensitivity.END_SENSITIVITY_LOW,
+            "HIGH": types.EndSensitivity.END_SENSITIVITY_HIGH,
+        }
         return types.LiveConnectConfig(
             response_modalities=["AUDIO"],
             speech_config=types.SpeechConfig(
@@ -313,6 +323,21 @@ class FreyaModel:
             ),
             input_audio_transcription=types.AudioTranscriptionConfig(),
             output_audio_transcription=types.AudioTranscriptionConfig(),
+            realtime_input_config=types.RealtimeInputConfig(
+                automatic_activity_detection=types.AutomaticActivityDetection(
+                    disabled=False,
+                    start_of_speech_sensitivity=start_map.get(
+                        str(vad_cfg.get("start_sensitivity", "HIGH")).upper(),
+                        types.StartSensitivity.START_SENSITIVITY_HIGH,
+                    ),
+                    end_of_speech_sensitivity=end_map.get(
+                        str(vad_cfg.get("end_sensitivity", "HIGH")).upper(),
+                        types.EndSensitivity.END_SENSITIVITY_HIGH,
+                    ),
+                    prefix_padding_ms=int(vad_cfg.get("prefix_padding_ms", 120)),
+                    silence_duration_ms=int(vad_cfg.get("silence_duration_ms", 500)),
+                )
+            ),
             tools=[types.Tool(function_declarations=TOOL_DECLARATIONS)],
         )
 
@@ -340,10 +365,15 @@ class FreyaModel:
             self.session = session
             print("Freya is live! Start talking. (Ctrl+C to stop)\n")
 
+            barge_in = (self.config or {}).get("freya", {}).get("barge_in", True)
+
             async def send_audio():
                 while True:
                     data = await loop.run_in_executor(None, mic_stream.read)
-                    if not model_speaking.is_set():
+                    # With barge-in enabled the mic streams continuously so
+                    # Gemini's native VAD can detect interruptions naturally.
+                    # Without it, fall back to muting while Freya speaks.
+                    if barge_in or not model_speaking.is_set():
                         await session.send_realtime_input(
                             audio=types.Blob(data=data, mime_type="audio/pcm;rate=16000")
                         )
@@ -400,6 +430,20 @@ class FreyaModel:
                             continue
 
                         sc = response.server_content
+
+                        # ── BARGE-IN: user interrupted Freya mid-sentence ──
+                        if getattr(sc, 'interrupted', False):
+                            # Drop all queued (unplayed) audio so she stops instantly
+                            while not audio_queue.empty():
+                                try:
+                                    audio_queue.get_nowait()
+                                    audio_queue.task_done()
+                                except asyncio.QueueEmpty:
+                                    break
+                            freya_buffer = ""
+                            model_speaking.clear()
+                            await self.on_state("interrupted")
+                            continue
 
                         # Buffer input transcription (your words)
                         inp = getattr(sc, 'input_transcription', None)

@@ -129,7 +129,7 @@ class OverlayManager:
         self._anim_click(win, canvas, size // 2, 0)
 
     def _anim_click(self, win, canvas, c, step):
-        if step > 14:
+        if step > 16:
             try: win.destroy()
             except: pass
             return
@@ -142,6 +142,16 @@ class OverlayManager:
         canvas.create_oval(c - r, c - r, c + r, c + r,
                            outline=FREYA_RED, width=w)
 
+        # Rotating targeting reticle — four arc brackets sweeping around
+        if step < 14:
+            rr = 16
+            rot = step * 16
+            for i in range(4):
+                start = (rot + i * 90) % 360
+                canvas.create_arc(c - rr, c - rr, c + rr, c + rr,
+                                  start=start, extent=38,
+                                  style='arc', outline=FREYA_RED, width=2)
+
         # Delayed second ring
         if step > 3:
             r2 = 5 + (step - 3) * 2.5
@@ -149,7 +159,7 @@ class OverlayManager:
                                outline=FREYA_RED_DIM, width=1)
 
         # Centre dot
-        if step < 10:
+        if step < 12:
             canvas.create_oval(c - 3, c - 3, c + 3, c + 3,
                                fill=FREYA_RED, outline='')
 
@@ -161,7 +171,7 @@ class OverlayManager:
             canvas.create_line(c, c - arm, c, c - gap, fill=FREYA_RED, width=1)
             canvas.create_line(c, c + gap, c, c + arm, fill=FREYA_RED, width=1)
 
-        win.after(30, self._anim_click, win, canvas, c, step + 1)
+        win.after(28, self._anim_click, win, canvas, c, step + 1)
 
     # ─────────────────────────────────────────
     #  SCAN — red border flash + sweep line

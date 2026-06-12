@@ -355,13 +355,15 @@ def capture_screen_tool() -> str:
 #  18. MOVE MOUSE (scales coordinates from 1280px grid)
 # ══════════════════════════════════════════════
 def scale_coords(x: int, y: int) -> tuple[int, int]:
-    from core.vision import get_screen_size
-    screen_w, screen_h = get_screen_size()
-    # Scale from 1280 reference width, preserving aspect ratio scaling for height
-    scale = screen_w / 1280.0
-    scaled_x = int(x * scale)
-    scaled_y = int(y * scale)
-    return scaled_x, scaled_y
+    """Map coordinates from the screenshot grid Gemini saw to real screen pixels.
+
+    Delegates to core.vision.grid_to_screen, which uses the exact capture
+    geometry (resized image size vs. physical screen size) recorded during
+    the last capture_screen() call. Fixes clicks landing short on wide or
+    DPI-scaled displays.
+    """
+    from core.vision import grid_to_screen
+    return grid_to_screen(x, y)
 
 
 def move_mouse_tool(x: int, y: int) -> str:

@@ -148,7 +148,7 @@ A **Next.js 16** single-page application built with **React 19** and **Tailwind 
 | **Archival Panel** | `app/components/ArchivalPanel.tsx` | Tabbed panel with live transcript feed, tool execution log, and memory viewer. |
 | **Settings Modal** | `app/components/SettingsModal.tsx` | Modal for switching Gemini models, voice presets, and editing the memory file. |
 | **Activity Indicator** | `app/components/ActivityIndicator.tsx` | Animated status indicator reflecting Freya's current state (idle/listening/speaking). |
-| **Freya Model Render** | `app/components/FreyaModel.tsx` | Interactive 3D component rendering the character model (`Freya.glb`) using `@react-three/fiber` and `@react-three/drei`. Handles rotation controls and maps system status and dance events to character animation loops. |
+| **Freya Core Render** | `app/components/FreyaCore.tsx` | Procedural 3D energy core built from scratch with custom GLSL shaders (`three.js` + `@react-three/fiber`): simplex-noise vertex displacement, crimson fresnel rim, additive halo, and an orbital particle ring. Reacts to idle / listening / speaking / interrupted states and maps dance events to a special shader animation sequence. No external model files required. |
 
 **Transcript Buffering**: The frontend buffers Freya's streaming transcription fragments and only renders the complete sentence when a `state: "listening"` event signals turn completion, preventing fragmented UI updates.
 

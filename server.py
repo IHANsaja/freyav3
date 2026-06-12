@@ -1,5 +1,6 @@
 import asyncio
 import json
+import os
 import uvicorn
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
@@ -66,6 +67,7 @@ async def run_freya():
     speaker.start()
 
     await broadcast({"type": "state", "value": "listening"})
+    await broadcast({"type": "mode", "value": config.get("active_mode", "default")})
 
     # Patch FreyaModel to broadcast events to UI
     class FreyaModelWithBroadcast(FreyaModel):
@@ -82,6 +84,8 @@ async def run_freya():
             if result.startswith("MODE_SWITCHED:"):
                 new_mode = result.split(":")[1]
                 await broadcast({"type": "mode", "value": new_mode})
+                # Reconnect so the mode's model/personality overrides apply
+                asyncio.create_task(restart_freya())
 
         async def on_state(self, value: str):
             await broadcast({"type": "state", "value": value})
@@ -103,6 +107,19 @@ async def run_freya():
         speaker.stop()
         await broadcast({"type": "state", "value": "idle"})
         await update_memory(api_key, transcript.get(), memory)
+
+
+async def restart_freya():
+    """Hot-restart the live session (used when switching modes so the
+    mode's model_override and personality_override take effect)."""
+    global freya_task, freya_running
+    if freya_task:
+        freya_task.cancel()
+        freya_task = None
+    freya_running = False
+    await asyncio.sleep(0.8)  # let audio devices fully release
+    freya_running = True
+    freya_task = asyncio.create_task(run_freya())
 
 
 # ══════════════════════════════════════════════
@@ -137,12 +154,16 @@ async def get_config_endpoint():
         "active_voice": config["providers"]["gemini"]["active_voice"],
         "models": config["providers"]["gemini"]["models"],
         "voices": config["providers"]["gemini"]["voices"],
+        "modes": {
+            mode_id: {"label": mode.get("label", mode_id)}
+            for mode_id, mode in config.get("modes", {}).items()
+        },
+        "active_mode": config.get("active_mode", "default"),
     })
 
 
 @app.post("/config")
 async def update_config_endpoint(body: dict):
-    import json, os
     config_path = os.path.join("config", "freya_config.json")
     with open(config_path, "r") as f:
         config = json.load(f)
@@ -182,8 +203,13 @@ async def websocket_endpoint(websocket: WebSocket):
     await websocket.accept()
     connected_clients.append(websocket)
 
-    # Send current status on connect
+    # Send current status + active mode on connect
     await websocket.send_json({"type": "state", "value": "listening" if freya_running else "idle"})
+    try:
+        cfg = load_config()
+        await websocket.send_json({"type": "mode", "value": cfg.get("active_mode", "default")})
+    except Exception:
+        pass
 
     try:
         while True:
@@ -198,6 +224,19 @@ async def websocket_endpoint(websocket: WebSocket):
                 await update_config_endpoint({"model": data.get("model")})
             elif msg_type == "set_voice":
                 await update_config_endpoint({"voice": data.get("voice")})
+            elif msg_type == "set_mode":
+                mode = data.get("mode", "default")
+                config_path = os.path.join("config", "freya_config.json")
+                with open(config_path, "r") as f:
+                    cfg = json.load(f)
+                if mode in cfg.get("modes", {}):
+                    cfg["active_mode"] = mode
+                    with open(config_path, "w") as f:
+                        json.dump(cfg, f, indent=2)
+                    await broadcast({"type": "mode", "value": mode})
+                    # Apply immediately if a session is live
+                    if freya_running:
+                        await restart_freya()
 
     except WebSocketDisconnect:
         connected_clients.remove(websocket)
