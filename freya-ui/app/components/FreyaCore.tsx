@@ -276,7 +276,9 @@ export default function FreyaCore({ state, toolLog }: FreyaCoreProps) {
     state === "listening" || state === "speaking" || state === "interrupted" ? state : "idle";
 
   return (
-    <div className="w-full h-full min-h-[350px] relative flex items-center justify-center">
+    /* Fill the entire parent — parent must be position:relative or absolute */
+    <div className="w-full h-full relative flex items-center justify-center">
+
       {/* Archival orbital rings (CSS, matte 1px outlines) */}
       <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
         <div className="w-[320px] h-[320px] rounded-full border border-primary/10 animate-[spin_24s_linear_infinite]" />
@@ -285,7 +287,7 @@ export default function FreyaCore({ state, toolLog }: FreyaCoreProps) {
       </div>
 
       <Canvas
-        camera={{ position: [0, 0, 3.4], fov: 50 }}
+        camera={{ position: [0, 0, 3.4], fov: 60 }}
         dpr={[1, 2]}
         style={{ width: "100%", height: "100%", background: "transparent" }}
       >

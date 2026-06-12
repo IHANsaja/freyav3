@@ -148,55 +148,76 @@ export default function Home() {
           </div>
         </div>
 
-        {/* Center Column — Procedural shader core */}
-        <div className="col-span-6 p-8 flex flex-col justify-between items-center relative">
+        {/* ─── Center Column — Full-bleed procedural shader core ─── */}
+        <div className="col-span-6 relative overflow-hidden">
 
-          {/* Middle 3D Core Area */}
-          <div className="flex-1 flex items-center justify-center w-full max-w-lg">
+          {/* FreyaCore fills the entire center panel */}
+          <div className="absolute inset-0">
             <FreyaCore state={state} toolLog={toolLog} />
           </div>
 
-          {/* System Standby Details & Controls */}
-          <div className="w-full max-w-xl text-center mb-12 flex flex-col items-center gap-6">
-            <div className="flex flex-col gap-2">
-              <h2 className="text-3xl font-black text-parchment tracking-widest uppercase">
-                {isRunning ? STATE_LABELS[state] ?? "SYSTEM_ACTIVE" : "SYSTEM_STANDBY"}
-              </h2>
-              <p className="text-xs text-outline leading-relaxed max-w-md mx-auto uppercase tracking-wide">
-                {STATE_COPY[state] ?? STATE_COPY.idle}
-              </p>
-            </div>
-
-            {/* Mode Switcher — pill chips per design system */}
-            <div className="flex items-center gap-2">
-              {Object.entries(modes).map(([id, m]) => (
-                <button
-                  key={id}
-                  onClick={() => setMode(id)}
-                  disabled={!connected}
-                  className={`px-5 py-2 rounded-full text-[10px] font-bold tracking-widest uppercase border transition-all duration-300 disabled:opacity-40 disabled:cursor-not-allowed ${
-                    activeMode === id
-                      ? "bg-primary-container text-parchment border-primary-container shadow-[0_0_16px_rgba(211,47,47,0.25)]"
-                      : "bg-transparent text-outline border-outline-variant/30 hover:border-primary/60 hover:text-parchment"
-                  }`}
-                >
-                  {m.label}
-                </button>
-              ))}
-            </div>
-
-            {/* Pulsing trigger button */}
-            <button
-              onClick={isRunning ? stopFreya : startFreya}
-              disabled={!connected}
-              className="px-8 py-3.5 rounded-full text-xs font-bold tracking-widest uppercase transition-all duration-300 shadow-lg bg-primary-container text-parchment hover:bg-primary-container/95 hover:shadow-[0_0_20px_rgba(211,47,47,0.4)] disabled:opacity-40 disabled:cursor-not-allowed"
+          {/* ── Glassmorphism control overlay — floated at bottom center ── */}
+          <div className="absolute bottom-8 left-1/2 -translate-x-1/2 w-full max-w-[520px] px-4 pointer-events-none">
+            <div
+              className="pointer-events-auto flex flex-col items-center gap-5 px-8 py-6 rounded-2xl"
+              style={{
+                background: "linear-gradient(135deg, rgba(15,10,10,0.55) 0%, rgba(30,10,10,0.45) 100%)",
+                backdropFilter: "blur(18px) saturate(140%)",
+                WebkitBackdropFilter: "blur(18px) saturate(140%)",
+                border: "1px solid rgba(211,47,47,0.18)",
+                boxShadow:
+                  "0 8px 40px rgba(0,0,0,0.6), 0 0 0 1px rgba(255,255,255,0.04) inset, 0 1px 0 rgba(255,255,255,0.07) inset, 0 0 60px rgba(211,47,47,0.06)",
+              }}
             >
-              {isRunning ? "\u26a1 STOP FREYA" : "\u26a1 START FREYA"}
-            </button>
+              {/* Subtle top-edge highlight line */}
+              <div
+                className="absolute top-0 left-8 right-8 h-px rounded-full"
+                style={{
+                  background: "linear-gradient(90deg, transparent, rgba(211,47,47,0.35), rgba(255,255,255,0.12), rgba(211,47,47,0.35), transparent)",
+                }}
+              />
 
-            {/* Footer tag */}
-            <div className="text-[9px] font-bold text-outline-variant tracking-widest uppercase font-mono mt-2">
-              DEVELOPED BY &bull; IHAN &bull; 2026
+              {/* State label + description */}
+              <div className="flex flex-col gap-2 text-center">
+                <h2 className="text-2xl font-black text-parchment tracking-widest uppercase">
+                  {isRunning ? STATE_LABELS[state] ?? "SYSTEM_ACTIVE" : "SYSTEM_STANDBY"}
+                </h2>
+                <p className="text-[10px] text-outline leading-relaxed max-w-sm mx-auto uppercase tracking-wide">
+                  {STATE_COPY[state] ?? STATE_COPY.idle}
+                </p>
+              </div>
+
+              {/* Mode Switcher — pill chips */}
+              <div className="flex items-center gap-2 flex-wrap justify-center">
+                {Object.entries(modes).map(([id, m]) => (
+                  <button
+                    key={id}
+                    onClick={() => setMode(id)}
+                    disabled={!connected}
+                    className={`px-5 py-2 rounded-full text-[10px] font-bold tracking-widest uppercase border transition-all duration-300 disabled:opacity-40 disabled:cursor-not-allowed ${
+                      activeMode === id
+                        ? "bg-primary-container text-parchment border-primary-container shadow-[0_0_16px_rgba(211,47,47,0.35)]"
+                        : "bg-transparent text-outline border-outline-variant/30 hover:border-primary/60 hover:text-parchment hover:bg-primary/5"
+                    }`}
+                  >
+                    {m.label}
+                  </button>
+                ))}
+              </div>
+
+              {/* Pulsing trigger button */}
+              <button
+                onClick={isRunning ? stopFreya : startFreya}
+                disabled={!connected}
+                className="px-10 py-3.5 rounded-full text-xs font-bold tracking-widest uppercase transition-all duration-300 shadow-lg bg-primary-container text-parchment hover:bg-primary-container/90 hover:shadow-[0_0_28px_rgba(211,47,47,0.5)] disabled:opacity-40 disabled:cursor-not-allowed"
+              >
+                {isRunning ? "\u26a1 STOP FREYA" : "\u26a1 START FREYA"}
+              </button>
+
+              {/* Footer tag */}
+              <div className="text-[9px] font-bold text-outline-variant/60 tracking-widest uppercase font-mono">
+                DEVELOPED BY &bull; IHAN &bull; 2026
+              </div>
             </div>
           </div>
         </div>
