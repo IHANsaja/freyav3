@@ -93,9 +93,13 @@ Do not return the full memory file. Only return the new content to append."""
     for attempt in range(1, max_retries + 1):
         try:
             client = genai.Client(api_key=api_key)
-            response = client.models.generate_content(
-                model="gemini-2.5-flash-lite",
-                contents=prompt
+            loop = asyncio.get_running_loop()
+            response = await loop.run_in_executor(
+                None,
+                lambda: client.models.generate_content(
+                    model="gemini-2.5-flash-lite",
+                    contents=prompt
+                )
             )
 
             result = response.text.strip()

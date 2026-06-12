@@ -7,10 +7,11 @@
     "barge_in": true
   },
   "vad": {
-    "start_sensitivity": "HIGH",
-    "end_sensitivity": "HIGH",
-    "prefix_padding_ms": 120,
-    "silence_duration_ms": 500
+    "start_sensitivity": "LOW",
+    "end_sensitivity": "LOW",
+    "prefix_padding_ms": 300,
+    "silence_duration_ms": 800,
+    "barge_in_rms_threshold": 1200
   },
   "active_provider": "gemini",
   "active_model": "gemini-3.1-flash-live-preview",
@@ -26,8 +27,8 @@
           "label": "Gemini 2.5 Flash Native Audio (fallback)"
         },
         {
-          "id": "gemini-3.5-live-translate-preview",
-          "label": "Gemini 3.5 Live Translate (Language Tutor)"
+          "id": "gemini-3.1-flash-live-preview",
+          "label": "Gemini 3.1 Flash Live Preview"
         }
       ],
       "voices": [
@@ -38,7 +39,7 @@
       "active_voice": "Zephyr"
     }
   },
-  "active_mode": "language_learning",
+  "active_mode": "default",
   "modes": {
     "default": {
       "label": "Default",
@@ -47,8 +48,8 @@
     },
     "language_learning": {
       "label": "Language Tutor",
-      "model_override": "gemini-3.5-live-translate-preview",
-      "_note": "Verify this model id with test_scripts/list_models.py and adjust if Google publishes the live translate model under a different name.",
+      "model_override": null,
+      "_note": "When the Gemini live translate model is available on your API key, put its exact id here (verify with test_scripts/list_models.py). Leave null to use the active_model.",
       "personality_override": "You are Freya in Language Tutor mode, running on a Gemini live translation model. You are a warm, encouraging, and patient language teacher and real-time interpreter. You can translate speech between languages instantly. When Ihan wants to practice a language, you conduct immersive practice sessions: translating phrases live, correcting pronunciation gently, introducing vocabulary in context, and building sentences progressively. When he speaks in one language, you can echo it back in the target language and explain nuances. You still have your signature warmth but you stay focused and educational. If he makes a mistake, you correct it playfully without breaking his confidence. Keep responses concise and spoken naturally."
     },
     "coding": {

@@ -62,6 +62,13 @@ def grid_to_screen(x: int, y: int) -> tuple[int, int]:
     return sx, sy
 
 
+def get_capture_grid() -> tuple[int, int]:
+    """Return the size of the last screenshot sent to Gemini (grid pixels)."""
+    with _capture_lock:
+        gw, gh = _capture_state["grid_w"], _capture_state["grid_h"]
+    return (gw or 1280, gh or 720)
+
+
 # ══════════════════════════════════════════════
 #  SCREEN CAPTURE
 # ══════════════════════════════════════════════

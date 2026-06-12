@@ -72,7 +72,8 @@ async def run_freya():
     # Patch FreyaModel to broadcast events to UI
     class FreyaModelWithBroadcast(FreyaModel):
         async def on_transcript(self, speaker_name: str, text: str):
-            transcript.add(speaker_name, text)
+            # NOTE: FreyaModel.run() already records to the transcript
+            # collector; adding it here too caused duplicate memory entries.
             await broadcast({
                 "type": "transcript",
                 "speaker": speaker_name,
@@ -90,17 +91,51 @@ async def run_freya():
         async def on_state(self, value: str):
             await broadcast({"type": "state", "value": value})
 
-    freya = FreyaModelWithBroadcast(
-        api_key=api_key,
-        model_id=model_id,
-        voice=voice,
-        personality=personality,
-        config=config,
-        transcript=transcript
-    )
+    consecutive_failures = 0
+    max_reconnect_attempts = 5
 
     try:
-        await freya.run(mic, speaker)
+        while freya_running:
+            freya = FreyaModelWithBroadcast(
+                api_key=api_key,
+                model_id=model_id,
+                voice=voice,
+                personality=personality,
+                config=config,
+                transcript=transcript
+            )
+            try:
+                await freya.run(mic, speaker)
+                # Clean exit from run means session completed normally (or user stopped it without cancellation)
+                break
+            except asyncio.CancelledError:
+                raise
+            except Exception as e:
+                consecutive_failures += 1
+                print(f"Freya session error (attempt {consecutive_failures}/{max_reconnect_attempts}): {e}")
+                if consecutive_failures >= max_reconnect_attempts:
+                    await broadcast({
+                        "type": "transcript",
+                        "speaker": "Freya",
+                        "text": f"[SESSION ERROR] Max reconnect attempts reached. Connection stopped."
+                    })
+                    break
+                
+                await broadcast({
+                    "type": "transcript",
+                    "speaker": "Freya",
+                    "text": f"[Connection lost. Reconnecting to Gemini... Attempt {consecutive_failures}/{max_reconnect_attempts}]"
+                })
+                
+                await asyncio.sleep(2 * consecutive_failures)
+                
+                # Reload config and keys in case they were updated
+                config = load_config()
+                api_key = get_api_key()
+                model_id = get_mode_model(config)
+                voice = get_active_voice(config)
+                base_personality = get_personality(config)
+                personality = build_system_prompt(get_mode_personality(config, base_personality), memory)
     finally:
         freya_running = False
         mic.stop()
@@ -226,10 +261,11 @@ async def websocket_endpoint(websocket: WebSocket):
                 await update_config_endpoint({"voice": data.get("voice")})
             elif msg_type == "set_mode":
                 mode = data.get("mode", "default")
-                config_path = os.path.join("config", "freya_config.json")
-                with open(config_path, "r") as f:
-                    cfg = json.load(f)
-                if mode in cfg.get("modes", {}):
+                full_cfg = load_config()
+                if mode in full_cfg.get("modes", {}) or mode == "default":
+                    config_path = os.path.join("config", "freya_config.json")
+                    with open(config_path, "r") as f:
+                        cfg = json.load(f)
                     cfg["active_mode"] = mode
                     with open(config_path, "w") as f:
                         json.dump(cfg, f, indent=2)

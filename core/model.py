@@ -42,7 +42,7 @@ TOOL_DECLARATIONS = [
             properties={
                 "mode": types.Schema(
                     type=types.Type.STRING,
-                    description="Mode identifier: 'default', 'language_learning', or 'coding'"
+                    description="Mode identifier: 'default', 'language_learning', 'coding', or other custom modes."
                 )
             },
             required=["mode"]
@@ -358,6 +358,10 @@ class FreyaModel:
         model_speaking = asyncio.Event()
         loop = asyncio.get_event_loop()
 
+        # Tracking variables for turn-completion and playback sync
+        pending_playback_chunks = 0
+        model_turn_complete = True
+
         async with self.client.aio.live.connect(
             model=self.model_id,
             config=self.get_config()
@@ -365,21 +369,66 @@ class FreyaModel:
             self.session = session
             print("Freya is live! Start talking. (Ctrl+C to stop)\n")
 
-            barge_in = (self.config or {}).get("freya", {}).get("barge_in", True)
+            freya_cfg = (self.config or {}).get("freya", {})
+            vad_cfg = (self.config or {}).get("vad", {})
+            barge_in = freya_cfg.get("barge_in", True)
+            rms_threshold = int(vad_cfg.get("barge_in_rms_threshold", 1200))
+
+            def _rms(chunk: bytes) -> int:
+                """Energy of a 16-bit PCM chunk — used to gate barge-in."""
+                try:
+                    import audioop
+                    return audioop.rms(chunk, 2)
+                except Exception:
+                    import array
+                    samples = array.array("h", chunk[: len(chunk) // 2 * 2])
+                    if not samples:
+                        return 0
+                    return int((sum(s * s for s in samples) / len(samples)) ** 0.5)
 
             async def send_audio():
                 while True:
                     data = await loop.run_in_executor(None, mic_stream.read)
-                    # With barge-in enabled the mic streams continuously so
-                    # Gemini's native VAD can detect interruptions naturally.
-                    # Without it, fall back to muting while Freya speaks.
-                    if barge_in or not model_speaking.is_set():
-                        await session.send_realtime_input(
-                            audio=types.Blob(data=data, mime_type="audio/pcm;rate=16000")
-                        )
+                    if model_speaking.is_set():
+                        # While Freya speaks, only let *intentional* speech
+                        # through. The energy gate filters out her own voice
+                        # bleeding from the speakers, which previously caused
+                        # false barge-ins (she kept interrupting herself).
+                        if not barge_in or _rms(data) < rms_threshold:
+                            continue
+                    await session.send_realtime_input(
+                        audio=types.Blob(data=data, mime_type="audio/pcm;rate=16000")
+                    )
 
             async def receive_audio():
+                nonlocal pending_playback_chunks, model_turn_complete
                 freya_buffer = ""
+                user_buffer = ""
+
+                async def flush_user():
+                    # Emit the user's words as ONE complete utterance instead
+                    # of fragment-by-fragment transcript lines.
+                    nonlocal user_buffer
+                    full = user_buffer.strip()
+                    user_buffer = ""
+                    if full:
+                        print(f"  You  : {full}")
+                        if self.transcript:
+                            self.transcript.add("Ihan", full)
+                        await self.on_transcript("Ihan", full)
+
+                async def flush_freya(cut: bool = False):
+                    nonlocal freya_buffer
+                    full = freya_buffer.strip()
+                    freya_buffer = ""
+                    if full:
+                        if cut:
+                            full += " …"
+                        print(f"  Freya: {full}")
+                        if self.transcript:
+                            self.transcript.add("Freya", full)
+                        await self.on_transcript("Freya", full)
+
                 while True:
                     async for response in session.receive():
                         if response.server_content is None:
@@ -395,17 +444,24 @@ class FreyaModel:
 
                                     # ── VISION: send screenshot to Gemini as image ──
                                     if result == "VISION_REQUESTED":
-                                        from core.vision import capture_screen
+                                        from core.vision import capture_screen, get_capture_grid
                                         import base64
                                         print("  Capturing screen...")
                                         b64_image = capture_screen()
+                                        gw, gh = get_capture_grid()
 
                                         # Send tool response + image together
                                         await session.send_tool_response(
                                             function_responses=[types.FunctionResponse(
                                                 id=call_id,
                                                 name=tool_name,
-                                                response={"result": "Screen captured. Analyzing now."}
+                                                response={"result": (
+                                                    f"Screen captured. A {gw}x{gh} screenshot of the user's REAL "
+                                                    "current screen is attached as the next image input. Describe "
+                                                    "and interact based STRICTLY on that image - never guess or "
+                                                    "imagine screen content. All click/move/scroll coordinates "
+                                                    "must be measured on this exact image."
+                                                )}
                                             )]
                                         )
                                         # Send the actual image as a follow-up input
@@ -425,6 +481,8 @@ class FreyaModel:
                                             )]
                                         )
                                         # Clear speaking block to unmute mic if the tool execution finishes
+                                        pending_playback_chunks = 0
+                                        model_turn_complete = True
                                         model_speaking.clear()
                                         await self.on_state("listening")
                             continue
@@ -440,39 +498,39 @@ class FreyaModel:
                                     audio_queue.task_done()
                                 except asyncio.QueueEmpty:
                                     break
-                            freya_buffer = ""
+                            # Keep what she managed to say, marked as cut off
+                            await flush_freya(cut=True)
+                            pending_playback_chunks = 0
+                            model_turn_complete = True
                             model_speaking.clear()
                             await self.on_state("interrupted")
                             continue
 
-                        # Buffer input transcription (your words)
+                        # Accumulate input transcription fragments silently
                         inp = getattr(sc, 'input_transcription', None)
                         if inp:
                             text = getattr(inp, 'text', str(inp)).strip()
                             if text:
-                                print(f"  You  : {text}")
-                                if self.transcript:
-                                    self.transcript.add("Ihan", text)
-                                await self.on_transcript("Ihan", text)
+                                user_buffer += " " + text
 
                         # Buffer Freya's words — don't emit yet
                         out = getattr(sc, 'output_transcription', None)
                         if out:
                             text = getattr(out, 'text', str(out)).strip()
                             if text:
+                                # Model started answering → the user's turn is over
+                                await flush_user()
                                 freya_buffer += " " + text
+                                model_turn_complete = False
 
-                        # Turn complete → emit full buffered sentence
+                        # Turn complete → emit full buffered sentences
                         if getattr(sc, 'turn_complete', False):
-                            full_text = freya_buffer.strip()
-                            if full_text:
-                                print(f"  Freya: {full_text}")
-                                if self.transcript:
-                                    self.transcript.add("Freya", full_text)
-                                await self.on_transcript("Freya", full_text)
-                            freya_buffer = ""  # reset for next turn
-                            model_speaking.clear()
-                            await self.on_state("listening")
+                            await flush_user()
+                            await flush_freya()
+                            model_turn_complete = True
+                            if pending_playback_chunks == 0:
+                                model_speaking.clear()
+                                await self.on_state("listening")
                             continue
 
                         if sc.model_turn is None:
@@ -480,15 +538,23 @@ class FreyaModel:
 
                         for part in sc.model_turn.parts:
                             if part.inline_data is not None:
-                                model_speaking.set()
-                                await self.on_state("speaking")
+                                if not model_speaking.is_set():
+                                    model_speaking.set()
+                                    await self.on_state("speaking")
+                                model_turn_complete = False
+                                pending_playback_chunks += 1
                                 await audio_queue.put(part.inline_data.data)
 
             async def play_audio():
+                nonlocal pending_playback_chunks
                 while True:
                     data = await audio_queue.get()
                     await loop.run_in_executor(None, speaker_stream.write, data)
                     audio_queue.task_done()
+                    pending_playback_chunks = max(0, pending_playback_chunks - 1)
+                    if pending_playback_chunks == 0 and model_turn_complete:
+                        model_speaking.clear()
+                        await self.on_state("listening")
 
             await asyncio.gather(
                 send_audio(),

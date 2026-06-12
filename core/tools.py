@@ -412,18 +412,28 @@ def scroll_tool(x: int, y: int, direction: str = "down", amount: int = 3) -> str
 def switch_mode(mode: str) -> str:
     """Switch Freya's active mode by updating config."""
     import json, os
-    valid_modes = ["default", "language_learning", "coding"]
+    from config import load_config
+    try:
+        config = load_config()
+    except Exception:
+        config_path = os.path.join(os.path.dirname(__file__), '..', 'config', 'freya_config.json')
+        with open(config_path, 'r') as f:
+            config = json.load(f)
+            
+    valid_modes = list(config.get("modes", {}).keys())
+    if "default" not in valid_modes:
+        valid_modes.append("default")
+        
     if mode not in valid_modes:
         return f"Unknown mode: {mode}. Valid modes are: {', '.join(valid_modes)}"
     
     config_path = os.path.join(os.path.dirname(__file__), '..', 'config', 'freya_config.json')
     try:
         with open(config_path, 'r') as f:
-            config = json.load(f)
-        config['active_mode'] = mode
+            raw_config = json.load(f)
+        raw_config['active_mode'] = mode
         with open(config_path, 'w') as f:
-            json.dump(config, f, indent=2)
-        labels = {"default": "Default", "language_learning": "Language Tutor", "coding": "Coding Mode"}
+            json.dump(raw_config, f, indent=2)
         return f"MODE_SWITCHED:{mode}"
     except Exception as e:
         return f"Mode switch failed: {str(e)}"
