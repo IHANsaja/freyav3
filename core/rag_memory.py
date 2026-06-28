@@ -15,7 +15,7 @@ Gated behind config `rag.enabled`. Degrades to a clear message if chromadb is mi
 import os
 import hashlib
 
-from config import get_api_key
+from config import get_agent_api_key
 from core.registry import tool, OBJ, P, STR
 
 _DB_DIR = os.path.join(os.path.dirname(__file__), "..", "memory", "rag_db")
@@ -37,7 +37,7 @@ def _get_collection():
 
 def _embed(texts: list[str]) -> list[list[float]]:
     from google import genai
-    client = genai.Client(api_key=get_api_key())
+    client = genai.Client(api_key=get_agent_api_key())
     resp = client.models.embed_content(model=_EMBED_MODEL, contents=texts)
     return [list(e.values) for e in resp.embeddings]
 

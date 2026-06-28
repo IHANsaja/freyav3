@@ -1,76 +1,156 @@
 """
-Real news — Freya actually reads the headlines aloud instead of opening a browser tab.
+Real news — Freya reads headlines aloud AND projects them onto the dashboard as dynamic cards.
 
-The old `get_news` in core/tools.py just popped open Google News in the browser. When Ihan
-asks "what's happening around the world?", Freya should *speak* the news. This module pulls
-the Google News RSS feed (no API key, no quota) and returns the top headlines as plain text
-that the live model narrates.
+When Ihan asks for news, this:
+  1. Pulls the Google News RSS feed (no API key) and returns the top headlines as text for
+     Freya to speak.
+  2. Emits a structured `news` event to the UI immediately so the dashboard can scatter the
+     headlines as dynamic projections around the AI globe (with live animated figures).
+  3. Kicks off a BACKGROUND scrape of each article's og:image and emits `news_image` events as
+     they resolve — so images appear over the scene a moment later without delaying her speech.
 """
 
+import asyncio
+import hashlib
+import re
 import urllib.parse
 import urllib.request
 import xml.etree.ElementTree as ET
 
-from core.registry import register, tool, OBJ, P, STR, INT
+from core.registry import register, tool, OBJ, P, STR
 
 _UA = {"User-Agent": "Mozilla/5.0 (FreyaAI/3.0)"}
 _TOP = "https://news.google.com/rss?hl=en-US&gl=US&ceid=US:en"
 _SEARCH = "https://news.google.com/rss/search?q={q}&hl=en-US&gl=US&ceid=US:en"
 
 
-def _fetch_headlines(url: str, limit: int = 5) -> list[str]:
+def _hid(title: str) -> int:
+    """Stable id for a headline so the UI can match an incoming image to its card."""
+    return int(hashlib.md5(title.encode("utf-8")).hexdigest()[:8], 16)
+
+
+def _domain(url: str) -> str:
+    try:
+        return urllib.parse.urlparse(url).netloc
+    except Exception:
+        return ""
+
+
+def _fetch_items(url: str, limit: int = 5) -> list[dict]:
     req = urllib.request.Request(url, headers=_UA)
     with urllib.request.urlopen(req, timeout=8) as resp:
-        raw = resp.read()
-    root = ET.fromstring(raw)
-    items = root.findall(".//item")
-    headlines = []
-    for item in items[:limit]:
-        title = (item.findtext("title") or "").strip()
+        root = ET.fromstring(resp.read())
+    items = []
+    for it in root.findall(".//item")[:limit]:
+        title = (it.findtext("title") or "").strip()
         if not title:
             continue
-        # Google formats titles as "Headline - Source"; keep the headline part.
         headline = title.rsplit(" - ", 1)[0] if " - " in title else title
-        headlines.append(headline)
-    return headlines
+        source = title.rsplit(" - ", 1)[1] if " - " in title else ""
+        # Source homepage -> a guaranteed logo image (shown instantly in the scene,
+        # before/instead of a scraped article photo).
+        src_el = it.find("source")
+        dom = _domain(src_el.get("url")) if src_el is not None and src_el.get("url") else ""
+        logo = f"https://www.google.com/s2/favicons?domain={dom}&sz=128" if dom else None
+        items.append({"title": headline, "source": source,
+                      "link": (it.findtext("link") or "").strip(), "logo": logo})
+    return items
+
+
+def _fetch_headlines(url: str, limit: int = 5) -> list[str]:
+    """Kept for the scheduler's morning briefing."""
+    return [i["title"] for i in _fetch_items(url, limit)]
 
 
 def _format(headlines: list[str], label: str) -> str:
     if not headlines:
         return f"I couldn't pull any {label} right now — the news feed didn't respond."
     lines = "; ".join(f"{i+1}. {h}" for i, h in enumerate(headlines))
-    return (
-        f"Here are the top {label} right now: {lines}. "
-        "Read these to Ihan conversationally — don't just list numbers robotically."
-    )
+    return (f"Here are the top {label} right now: {lines}. "
+            "Read these to Ihan conversationally — don't just list numbers robotically.")
 
 
-# ── Tools ──────────────────────────────────────────────────────────────────
+def _og_image(link: str, timeout: int = 5) -> str | None:
+    """Lightweight web scrape: follow the article link and grab its og:image."""
+    try:
+        req = urllib.request.Request(link, headers=_UA)
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            html = r.read(220_000).decode("utf-8", "replace")
+    except Exception:
+        return None
+    for pat in (r'<meta[^>]+property=["\']og:image["\'][^>]+content=["\']([^"\']+)',
+                r'<meta[^>]+name=["\']twitter:image["\'][^>]+content=["\']([^"\']+)'):
+        m = re.search(pat, html, re.I)
+        if m and m.group(1).startswith("http"):
+            return m.group(1)
+    return None
+
+
+async def _scrape_images(items: list[dict], ctx):
+    """Background: scrape each headline's photo, DOWNLOAD it server-side, and project it onto
+    the scene as a data URI (so it always renders — no hotlink/CORS failures)."""
+    loop = asyncio.get_running_loop()
+    from core.web import download_image_raw
+    for it in items:
+        if not it.get("link"):
+            continue
+        try:
+            img_url = await loop.run_in_executor(None, _og_image, it["link"])
+            if not img_url:
+                continue
+            raw = await loop.run_in_executor(None, lambda u=img_url, l=it["link"]: download_image_raw(u, l))
+            if raw:
+                await ctx.emit("news_image",
+                               {"id": _hid(it["title"]), "image": "data:image/jpeg;base64," + raw})
+        except Exception:
+            continue
+
+
+async def _emit_and_speak(items: list[dict], label: str, ctx) -> str:
+    spoken = _format([i["title"] for i in items], label)
+    if items and ctx is not None:
+        try:
+            await ctx.emit("news", {"items": [
+                {"id": _hid(i["title"]), "title": i["title"], "source": i["source"],
+                 "image": None, "logo": i.get("logo")}
+                for i in items
+            ]})
+            asyncio.create_task(_scrape_images(items, ctx))
+        except Exception:
+            pass
+    return spoken
+
+
+# ── Tools (async so they can emit UI events while staying fast for voice) ──
 @tool(
     "get_world_news",
-    "Fetch the latest TOP world/global news headlines and read them aloud. Use when Ihan asks "
-    "'what's happening around the world', 'what's the news', 'any news today', etc.",
+    "Fetch the latest TOP world/global news, read the headlines aloud, AND display them with "
+    "images directly on Freya's dashboard scene (no browser). This is the tool for ANY news "
+    "request — including 'show me the news images', 'show news', 'what's happening around the "
+    "world'. NEVER open a browser for news; this shows everything in the UI.",
     OBJ(),
 )
-def get_world_news(args: dict, ctx) -> str:
+async def get_world_news(args: dict, ctx) -> str:
+    loop = asyncio.get_running_loop()
     try:
-        return _format(_fetch_headlines(_TOP, 5), "world headlines")
+        items = await loop.run_in_executor(None, _fetch_items, _TOP, 5)
     except Exception as e:
         return f"Couldn't fetch world news: {e}"
+    return await _emit_and_speak(items, "world headlines", ctx)
 
 
-def _get_news(args: dict, ctx) -> str:
-    """Improved get_news: returns spoken headlines for a topic (overrides the
-    browser-opening version in core/tools.py)."""
+async def _get_news(args: dict, ctx) -> str:
     topic = (args.get("topic") or "world").strip()
     if topic.lower() in ("world", "global", ""):
-        return get_world_news(args, ctx)
+        return await get_world_news(args, ctx)
+    loop = asyncio.get_running_loop()
     try:
         url = _SEARCH.format(q=urllib.parse.quote(topic))
-        return _format(_fetch_headlines(url, 5), f"{topic} headlines")
+        items = await loop.run_in_executor(None, _fetch_items, url, 5)
     except Exception as e:
         return f"Couldn't fetch {topic} news: {e}"
+    return await _emit_and_speak(items, f"{topic} headlines", ctx)
 
 
-# Handler-only override — the declaration already lives in model.py's static list.
+# Handler-only override — declaration already lives in model.py's static list.
 register("get_news", _get_news)

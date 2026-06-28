@@ -258,6 +258,11 @@ async def websocket_endpoint(websocket: WebSocket):
     # Send current status + active mode on connect
     await websocket.send_json({"type": "state", "value": "listening" if freya_running else "idle"})
     try:
+        from core import runtime
+        await websocket.send_json({"type": "mic", "paused": runtime.is_paused()})
+    except Exception:
+        pass
+    try:
         cfg = load_config()
         await websocket.send_json({"type": "mode", "value": cfg.get("active_mode", "default")})
     except Exception:
@@ -276,6 +281,10 @@ async def websocket_endpoint(websocket: WebSocket):
                 await update_config_endpoint({"model": data.get("model")})
             elif msg_type == "set_voice":
                 await update_config_endpoint({"voice": data.get("voice")})
+            elif msg_type == "set_listening":
+                from core import runtime
+                runtime.set_paused(bool(data.get("paused", False)))
+                await broadcast({"type": "mic", "paused": runtime.is_paused()})
             elif msg_type == "set_mode":
                 mode = data.get("mode", "default")
                 full_cfg = load_config()

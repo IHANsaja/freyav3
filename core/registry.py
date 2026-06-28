@@ -123,6 +123,8 @@ def _load_skills():
         "core.scheduler",
         "core.ambient",
         "core.self_extend",
+        "core.listening_tools",
+        "core.web",
     ]
     for mod in modules:
         try:

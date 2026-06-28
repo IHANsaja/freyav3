@@ -75,6 +75,29 @@ body {
 }
 .animate-card-in { animation: card-in 0.35s cubic-bezier(0.22, 1, 0.36, 1) both; }
 
+/* Projection panel: pop in from the globe, then gently drift */
+@keyframes projection-in {
+  0%   { opacity: 0; transform: scale(0.6); filter: blur(6px); }
+  60%  { opacity: 1; filter: blur(0); }
+  100% { opacity: 1; transform: scale(1); }
+}
+@keyframes projection-drift {
+  0%, 100% { transform: translateY(0); }
+  50%      { transform: translateY(-7px); }
+}
+.projection {
+  animation: projection-in 0.5s cubic-bezier(0.22, 1, 0.36, 1) both,
+             projection-drift 6s ease-in-out infinite 0.5s;
+}
+
+/* Energy beam from the globe to a projection (flowing dashes) */
+@keyframes beam-flow { to { stroke-dashoffset: -32; } }
+.beam-flow { animation: beam-flow 0.7s linear infinite; }
+
+/* Live "● LIVE" pulse */
+@keyframes live-pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.35; } }
+.live-dot { animation: live-pulse 1.1s ease-in-out infinite; }
+
 @keyframes pulse-line {
   0%, 100% { transform: scaleY(0.3); opacity: 0.4; }
   50% { transform: scaleY(1); opacity: 1; }

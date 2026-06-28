@@ -52,8 +52,9 @@ TOOL_DECLARATIONS = [
     ),
     types.FunctionDeclaration(
         name="get_news",
-        description="Fetch the latest news headlines for a topic and read them aloud (no browser). "
-                    "For general/world news prefer get_world_news.",
+        description="Fetch latest news for a topic, read it aloud, AND show the headlines with "
+                    "images on the dashboard scene (no browser). Use this (or get_world_news) for "
+                    "ALL news and news-image requests — never open a browser for news.",
         parameters=types.Schema(
             type=types.Type.OBJECT,
             properties={
@@ -299,6 +300,11 @@ class FreyaModel:
                 scheduler.attach(self.config)
             except Exception:
                 pass
+            try:
+                from core.hotkeys import start_pause_hotkey
+                start_pause_hotkey(self.config)
+            except Exception:
+                pass
             print("Freya is live! Start talking. (Ctrl+C to stop)\n")
 
             freya_cfg = (self.config or {}).get("freya", {})
@@ -319,8 +325,18 @@ class FreyaModel:
                     return int((sum(s * s for s in samples) / len(samples)) ** 0.5)
 
             async def send_audio():
+                last_paused = False
                 while True:
                     data = await loop.run_in_executor(None, mic_stream.read)
+                    # Pause-listening: drain the mic but DON'T forward it, so movie /
+                    # ambient audio never reaches Gemini and can't trigger her.
+                    paused = runtime.is_paused()
+                    if paused != last_paused:
+                        last_paused = paused
+                        print("  🔇 Mic paused." if paused else "  🔊 Mic resumed.")
+                        await self.on_event("mic", {"paused": paused})
+                    if paused:
+                        continue
                     if model_speaking.is_set():
                         # While Freya speaks, only let *intentional* speech
                         # through. The energy gate filters out her own voice
@@ -382,6 +398,12 @@ class FreyaModel:
                                         print("  Capturing screen...")
                                         b64_image = capture_screen()
                                         gw, gh = get_capture_grid()
+
+                                        # Show the screenshot she's looking at on the dashboard canvas.
+                                        try:
+                                            await self.on_event("image", {"data": b64_image, "label": "Screen capture"})
+                                        except Exception:
+                                            pass
 
                                         # Send tool response + image together
                                         await session.send_tool_response(
@@ -455,6 +477,9 @@ class FreyaModel:
                                 await flush_user()
                                 freya_buffer += " " + text
                                 model_turn_complete = False
+                                # Stream the fragment live so the UI can type it out
+                                # in the center of the scene as she speaks.
+                                await self.on_event("speech", {"text": text})
 
                         # Turn complete → emit full buffered sentences
                         if getattr(sc, 'turn_complete', False):

@@ -116,66 +116,82 @@ uniform vec4  u_rect[12];
 uniform float u_start[12];
 uniform float u_kind[12];
 
-vec3 permute(vec3 x){ return mod(((x*34.0)+1.0)*x, 289.0); }
-float snoise(vec2 v){
-  const vec4 C = vec4(0.211324865405187, 0.366025403784439,
-                     -0.577350269189626, 0.024390243902439);
-  vec2 i  = floor(v + dot(v, C.yy));
-  vec2 x0 = v -   i + dot(i, C.xx);
-  vec2 i1 = (x0.x > x0.y) ? vec2(1.0,0.0) : vec2(0.0,1.0);
-  vec4 x12 = x0.xyxy + C.xxzz; x12.xy -= i1;
-  i = mod(i, 289.0);
-  vec3 p = permute( permute( i.y + vec3(0.0, i1.y, 1.0))
-                  + i.x + vec3(0.0, i1.x, 1.0));
-  vec3 m = max(0.5 - vec3(dot(x0,x0), dot(x12.xy,x12.xy),
-                          dot(x12.zw,x12.zw)), 0.0);
-  m = m*m; m = m*m;
-  vec3 x = 2.0 * fract(p * C.www) - 1.0;
-  vec3 h = abs(x) - 0.5;
-  vec3 ox = floor(x + 0.5);
-  vec3 a0 = x - ox;
-  m *= 1.79284291400159 - 0.85373472095314 * (a0*a0 + h*h);
-  vec3 g;
-  g.x  = a0.x  * x0.x  + h.x  * x0.y;
-  g.yz = a0.yz * x12.xz + h.yz * x12.yw;
-  return 130.0 * dot(m, g);
+// distance from point p to segment a-b
+float sdSeg(vec2 p, vec2 a, vec2 b){
+  vec2 pa = p - a, ba = b - a;
+  float h = clamp(dot(pa, ba) / dot(ba, ba), 0.0, 1.0);
+  return length(pa - ba * h);
 }
-float sdRoundBox(vec2 p, vec2 b, float r){
-  vec2 q = abs(p) - b + r;
-  return min(max(q.x, q.y), 0.0) + length(max(q, 0.0)) - r;
-}
+// crisp line: 1 at the line, fading to 0 over width w
+float ln(float d, float w){ return 1.0 - smoothstep(0.0, w, d); }
+
 void main(){
-  vec2 px = vec2(gl_FragCoord.x, u_res.y - gl_FragCoord.y);
+  vec2 px = vec2(gl_FragCoord.x, u_res.y - gl_FragCoord.y); // top-left origin
   vec3 col = vec3(0.0);
-  vec3 crimson = vec3(0.83, 0.11, 0.11);
-  vec3 hot     = vec3(1.00, 0.55, 0.45);
+  vec3 crim = vec3(1.00, 0.20, 0.18);   // bright crimson lines
+  vec3 hot  = vec3(1.00, 0.72, 0.62);   // peach highlight
+
   for(int i = 0; i < 12; i++){
     if(i >= u_count) break;
     float age = u_time - u_start[i];
     if(age < 0.0 || age > LIFE_C) continue;
-    float fade = 1.0 - age / LIFE_C;
+    float fin  = smoothstep(0.0, 0.06, age);
+    float fout = 1.0 - smoothstep(LIFE_C - 0.35, LIFE_C, age);
+    float fade = fin * fout;
+    float flash = 0.85 + 0.15 * sin(age * 34.0);
     vec4 R = u_rect[i];
-    if(u_kind[i] < 1.5){
+    float kind = u_kind[i];
+
+    if(kind < 0.5){
+      // ── ELEMENT: corner brackets snap inward, scan sweep, center tick ──
+      float snap = smoothstep(0.0, 0.20, age);
+      float mg = mix(24.0, 3.0, snap);                 // brackets fly in then lock
+      vec2 bsz = 0.5 * vec2(abs(R.z - R.x), abs(R.w - R.y));
+      float arm = mix(8.0, clamp(min(bsz.x, bsz.y) * 0.55, 12.0, 34.0), snap);
+      float L = R.x - mg, T = R.y - mg, Rr = R.z + mg, B = R.w + mg;
+
+      float d = 1e9;
+      d = min(d, sdSeg(px, vec2(L,T),  vec2(L+arm,T)));   d = min(d, sdSeg(px, vec2(L,T),  vec2(L,T+arm)));
+      d = min(d, sdSeg(px, vec2(Rr,T), vec2(Rr-arm,T)));  d = min(d, sdSeg(px, vec2(Rr,T), vec2(Rr,T+arm)));
+      d = min(d, sdSeg(px, vec2(L,B),  vec2(L+arm,B)));   d = min(d, sdSeg(px, vec2(L,B),  vec2(L,B-arm)));
+      d = min(d, sdSeg(px, vec2(Rr,B), vec2(Rr-arm,B)));  d = min(d, sdSeg(px, vec2(Rr,B), vec2(Rr,B-arm)));
+
+      float br = ln(d, 2.0);                 // crisp brackets
+      float glow = exp(-d * 0.11) * 0.16;    // faint bloom only
+      col += (crim * br * flash + crim * glow) * fade;
+
+      // single scan sweep down the element
+      float sp = age / 0.6;
+      if(sp < 1.0 && px.x > R.x && px.x < R.z){
+        float ys = mix(R.y, R.w, sp);
+        col += hot * ln(abs(px.y - ys), 1.6) * (1.0 - sp) * 0.9 * fout;
+      }
+
+      // small center crosshair tick
       vec2 c = 0.5 * vec2(R.x + R.z, R.y + R.w);
-      vec2 b = max(0.5 * vec2(abs(R.z - R.x), abs(R.w - R.y)), vec2(3.0));
-      vec2 p = px - c;
-      float d = sdRoundBox(p, b, min(min(b.x, b.y), 12.0));
-      float rim = exp(-abs(d) * 0.05);
-      float ringR = age * 130.0;
-      float ring = exp(-pow(abs(d - ringR), 2.0) * 0.0007);
-      float n = snoise(p * 0.018 + vec2(0.0, u_time * 1.6));
-      float energy = rim * (0.55 + 0.45 * n);
-      float pulse = 0.55 + 0.45 * sin(age * 20.0 - 1.5);
-      float intensity = (energy * 1.25 * pulse + ring * 0.9) * fade;
-      col += mix(crimson, hot, clamp(ring * 1.6, 0.0, 1.0)) * intensity;
-    } else {
-      float yline = age * u_res.y;
-      float dl = px.y - yline;
-      float line = exp(-dl * dl * 0.0016);
-      float n = snoise(vec2(px.x * 0.008, u_time));
-      col += crimson * line * fade * (0.65 + 0.35 * n);
+      float ch = ln(sdSeg(px, c - vec2(5,0), c + vec2(5,0)), 1.4);
+      float cv = ln(sdSeg(px, c - vec2(0,5), c + vec2(0,5)), 1.4);
+      col += crim * max(ch, cv) * 0.5 * fade;
+    }
+    else if(kind < 1.5){
+      // ── POINT/CLICK: expanding reticle ring + gapped crosshair ──
+      vec2 c = 0.5 * vec2(R.x + R.z, R.y + R.w);
+      float r = age * 80.0;
+      col += crim * ln(abs(length(px - c) - r), 2.0) * (1.0 - age / LIFE_C);
+      vec2 p = px - c; float ax = abs(p.x), ay = abs(p.y);
+      float hx = ln(abs(p.y), 1.5) * step(6.0, ax) * step(ax, 18.0);
+      float hy = ln(abs(p.x), 1.5) * step(6.0, ay) * step(ay, 18.0);
+      col += hot * max(hx, hy) * fade;
+    }
+    else {
+      // ── SCAN: full-screen sweep line with tick marks ──
+      float ys = age * u_res.y;
+      float sl = ln(abs(px.y - ys), 1.8);
+      float tick = step(0.92, fract(px.x / 80.0)) * ln(abs(px.y - ys), 5.0);
+      col += crim * (sl + tick * 0.6) * (1.0 - age / LIFE_C);
     }
   }
+
   col = clamp(col, 0.0, 1.0);
   float a = max(col.r, max(col.g, col.b));
   a = clamp(max(a - 0.02, 0.0) / 0.98, 0.0, 1.0);

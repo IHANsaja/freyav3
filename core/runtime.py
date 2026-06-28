@@ -16,6 +16,26 @@ If nothing is live, calls are silently dropped.
 _inject_fn = None
 _emit_fn = None
 
+# Mic pause state — when True, model.py stops forwarding mic audio to Gemini, so
+# ambient sound / a movie can't trigger Freya. Toggled by voice tool, hotkey, or UI.
+_paused = False
+
+
+def is_paused() -> bool:
+    return _paused
+
+
+def set_paused(value: bool):
+    global _paused
+    _paused = bool(value)
+    return _paused
+
+
+def toggle_paused() -> bool:
+    global _paused
+    _paused = not _paused
+    return _paused
+
 
 def set_channels(inject_fn, emit_fn):
     """Called by FreyaModel.run() to publish the active session's channels."""

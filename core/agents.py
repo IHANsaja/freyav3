@@ -22,7 +22,7 @@ import time
 from google import genai
 from google.genai import types
 
-from config import get_api_key
+from config import get_agent_api_key
 from core import runtime
 from core.registry import register, tool, dispatch as registry_dispatch, ToolContext, OBJ, P, STR
 
@@ -90,7 +90,7 @@ def _declarations(spec: dict, config: dict):
 async def _run_agent(job_id: str, agent_type: str, task: str, config: dict):
     spec = _spec(agent_type, config)
     ctx = ToolContext(config, session=None)  # background: no realtime session
-    client = genai.Client(api_key=get_api_key())
+    client = genai.Client(api_key=get_agent_api_key())
     decls = _declarations(spec, config)
     cfg = types.GenerateContentConfig(
         system_instruction=spec["system"],
@@ -126,7 +126,11 @@ async def _run_agent(job_id: str, agent_type: str, task: str, config: dict):
         else:
             final = "I ran out of steps before fully finishing that."
     except Exception as e:
-        final = f"My {agent_type} agent hit an error: {e}"
+        if "429" in str(e) or "resource_exhausted" in str(e).lower() or "quota" in str(e).lower():
+            final = ("I hit the daily free-tier Gemini quota, so I couldn't finish. Try again "
+                     "later, or add billing / a second API key to lift the limit.")
+        else:
+            final = f"My {agent_type} agent hit an error: {e}"
 
     _jobs[job_id].update(status="done", result=final)
     await runtime.emit("agent", {"id": job_id, "type": agent_type, "status": "done"})

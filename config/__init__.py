@@ -96,3 +96,16 @@ def get_memory_api_key():
     if not key:
         raise ValueError("No API key found for memory updates!")
     return key
+
+
+def get_agent_api_key():
+    """Key for the call-heavy text agents — browser-use, sub-agents, ambient, RAG.
+
+    Prefers GEMINI_AGENT_API_KEY, then GEMINI_MEMORY_API_KEY, then the main key. Using a
+    secondary key keeps these from eating the live-voice key's quota, and if it belongs to a
+    different Google project it taps a separate free-tier quota."""
+    key = (os.getenv("GEMINI_AGENT_API_KEY") or os.getenv("GEMINI_MEMORY_API_KEY")
+           or os.getenv("GEMINI_API_KEY"))
+    if not key:
+        raise ValueError("No API key found for agents!")
+    return key

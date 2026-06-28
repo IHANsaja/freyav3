@@ -14,52 +14,82 @@ import asyncio
 import itertools
 import os
 
-from config import get_api_key
+from config import get_agent_api_key
 from core import runtime
 from core.registry import tool, OBJ, P, STR
 
 _counter = itertools.count(1)
 _jobs: dict[str, dict] = {}
 
+_QUOTA = "__QUOTA__"
+
+
+def _is_quota(text) -> bool:
+    t = str(text).lower()
+    return "429" in t or "resource_exhausted" in t or "quota" in t
+
 
 async def _run_browser(job_id: str, task: str, config: dict):
     bcfg = (config or {}).get("browser", {})
     model = bcfg.get("llm_model", "gemini-2.5-flash")
+    fallback_model = bcfg.get("fallback_model", "gemini-2.5-flash-lite")
     max_steps = int(bcfg.get("max_steps", 25))
     result = "(no result)"
     try:
         from browser_use import Agent, ChatGoogle
-        key = get_api_key()
+        key = get_agent_api_key()  # secondary key — spares the voice quota
         os.environ.setdefault("GOOGLE_API_KEY", key)
+
+        def _mk(m):
+            try:
+                return ChatGoogle(model=m, api_key=key)
+            except TypeError:
+                return ChatGoogle(model=m)  # older signature reads env
+
+        llm = _mk(model)
+        # A fallback on a DIFFERENT model = a separate daily quota pool, so a 429 on the
+        # primary doesn't kill the task.
         try:
-            llm = ChatGoogle(model=model, api_key=key)
+            agent = Agent(task=task, llm=llm, fallback_llm=_mk(fallback_model))
         except TypeError:
-            llm = ChatGoogle(model=model)  # older signature reads env
-        agent = Agent(task=task, llm=llm)
+            agent = Agent(task=task, llm=llm)
+
         await runtime.emit("browser", {"id": job_id, "status": "running", "task": task})
         history = await agent.run(max_steps=max_steps)
-        # browser-use returns an AgentHistoryList; extract the final answer robustly.
         try:
-            result = history.final_result() or str(history)
+            final = history.final_result()
         except Exception:
+            final = None
+        if final:
+            result = final
+        elif _is_quota(history):
+            result = _QUOTA
+        else:
             result = str(history)
     except Exception as e:
-        result = f"The browser agent hit an error: {e}"
+        result = _QUOTA if _is_quota(e) else f"The browser agent hit an error: {e}"
 
     _jobs[job_id].update(status="done", result=result)
     await runtime.emit("browser", {"id": job_id, "status": "done"})
-    await runtime.inject(
-        f"The browser finished your task '{task}'. Result: {str(result)[:1200]}"
-    )
+    if result == _QUOTA:
+        await runtime.inject(
+            "I couldn't finish browsing — I've hit the daily free-tier quota on the Gemini API "
+            "for web tasks. Tell Ihan: try again later, or add billing / a second API key to lift "
+            "the limit. For quick facts I can still read the news instead."
+        )
+    else:
+        await runtime.inject(f"The browser finished your task '{task}'. Result: {str(result)[:1200]}")
 
 
 @tool(
     "browser_task",
-    "Your ONLY web browser tool. Use it for ANY request that involves the internet: search the web, "
-    "google something, look something up, play/find a YouTube video, search documentation, find a "
-    "StackOverflow answer or debug an error online, browse a site, research, fill a form, or "
-    "compare/check info. It autonomously drives a real Chromium browser, runs in the background, "
-    "and reports back out loud when done. Tell Ihan you've started it.",
+    "Drive a real Chromium browser for INTERACTIVE, multi-step web tasks: log in, fill a form, "
+    "click through a site, add to cart, navigate a web app, or anything that needs real clicking. "
+    "It runs in the background and reports back out loud. "
+    "For simple information lookups ('search the web', 'look something up', 'what's the latest on "
+    "X', check a fact) use web_search instead — it's faster and quota-free. "
+    "For news use get_world_news / get_news. Only use this browser for tasks that truly need "
+    "interacting with a page.",
     OBJ({"task": P(STR, "The web task or search in plain language, e.g. 'search the latest Python "
                         "version' or 'find the top 3 GPUs under $500 with prices'")}, ["task"]),
     gate="browser.enabled",

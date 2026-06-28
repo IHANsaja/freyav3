@@ -18,6 +18,22 @@ export interface ToolEntry {
     timestamp: Date;
 }
 
+export interface ImageEntry {
+    id: number;
+    data: string;   // base64 JPEG (no data: prefix)
+    label: string;
+    timestamp: Date;
+}
+
+export interface NewsItem {
+    id: number;
+    title: string;
+    source: string;
+    image: string | null;   // scraped article photo, fills in asynchronously
+    logo: string | null;    // source logo, available immediately
+    timestamp: Date;
+}
+
 export interface FreyaMode {
     label: string;
 }
@@ -41,8 +57,11 @@ export function useFreyaSocket() {
     const [transcript, setTranscript] = useState<TranscriptEntry[]>([]);
     const [liveText, setLiveText] = useState<string>(""); // Freya's words as she speaks
     const [toolLog, setToolLog] = useState<ToolEntry[]>([]);
+    const [images, setImages] = useState<ImageEntry[]>([]);
+    const [newsItems, setNewsItems] = useState<NewsItem[]>([]);
     const [config, setConfig] = useState<FreyaConfig | null>(null);
     const [activeMode, setActiveMode] = useState<string>("default");
+    const [micPaused, setMicPaused] = useState(false);
     const [memory, setMemory] = useState<string>("");
     const [connected, setConnected] = useState(false);
 
@@ -110,15 +129,16 @@ export function useFreyaSocket() {
                     }
                 } else if (msg.type === "mode") {
                     setActiveMode(msg.value);
+                } else if (msg.type === "mic") {
+                    setMicPaused(!!msg.paused);
+                } else if (msg.type === "speech") {
+                    // Live streaming of Freya's words → center-scene typing caption
+                    freyaBuffer.current += " " + msg.text;
+                    setLiveText(freyaBuffer.current.trim());
                 } else if (msg.type === "transcript") {
-                    if (msg.speaker === "Freya") {
-                        // Buffer Freya's words + stream them to the live typing line
-                        freyaBuffer.current += " " + msg.text;
-                        setLiveText(freyaBuffer.current.trim());
-                    } else {
-                        // Flush any pending Freya buffer first
+                    if (msg.speaker === "Ihan") {
+                        // User's turn captured → commit Freya's line + clear caption
                         flushFreyaBuffer();
-                        // Then add Ihan's message
                         setTranscript((prev) => [
                             ...prev,
                             {
@@ -129,6 +149,7 @@ export function useFreyaSocket() {
                             },
                         ]);
                     }
+                    // Freya's full transcript ignored here — already streamed via "speech".
                 } else if (msg.type === "tool") {
                     setToolLog((prev) => [
                         ...prev,
@@ -140,6 +161,37 @@ export function useFreyaSocket() {
                             timestamp: new Date(),
                         },
                     ]);
+                } else if (msg.type === "image") {
+                    // A new image Freya received (e.g. a screen capture) → show on the canvas.
+                    setImages((prev) => [
+                        ...prev,
+                        {
+                            id: counter.current++,
+                            data: msg.data,
+                            label: msg.label || "Image",
+                            timestamp: new Date(),
+                        },
+                    ].slice(-6));
+                } else if (msg.type === "news") {
+                    // Structured world-news headlines → dynamic scene projections.
+                    const now = new Date();
+                    const incoming: NewsItem[] = (msg.items || []).map(
+                        (it: { id: number; title: string; source: string; image: string | null; logo: string | null }) => ({
+                            id: it.id,
+                            title: it.title,
+                            source: it.source,
+                            image: it.image ?? null,
+                            logo: it.logo ?? null,
+                            timestamp: now,
+                        })
+                    );
+                    const ids = new Set(incoming.map((i) => i.id));
+                    setNewsItems((prev) => [...incoming, ...prev.filter((p) => !ids.has(p.id))].slice(0, 8));
+                } else if (msg.type === "news_image") {
+                    // A scraped image arrived for a headline → attach it.
+                    setNewsItems((prev) =>
+                        prev.map((it) => (it.id === msg.id ? { ...it, image: msg.image } : it))
+                    );
                 } else if (["agent", "browser", "schedule", "ambient", "mcp"].includes(msg.type)) {
                     // Superpower status events → surface them in the tool feed.
                     const { type, ...rest } = msg;
@@ -188,6 +240,12 @@ export function useFreyaSocket() {
         setActiveMode(mode); // optimistic; server re-broadcasts on success
     }, [send]);
 
+    const toggleListening = useCallback(() => {
+        const next = !micPaused;
+        send({ type: "set_listening", paused: next });
+        setMicPaused(next); // optimistic; server confirms via "mic"
+    }, [send, micPaused]);
+
     const saveMemory = useCallback(async (content: string) => {
         await fetch("http://localhost:8000/memory", {
             method: "POST",
@@ -207,8 +265,11 @@ export function useFreyaSocket() {
         transcript,
         liveText,
         toolLog,
+        images,
+        newsItems,
         config,
         activeMode,
+        micPaused,
         memory,
         // Actions
         startFreya,
@@ -216,6 +277,7 @@ export function useFreyaSocket() {
         setModel,
         setVoice,
         setMode,
+        toggleListening,
         saveMemory,
         clearTranscript,
         clearToolLog,

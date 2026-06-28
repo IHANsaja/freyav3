@@ -16,7 +16,7 @@ Gated behind config `ambient.enabled`.
 import asyncio
 import itertools
 
-from config import get_api_key
+from config import get_agent_api_key
 from core import runtime
 from core.registry import tool, OBJ, P, STR, INT
 
@@ -42,7 +42,7 @@ class Ambient:
         from google import genai
         from google.genai import types
         model = (config or {}).get("ambient", {}).get("vision_model", "gemini-2.5-flash")
-        client = genai.Client(api_key=get_api_key())
+        client = genai.Client(api_key=get_agent_api_key())
         loop = asyncio.get_running_loop()
         deadline = loop.time() + max_minutes * 60
         try:
