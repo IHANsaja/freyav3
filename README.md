@@ -12,6 +12,9 @@
 
 Freya 3.5 is a local, real-time voice assistant establishing a low-latency bi-directional audio stream with Google Gemini Live API. Running on your Windows desktop, she acts as a conversational **agent**, dynamically executing automation on command and providing visual feedback through a browser-based dashboard.
 
+> [!NOTE]
+> For a detailed dive into the modular design, internal subsystems, and operational patterns, see the [Architecture Documentation](./ARCHITECTURE.md).
+
 Armed with **45+ tools**, specialized **background sub-agents**, a **proactive speech channel**, and **dynamic persona switching**, Freya doesn't just run tools; she drives your computer, researches autonomously, and extends her own capabilities.
 
 ---

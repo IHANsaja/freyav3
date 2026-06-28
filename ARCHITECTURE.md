@@ -1,6 +1,6 @@
 # 🪐 Freya v3 Architecture
 
-Welcome to the internal blueprint of **Freya v3**, an advanced, real-time AI voice assistant engineered with Google's Gemini Live API. This document details the component hierarchy, data flow pathways, and operational design patterns that power Freya's dual-process architecture.
+Welcome to the internal blueprint of **Freya v3**, an advanced, real-time AI voice agent engineered with Google's Gemini Live API. This document details the component hierarchy, data flow pathways, and operational design patterns that power Freya's dual-process architecture.
 
 ---
 
@@ -19,46 +19,62 @@ graph TD
     MemoryEngine["🧠 core/memory.py<br>(Memory & Extraction Engine)"]
     AudioEngine["🔊 core/audio.py<br>(PyAudio I/O Pipeline)"]
     ModelEngine["⚡ core/model.py<br>(Gemini Live WS Interface)"]
-    Tools["🛠️ core/tools.py<br>(System Actions Dispatcher)"]
-    
+    RegDispatcher["🛠️ core/registry.py<br>(Tool Registry & Dispatcher)"]
+
     %% External Interfaces
     GeminiLive["☁️ Gemini Live WebSocket API<br>(gemini-3.1-flash-live-preview)"]
     GeminiFlash["🧠 Gemini 2.5 Flash Lite<br>(Fact Extraction Model)"]
-    
+
+    %% Superpower Modules
+    Agents["🤖 core/agents.py"]
+    Screen["🎯 core/screen.py"]
+    BrowserAgent["🌐 core/browser_agent.py"]
+    Ambient["👁️ core/ambient.py"]
+    SelfExtend["🧬 core/self_extend.py"]
+
     %% Flows
-    Main -->|1. Loads Config| Config
-    Main -->|2. Loads Memory| MemoryEngine
+    Main -->|Loads Config| Config
+    Main -->|Loads Memory| MemoryEngine
     MemoryEngine <-->|Reads/Appends| MemoryFile
-    Main -->|3. Boots Audio Streams| AudioEngine
-    Main -->|4. Runs Session Loop| ModelEngine
-    
-    Server -->|1. Loads Config| Config
-    Server -->|2. Loads Memory| MemoryEngine
+    Main -->|Boots Audio Streams| AudioEngine
+    Main -->|Runs Session loop| ModelEngine
+
+    Server -->|Loads Config| Config
+    Server -->|Loads Memory| MemoryEngine
     Server <-->|WebSocket Bridge| UI
-    Server -->|3. Boots Audio Streams| AudioEngine
-    Server -->|4. Runs Session Loop| ModelEngine
-    
+    Server -->|Boots Audio Streams| AudioEngine
+    Server -->|Runs Session loop| ModelEngine
+
     ModelEngine <-->|Bi-directional Audio Stream| GeminiLive
-    ModelEngine -->|Dispatches Tool Calls| Tools
-    Tools -->|Launches Apps / System Commands| OS["💻 Windows OS / Web"]
-    Tools -->|Returns Output| ModelEngine
-    
-    ModelEngine -->|State & Transcript Events| Server
-    
-    Main -->|5. Session Exit: Export Transcript| MemoryEngine
-    Server -->|5. Session Exit: Export Transcript| MemoryEngine
+    ModelEngine -->|Dispatches Tool Calls| RegDispatcher
+
+    %% Tool Routing
+    RegDispatcher -.->|Delegates to| Agents
+    RegDispatcher -.->|Control Desktop via GUI Automation| Screen
+    RegDispatcher -.->|Delegate Web Automation| BrowserAgent
+    RegDispatcher -.->|Monitor Screen| Ambient
+    RegDispatcher -.->|Write New Tools| SelfExtend
+    RegDispatcher -->|Local System Command| OS["💻 Windows OS / Web"]
+
+    %% Proactive Speech Loop
+    Agents -->|Proactive Result| Runtime["⚡ core/runtime.py"]
+    Ambient -->|Proactive Alert| Runtime
+    Runtime -->|Inject Text| ModelEngine
+
+    Main -->|Session Exit: Export Transcript| MemoryEngine
+    Server -->|Session Exit: Export Transcript| MemoryEngine
     MemoryEngine -->|Sends Chat Logs| GeminiFlash
     GeminiFlash -->|Extracts New Facts| MemoryFile
 
     %% Styling
     classDef primary fill:#2b2d42,stroke:#8d99ae,stroke-width:2px,color:#edf2f4;
     classDef external fill:#1d3557,stroke:#457b9d,stroke-width:2px,color:#f1faee;
-    classDef data fill:#3d5a80,stroke:#98c1d9,stroke-width:2px,color:#e0fbfc;
+    classDef superpower fill:#3d5a80,stroke:#98c1d9,stroke-width:2px,color:#e0fbfc;
     classDef frontend fill:#4a1942,stroke:#c77dba,stroke-width:2px,color:#f1faee;
-    
-    class Main,Server,Config,AudioEngine,ModelEngine,Tools primary;
+
+    class Main,Server,Config,AudioEngine,ModelEngine,RegDispatcher primary;
     class GeminiLive,GeminiFlash external;
-    class MemoryFile,MemoryEngine,OS data;
+    class Agents,Screen,BrowserAgent,MemoryFile,MemoryEngine,OS,Runtime,Ambient,SelfExtend superpower;
     class UI frontend;
 ```
 
@@ -66,148 +82,41 @@ graph TD
 
 ## ⚡ Core Subsystems
 
-### 1. Dual Entry Points
+### Connection & Event Loop (`core/model.py`)
+This is the heart of real-time interaction using the asynchronous `google-genai` SDK:
+- **Bi-directional WebSocket Loop**: Persistent connection via `LiveConnectConfig`.
+- **Concurrency**: Parallel async tasks manage microphone piping (16kHz), model audio receipt, and speaker piping (24kHz).
+- **Tool Routing**: Function calls are dispatched through the specialized **Async Tool Registry** (`core/registry.py`).
+- **Proactive Influx**: A `core/runtime.py` text channel enables background agents or ambient screen-watching tasks to inject natural speech into the active live session unprompted.
 
-Freya supports two execution modes that share the same core engine:
+### Async Tool Registry (`core/registry.py`)
+Freya uses a dynamic registry instead of static dispatched calls:
+- Skills self-register tools via `@tool(...)` decorators.
+- dispatcher handles `async` tools natively and runs synchronous tools in a background executor to guarantee audio thread non-blocking.
+- **Safety**: A safety guard (`core/safety.py`) filters all dangerous commands.
 
-| | CLI Mode (`main.py`) | Web UI Mode (`server.py`) |
-| :--- | :--- | :--- |
-| **Interface** | Terminal stdout/stdin | Browser dashboard at `localhost:3000` |
-| **Backend** | Direct `asyncio.run()` | FastAPI + Uvicorn on port 8000 |
-| **State Updates** | Console `print()` statements | WebSocket broadcast to all connected UI clients |
-| **Session Control** | `Ctrl + C` to stop | Start/Stop button in dashboard |
-| **Config Changes** | Edit `freya_config.json` manually | Live model/voice switching via Settings modal |
-| **Memory Editing** | Edit `freya_memory.md` manually | In-browser memory editor |
+## 🦾 Superpowers Layer (v3.5+)
 
-#### `main.py` — CLI Orchestrator
-The headless system bootstrap. Initializes config, memory, audio streams, and the `FreyaModel` session loop. On `KeyboardInterrupt`, it cleanly shuts down audio streams and triggers the memory update pipeline.
+Specialized skills configured by flags in `config/freya_config.json`:
 
-#### `server.py` — FastAPI + WebSocket Server
-The web-enabled orchestrator that wraps the same core engine with:
-- **REST endpoints**: `POST /start`, `POST /stop`, `GET /status`, `GET /config`, `POST /config`, `GET /memory`, `POST /memory`
-- **WebSocket endpoint** (`/ws`): Pushes real-time `state`, `transcript`, and `tool` events to all connected dashboard clients. Supports auto-reconnection.
-- **`FreyaModelWithBroadcast`**: A subclass of `FreyaModel` that overrides `on_transcript()`, `on_tool()`, and `on_state()` hooks to broadcast events to the frontend via WebSocket.
+### 1. Agents & Autonomous Logic (`core/agents.py` & `core/browser_agent.py`)
+For heavy multi-step tasks that cannot block the live session:
+- **Sub-agents**: Delegated ReAct loops for 'researcher', 'coder', or 'operator' agents running in background.
+- **Browser Automation**: `browser_task` autonomous, agentic web driving using direct Chromium control.
 
-### 2. Audio I/O Engine (`core/audio.py`)
-A low-latency wrapper around **PyAudio** that manages raw audio hardware interfacing.
-*   **Microphone Stream (`MicStream`)**: Captures audio input at **16kHz (PCM, 16-bit Mono)** as required by Gemini Live. Uses `exception_on_overflow=False` to gracefully handle buffer overruns without crashing.
-*   **Speaker Stream (`SpeakerStream`)**: Receives processed model responses at **24kHz (PCM, 16-bit Mono)** and writes them straight to the audio hardware output buffer.
-*   Both streams accept configurable `device_index` parameters, bound from `config/freya_config.json`.
+### 2. Screen Interaction (`core/screen.py`)
+Precision interaction with the Windows GUI:
+- Direct operation of UI elements (invoke, type, toggle) by visible name using standard Windows accessibility APIs—**never coordinate guessing.**
 
-### 3. Connection & Event Loop (`core/model.py`)
-This is the heart of Freya's real-time interaction, using the asynchronous `google-genai` SDK:
-- **WebSocket Loop**: Initiates a persistent bi-directional connection using `client.aio.live.connect()`.
-- **Three Concurrent Task Runners** (via `asyncio.gather`):
-  1. `send_audio()`: Reads mic frames via `run_in_executor` (non-blocking) and pushes them as `audio/pcm;rate=16000` blobs to Gemini. Automatically mutes when `model_speaking` event is set, preventing echo.
-  2. `receive_audio()`: Listens for incoming socket responses. Handles three payload types:
-     - **Tool calls**: Dispatches to `core/tools.py`, sends results back to Gemini via `send_tool_response()`.
-     - **Transcription**: Buffers Freya's output transcription fragments and emits full sentences on `turn_complete`. User input transcription is emitted immediately.
-     - **Audio data**: Queues `inline_data` chunks for playback.
-  3. `play_audio()`: Pulls queued audio chunks and writes them to the speaker stream via `run_in_executor` (non-blocking).
-- **State Machine**: The `model_speaking` `asyncio.Event` controls mic muting. Set when audio data arrives from the model; cleared on `turn_complete`. Override hooks (`on_state`, `on_transcript`, `on_tool`) allow subclasses to broadcast events.
-- **Live Config**: `LiveConnectConfig` enables `AUDIO` response modality, configurable voice presets, system instruction injection, and bi-directional audio transcription.
-
-### 4. Memory & Context Engine (`core/memory.py` & `memory/`)
-Allows Freya to build a long-term profile of the user without databases:
-- **Dynamic Context Injection**: Prior to session startup, `freya_memory.md` is read and appended to the model's system instructions via `build_system_prompt()`.
-- **Transcript Collector**: A `TranscriptCollector` class gathers all spoken text lines throughout the conversation as `"Speaker: text"` formatted strings.
-- **Automatic Summary & Fact Update**: Upon shutdown, Freya sends the collected transcript and existing memory file to `gemini-2.5-flash-lite`. The model extracts new preferences, writes a dated bullet-point summary, and appends it directly back to `freya_memory.md`. Includes retry logic with exponential backoff for rate-limited API calls (up to 3 attempts).
-- **Minimum Threshold**: Sessions with fewer than 3 transcript lines are skipped to avoid noise.
-
-### 5. Tool Integration Subsystem (`core/tools.py`)
-Freya is empowered with **16 operating system and web-integrated capabilities** exposed to Gemini via function declarations:
-
-| Tool Name | Parameters | Action |
-| :--- | :--- | :--- |
-| `open_app` | `name` | Launches configured applications (Valorant, Photoshop, VS Code, etc.). |
-| `close_app` | `name` | Terminates process trees using Windows `TASKKILL /F /IM`. |
-| `web_search` | `query` | Opens search terms in the default browser via Google. |
-| `play_youtube` | `query` | Direct search play inside YouTube. |
-| `get_news` | `topic` | Opens Google News for the given topic. |
-| `shutdown_computer`| `delay_seconds`| Executes a timed system shutdown via `shutdown /s /t`. |
-| `take_screenshot` | *None* | Captures desktop screenshot using PyAutoGUI, saves to Desktop. |
-| `open_folder` | `name` | Opens Explorer mapping paths from configuration. |
-| `get_weather` | `city` | Retrieves live city weather from `wttr.in` (no API key needed). |
-| `set_reminder` | `message`, `minutes` | Schedules a Windows Forms notification on a background thread. |
-| `search_docs` | `technology`, `query`| Queries official framework docs (Python, React, Docker, FastAPI, etc.). |
-| `explain_error` | `error_text` | Searches StackOverflow for error diagnosis. |
-| `open_project` | `project_name` | Opens designated coding workspace in VS Code. |
-| `run_terminal_command`| `command` | Runs safe developer utility commands with 15s timeout and output trimming. Blocks dangerous commands (`rm`, `del`, `format`, `shutdown`, etc.). |
-| `search_stackoverflow`| `query` | Resolves programming queries via StackExchange API, opens top result. |
-| `dance_for_user` | *None* | Instructs Freya to perform one of six randomized 3D dance animations. |
-
-All tools are dispatched through a central `dispatch()` router function called by `FreyaModel.receive_audio()` when Gemini issues a function call.
-
-### 6. Web Dashboard (`freya-ui/`)
-A **Next.js 16** single-page application built with **React 19** and **Tailwind CSS 4**, providing a cyberpunk-themed mission control interface and interactive 3D companion render.
-
-| Component | File | Purpose |
-| :--- | :--- | :--- |
-| **Main Page** | `app/page.tsx` | Dashboard layout with 12-column grid: metadata sidebar, central standby area with start/stop button, and archival panel. |
-| **WebSocket Hook** | `app/hooks/useFreyaSocket.ts` | React hook managing WebSocket connection to `ws://localhost:8000/ws`. Handles state, transcript buffering, tool logs, config fetching, and memory CRUD. Auto-reconnects on disconnect (2s retry). |
-| **Archival Panel** | `app/components/ArchivalPanel.tsx` | Tabbed panel with live transcript feed, tool execution log, and memory viewer. |
-| **Settings Modal** | `app/components/SettingsModal.tsx` | Modal for switching Gemini models, voice presets, and editing the memory file. |
-| **Activity Indicator** | `app/components/ActivityIndicator.tsx` | Animated status indicator reflecting Freya's current state (idle/listening/speaking). |
-| **Freya Core Render** | `app/components/FreyaCore.tsx` | Procedural 3D energy core built from scratch with custom GLSL shaders (`three.js` + `@react-three/fiber`): simplex-noise vertex displacement, crimson fresnel rim, additive halo, and an orbital particle ring. Reacts to idle / listening / speaking / interrupted states and maps dance events to a special shader animation sequence. No external model files required. |
-
-**Transcript Buffering**: The frontend buffers Freya's streaming transcription fragments and only renders the complete sentence when a `state: "listening"` event signals turn completion, preventing fragmented UI updates.
+### 3. State & Proactive Intelligence (`core/runtime.py` & `core/ambient.py`)
+- Background processes (agents, scheduled reminders, ambient triggers) push text to `runtime.inject()`, making Freya speak freely.
+- Ambient Screen Intelligence watches the desktop and reacts when specified conditions are met.
 
 ---
 
-## 🛠️ Data Flow Lifecycle
+## 🛰️ REST and WebSocket Surface
 
-1.  **Session Init**: Config loaded → Memory read → System prompt assembled → Audio streams opened → Gemini Live WebSocket connection established.
-2.  **Audio Input**: Mic audio captured at 16kHz → Offloaded to executor thread → Streamed to Gemini as PCM blobs (muted during model speech).
-3.  **API Processing**: Gemini processes audio → Evaluates system instructions + context memory → Decides to return audio response or fire a tool.
-4.  **Tool Dispatch**: If a tool is called → `core/tools.py` executes the local function → Result sent back to Gemini via `send_tool_response()` → Gemini resumes speech generation.
-5.  **Audio Output**: Gemini streams audio packets back → Queued in `asyncio.Queue` → Written to SpeakerStream via executor thread → Played to user.
-6.  **State Broadcast** (Web UI mode): State transitions, transcripts, and tool events are broadcast to all connected WebSocket clients in real-time.
-7.  **Shutdown**: Session ends → Audio streams closed → Transcript analyzed by `gemini-2.5-flash-lite` → Memory file appended with new facts and session summary.
-
----
-
-## 🔌 API Surface (server.py)
-
-| Method | Endpoint | Description |
-| :--- | :--- | :--- |
-| `POST` | `/start` | Start the Freya voice session |
-| `POST` | `/stop` | Stop the active session, trigger memory update |
-| `GET` | `/status` | Returns `{ "running": bool }` |
-| `GET` | `/config` | Returns active model, voice, available models/voices |
-| `POST` | `/config` | Update active model or voice |
-| `GET` | `/memory` | Returns the raw memory file content |
-| `POST` | `/memory` | Overwrites the memory file with provided content |
-| `WS` | `/ws` | Real-time event stream: `state`, `transcript`, `tool`, plus superpower events (`agent`, `browser`, `schedule`, `ambient`, `mcp`) |
-
----
-
-## 🦾 Superpowers Layer (v3.5)
-
-Freya was upgraded from a fixed 23-tool assistant into an extensible agent. The original
-tools still work unchanged; everything new sits on top of a **dynamic async tool registry**.
-
-### Foundation
-| Module | Role |
+| Surface | Description |
 | :--- | :--- |
-| `core/registry.py` | Central tool registry. Skills self-register via `@tool(...)`. `build_declarations(config)` merges static + dynamic (MCP, self-written) tools; `dispatch(name, args, ctx)` is **async-aware** (sync tools run in an executor so they never block the audio loop) and falls back to the legacy `core/tools.py` dispatcher for the original 23 tools. |
-| `core/runtime.py` | Publishes the live session's **proactive channels**. `inject(text)` makes Freya speak unprompted; `emit(evt, payload)` pushes UI events. Background powers reach the session through here. |
-| `core/safety.py` | Single guard every `dangerous=True` tool passes through — refuses destructive shell/file patterns and confines writes to allow-listed roots (`config.safety`). |
-| `core/model.py` | `_inject_text()` feeds a proactive turn into the Live API; `get_config()` now advertises static + registered tools; the tool loop calls `registry.dispatch` with a `ToolContext`. |
-
-### The powers (each a self-registering skill module, config-flag gated)
-| Module | Tools | Capability |
-| :--- | :--- | :--- |
-| `core/news.py` | `get_world_news`, `get_news` | Reads real headlines aloud (Google News RSS, no key). |
-| `core/mcp_client.py` | `mcp__<server>__<tool>` (dynamic) | Connects to **any MCP server** (`config.mcp_servers`), auto-discovers tools, namespaces & routes them. |
-| `core/agents.py` | `dispatch_agent`, `check_agents` | **Sub-agents** (researcher / coder / operator) run as background Gemini ReAct loops sharing the registry, reporting back via proactive speech. |
-| `core/screen.py` | `find_element`, `control_element`, `read_screen_elements`, `click_element`, `click_text` | **Accessibility-API control.** `control_element` operates a control by its visible name via UIA patterns (Invoke / SetValue / Toggle / Select / Expand) — no coordinates, no guessing — and returns the result so Freya self-verifies. Vision-guess clicking (`click`/`move_mouse`/`scroll`) was removed; `capture_screen` remains for *seeing* only. |
-| `core/browser_agent.py` | `browser_task` | **browser-use** drives real Chromium (Playwright) for autonomous web tasks. |
-| `core/system_tools.py` | clipboard / files / windows / volume / media / power | OS control suite. |
-| `core/rag_memory.py` | `recall`, `index_folder` | **Semantic memory** via Gemini embeddings + Chroma vector DB. |
-| `core/scheduler.py` | `schedule_task`, `list_tasks`, `cancel_task` | Persistent reminders + daily briefings that Freya **speaks** when due. |
-| `core/ambient.py` | `watch_screen`, `stop_watching` | **Proactive** screen-watching — speaks up when a condition becomes true. |
-| `core/self_extend.py` | `create_tool`, `run_code`, `edit_file` | Freya **writes & hot-loads her own tools**, plus dev/code execution. |
-
-**Proactive flow:** a background power (finished sub-agent, due reminder, ambient trigger) →
-`runtime.inject(text)` → `FreyaModel._inject_text()` → `session.send_client_content(...)` →
-Freya speaks it in her own voice. This is what lets her act unprompted.
+| **REST API** | Model/voice config, memory CRUD, and session lifecycle control (`/start`, `/stop`). |
+| **WebSocket** | Real-time pushes for `transcript` streaming, `tool` results, `state` changes, and agent status events. |
