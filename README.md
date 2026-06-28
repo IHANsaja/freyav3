@@ -1,81 +1,66 @@
 # 🌌 Freya v3.0
 
-🚀 **The Cybernetic Voice Assistant**
+🚀 **The Cybernetic Voice Assistant & Agent Interface**
 
 [![Python Version](https://img.shields.io/badge/Python-3.10%2B-blue?style=for-the-badge&logo=python&logoColor=white)](https://www.python.org/)
 [![Gemini API](https://img.shields.io/badge/Google_Gemini-Live_API-orange?style=for-the-badge&logo=google-gemini&logoColor=white)](https://ai.google.dev/)
 [![Next.js](https://img.shields.io/badge/Next.js-16-black?style=for-the-badge&logo=next.js&logoColor=white)](https://nextjs.org/)
-[![Modality](https://img.shields.io/badge/Modality-Realtime_Audio-purple?style=for-the-badge&logo=audio&logoColor=white)](#)
 [![OS](https://img.shields.io/badge/Platform-Windows-0078D4?style=for-the-badge&logo=windows&logoColor=white)](#)
 [![License](https://img.shields.io/badge/License-MIT-green?style=for-the-badge)](./LICENSE)
 
 ---
 
-Freya 3.0 is a local, real-time voice assistant that establishes a low-latency bi-directional audio stream with Google Gemini Live API. Running on your Windows desktop, Freya continuously feeds microphone input to the model and streams high-fidelity synthetic voice output back to your speakers, creating an interactive, hands-free conversational loop.
+Freya 3.5 is a local, real-time voice assistant establishing a low-latency bi-directional audio stream with Google Gemini Live API. Running on your Windows desktop, she acts as a conversational **agent**, dynamically executing automation on command and providing visual feedback through a browser-based dashboard.
 
-Armed with **15 custom local system tools**, a **dynamic self-updating memory system**, and a **Next.js web dashboard**, Freya remembers details about you, executes operating-system-level automation on command, and provides real-time visual feedback through a browser-based control interface.
+Armed with **45+ tools**, specialized **background sub-agents**, a **proactive speech channel**, and **dynamic persona switching**, Freya doesn't just run tools; she drives your computer, researches autonomously, and extends her own capabilities.
 
 ---
 
 ## 🌟 Key Capabilities
 
-*   🔊 **Zero-Latency Live Conversation**: Captures microphone audio at **16kHz (PCM, mono)** and plays speaker output at **24kHz** for natural, uninterrupted conversations.
-*   🧠 **Self-Updating Synaptic Memory**: Auto-saves details about your preferences. On session shutdown, a secondary model (`gemini-2.5-flash-lite`) compiles the chat logs and appends new facts directly to Freya's memory bank (`memory/freya_memory.md`).
-*   🖥️ **Web Dashboard (freya-ui)**: A Next.js 16 + React 19 + Tailwind CSS 4 browser interface providing real-time state visualization, live transcript streaming, tool call logs, memory editor, and model/voice configuration — all connected via WebSocket.
-*   🛠️ **Deep OS & Web Integration**:
-    *   **App Control**: Launch or shut down programs (e.g., Valorant, Photoshop, VS Code, Discord, Steam).
-    *   **Developer Toolkit**: Run safe terminal commands, search official documentations (Python, React, Docker, etc.), and diagnose code tracebacks directly using StackOverflow integration.
-    *   **Desktop Utilities**: Take screenshots, open file folders, set speak-back voice reminders, and retrieve current weather or news.
+*   🔊 **Zero-Latency Live Conversation**: Optimized 16kHz audio input and 24kHz output create a fluid, hands-free conversational loop.
+*   🧠 **Self-Updating Synaptic Memory**: Details and session context are auto-extracted by `gemini-2.5-flash-lite` and appended directly to your memory bank.
+*   🖥️ **Web Dashboard (freya-ui)**: Next.js 16 browser interface with real-time state visualization, tool logs, memory editing, and live audio transcripts connected via WebSockets.
+*   🔄 **Dynamic System Modes**: Hot-swap Freya's personality and tools (e.g., 'coding', 'learning', 'horny') directly via voice command.
 
 ---
 
-## 🛰️ Architecture Overview
+## 🦾 Superpowers & Autonomous Agents
 
-Freya operates as a dual-process system: a **Python backend** (FastAPI + PyAudio + Gemini Live WebSocket) and a **Next.js frontend** connected over a local WebSocket bridge.
+Freya leverages specialized background sub-agents and advanced tools for complex, non-blocking automation.
+
+| Superpower | What she can do | Key Tools |
+| :--- | :--- | :--- |
+| 📰 **Top News** | Fetches and reads the latest global / topic headlines aloud. | `get_world_news`, `get_news` |
+| 🤖 **Sub-Agents** | Delegates multi-step research, coding, or UI tasks to background agents. | `dispatch_agent`, `check_agents` |
+| 🌐 **Browser Use** | Autonomously drives a Chromium browser to browse or complete web tasks. | `browser_task` |
+| 🎯 **System Automation** | Full control: clipboard, standard files, window management, volume/media, shut/sleep. | `clipboard_*`, `read_file`, `set_volume`, … |
+| 🧩 **Modes & Persona** | Change Freya's active mode on the fly with system prompt overrides. | `switch_mode` |
+| 👁️ **Ambient Awareness** | Proactively watches the screen and alerts you when conditions are met. | `watch_screen`, `stop_watching` |
+| 🧬 **Self-Extension** | Autonomously writes, loads, and uses new Python tools. | `create_tool`, `run_code` |
+
+### Requirements for advanced powers
+```bash
+pip install -r requirements.txt
+playwright install chromium          # for browser-use
+```
+
+---
+
+## 🏗️ Project Structure
 
 ```
 freyav3/
-├── config/
-│   ├── __init__.py             # Config loading helpers (API keys, model, voice, personality)
-│   └── freya_config.json       # Device indices, app paths, model/voice settings
-│
-├── core/
-│   ├── audio.py                # Low-latency Mic & Speaker streams (PyAudio)
-│   ├── memory.py               # Context building & auto-updating memory engine
-│   ├── model.py                # Gemini Live WebSocket event loop (FreyaModel)
-│   └── tools.py                # Function calling dispatcher (15 system tools)
-│
-├── freya-ui/                   # Next.js 16 web dashboard
-│   ├── app/
-│   │   ├── components/
-│   │   │   ├── ActivityIndicator.tsx   # Live status animation
-│   │   │   ├── ArchivalPanel.tsx       # Transcript feed, memory view, tool log
-│   │   │   └── SettingsModal.tsx       # Model/voice selector, memory editor
-│   │   ├── hooks/
-│   │   │   └── useFreyaSocket.ts       # WebSocket client hook (state, transcript, tools)
-│   │   ├── globals.css                 # Tailwind CSS 4 theme
-│   │   ├── layout.tsx                  # Root layout
-│   │   └── page.tsx                    # Main dashboard page
-│   └── package.json            # Next.js 16, React 19, Tailwind CSS 4
-│
-├── memory/
-│   ├── freya_memory.example.md # Template memory configuration (tracked)
-│   └── freya_memory.md         # Personal memory storage (git-ignored)
-│
-├── test_scripts/
-│   ├── list_models.py          # Utility to list available Gemini model IDs
-│   ├── test_devices.py         # Audio I/O validation tool
-│   ├── test_interrupt.py       # Interrupt testing script
-│   └── test_memory_api.py      # Memory engine validation script
-│
-├── .env                        # API Credentials (git-ignored)
-├── main.py                     # CLI entrypoint (headless, terminal-only)
-├── server.py                   # Web UI entrypoint (FastAPI + WebSocket server)
-└── requirements.txt            # Python dependencies
+├── config/             # Config loading, settings, device indices, mode profiles
+├── core/               # System logic: audio, sub-agents, memory, model loop, tools
+├── freya-ui/           # Next.js Web dashboard frontend
+├── memory/             # Local long-term memory Markdown files
+├── test_scripts/       # Diagnostic tools for audio, memory, and devices
+├── .env                # API Keys (GEMINI_API_KEY) - Git ignored
+├── main.py             # CLI entrypoint
+├── server.py           # Web UI backend (FastAPI + WebSocket server)
+└── requirements.txt    # Backend dependencies
 ```
-
-> [!NOTE]
-> For a detailed dive into the modular design, thread topologies, data pathways, and the dual-process architecture, see the [Architecture Documentation](./ARCHITECTURE.md).
 
 ---
 
@@ -83,7 +68,7 @@ freyav3/
 
 ### 1️⃣ Clone and Prepare Environment
 
-Ensure you have **Python 3.10+**, **Node.js 18+**, and a working C/C++ compiler installed on your system (required to build `pyaudio` on Windows).
+Requires **Python 3.10+**, **Node.js 18+**, and a C/C++ compiler for `pyaudio`.
 
 ```bash
 # Clone the repository
@@ -103,130 +88,45 @@ pip install -r requirements.txt
 Create a `.env` file in the root directory:
 
 ```env
-# Primary API Key for Gemini Live API
-GEMINI_API_KEY=AIzaSyYourGeminiApiKeyHere
-
-# Optional: Separate key for memory extraction (defaults to GEMINI_API_KEY)
-GEMINI_MEMORY_API_KEY=AIzaSyYourSeparateApiKeyHere
+GEMINI_API_KEY=YourGeminiApiKeyHere
 ```
-
-> [!WARNING]
-> Keep your API keys private. Never commit the `.env` file to public repositories.
 
 ### 3️⃣ Initialize Personal Memory
 
-Freya uses a local Markdown file to build and recall facts about you. This file is excluded from version control (`.gitignore`) to keep your data private.
-
-1. Locate the template file `memory/freya_memory.example.md`.
-2. Copy the template to create your active memory file:
-   ```bash
-   copy memory\freya_memory.example.md memory\freya_memory.md
-   ```
-3. Open `memory/freya_memory.md` and modify the placeholders to match your name, location, preferred software tools, and settings.
-
-### 🧠 How the Memory Engine Works
-When you start a session, Freya parses `freya_memory.md` and injects its contents directly into the system personality prompt. During your conversation, a transcript collector logs the dialogue. Once you shut down the assistant, Freya automatically sends the session transcript to `gemini-2.5-flash-lite`, which filters out new facts, writes a short bullet-point summary of the session, and appends it to your `freya_memory.md` file.
-
----
-
-## 🎛️ Configuration & Audio Routing
-
-Configure the assistant behavior, device paths, and hardware bindings in `config/freya_config.json`:
-
-```json
-{
-  "freya": {
-    "name": "Freya",
-    "personality": "You are Freya, a smart and friendly personal AI voice assistant built for Ihan..."
-  },
-  "active_provider": "gemini",
-  "active_model": "gemini-3.1-flash-live-preview",
-  "providers": {
-    "gemini": {
-      "models": [
-        { "id": "gemini-3.1-flash-live-preview", "label": "Gemini 3.1 Flash Live Preview" },
-        { "id": "gemini-2.5-flash-native-audio-preview-12-2025", "label": "Gemini 2.5 Flash Native Audio (fallback)" }
-      ],
-      "voices": ["Aoede", "Kore", "Zephyr"],
-      "active_voice": "Zephyr"
-    }
-  },
-  "audio": {
-    "input_device_index": 0,
-    "output_device_index": 3
-  }
-}
-```
-
-### 🎙️ Audio Hardware Calibration
-
-To locate the correct index for your microphone and speaker devices, run:
-
 ```bash
-python test_scripts/test_devices.py
+copy memory\freya_memory.example.md memory\freya_memory.md
 ```
-
-This utility will list all index numbers corresponding to the active audio hardware connected to your machine. Bind these values inside `config/freya_config.json` under `"audio"`.
 
 ---
 
 ## 🚀 Execution
 
-Freya supports two modes of operation:
+Freya supports two operation modes:
 
 ### Mode 1: Web Dashboard (Recommended)
 
-Launch the Python backend server and Next.js frontend together:
+Start the Python backend and Next.js frontend separately.
 
 ```bash
-# Terminal 1 — Start the FastAPI backend (port 8000)
+# Terminal 1 — Backend (fastapi)
 python server.py
 
-# Terminal 2 — Start the Next.js dashboard (port 3000)
+# Terminal 2 — Frontend (Next.js)
 cd freya-ui
-npm install   # first time only
 npm run dev
 ```
 
-Open `http://localhost:3000` in your browser. Use the dashboard to start/stop Freya, view live transcripts, monitor tool calls, edit memory, and switch models or voices on the fly.
+Open `http://localhost:3000`.
 
 ### Mode 2: Headless CLI
-
-For terminal-only operation without the web dashboard:
 
 ```bash
 python main.py
 ```
-
-Press `Ctrl + C` in the terminal to stop the assistant safely. This triggers the memory engine to persist session logs.
-
-### Conversational Mechanics
-*   Once launched, you will see `Freya is live! Start talking.`
-*   Simply speak into your microphone. Freya will process your voice and speak back to you in real-time.
-*   **Echo Protection**: The microphone input automatically mutes while the speaker is active, preventing feedback loops.
-*   **Auto-Transcription**: Both your words and Freya's responses are transcribed in real-time using Gemini's built-in audio transcription.
-
----
-
-## 🛠️ Diagnostics & Utilities
-
-The project includes pre-configured utility scripts inside the `test_scripts/` directory:
-
-*   **List Gemini Models**: Validate API keys and list available model versions.
-    ```bash
-    python test_scripts/list_models.py
-    ```
-*   **Verify Audio Channels**: Verify your hardware input devices are recording successfully.
-    ```bash
-    python test_scripts/test_devices.py
-    ```
-*   **Verify Memory API**: Test your API connection and ensure the fact-extraction loops execute smoothly.
-    ```bash
-    python test_scripts/test_memory_api.py
-    ```
+Use `Ctrl + C` in the terminal to stop and trigger memory persistence.
 
 ---
 
 ## 🪐 License
 
-This project is licensed under the MIT License - see the [LICENSE](./LICENSE) file for details.
+This project is licensed under the MIT License.

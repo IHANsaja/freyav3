@@ -3,7 +3,7 @@
 import { useState } from "react";
 import { useFreyaSocket } from "./hooks/useFreyaSocket";
 import SettingsModal from "./components/SettingsModal";
-import ArchivalPanel from "./components/ArchivalPanel";
+import LivePanel from "./components/LivePanel";
 import ActivityIndicator from "./components/ActivityIndicator";
 import FreyaCore from "./components/FreyaCore";
 
@@ -32,6 +32,7 @@ export default function Home() {
     state,
     connected,
     transcript,
+    liveText,
     toolLog,
     config,
     activeMode,
@@ -45,6 +46,11 @@ export default function Home() {
     clearTranscript,
     clearToolLog,
   } = useFreyaSocket();
+
+  const clearFeed = () => {
+    clearTranscript();
+    clearToolLog();
+  };
 
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const isRunning = state !== "idle";
@@ -222,16 +228,14 @@ export default function Home() {
           </div>
         </div>
 
-        {/* Right Column — Archival Panel (Conversation Terminal + Memory + Tools) */}
+        {/* Right Column — Live Feed (typing transcript + contextual visual cards) */}
         <div className="col-span-4 h-full overflow-hidden">
-          <ArchivalPanel
+          <LivePanel
             state={state}
             transcript={transcript}
+            liveText={liveText}
             toolLog={toolLog}
-            memory={memory}
-            onClearTranscript={clearTranscript}
-            onClearToolLog={clearToolLog}
-            onOpenSettings={() => setIsSettingsOpen(true)}
+            onClear={clearFeed}
           />
         </div>
 

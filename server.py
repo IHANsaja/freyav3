@@ -1,10 +1,18 @@
 import asyncio
 import json
 import os
+import sys
 import uvicorn
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+
+# On Windows, browser-use (Playwright) launches Chromium via create_subprocess_exec,
+# which only works on the Proactor event loop. uvicorn may otherwise pick a Selector
+# loop, causing browser_task to hang until its 30s launch watchdog fires. Force Proactor
+# so subprocess spawning works the same way it does in main.py's asyncio.run path.
+if sys.platform == "win32":
+    asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
 
 from config import load_config, get_api_key, get_active_model, get_active_voice, get_personality
 from config import get_mode_personality, get_mode_model
@@ -91,6 +99,10 @@ async def run_freya():
         async def on_state(self, value: str):
             await broadcast({"type": "state", "value": value})
 
+        async def on_event(self, event_type: str, payload: dict):
+            # Generic superpower events: agent / mcp / schedule / ambient / browser
+            await broadcast({"type": event_type, **(payload or {})})
+
     consecutive_failures = 0
     max_reconnect_attempts = 5
 
@@ -140,6 +152,11 @@ async def run_freya():
         freya_running = False
         mic.stop()
         speaker.stop()
+        try:
+            from core.mcp_client import mcp_manager
+            await mcp_manager.stop()
+        except Exception:
+            pass
         await broadcast({"type": "state", "value": "idle"})
         await update_memory(api_key, transcript.get(), memory)
 

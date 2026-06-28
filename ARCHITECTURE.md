@@ -177,4 +177,37 @@ A **Next.js 16** single-page application built with **React 19** and **Tailwind 
 | `POST` | `/config` | Update active model or voice |
 | `GET` | `/memory` | Returns the raw memory file content |
 | `POST` | `/memory` | Overwrites the memory file with provided content |
-| `WS` | `/ws` | Real-time event stream: `state`, `transcript`, `tool` messages |
+| `WS` | `/ws` | Real-time event stream: `state`, `transcript`, `tool`, plus superpower events (`agent`, `browser`, `schedule`, `ambient`, `mcp`) |
+
+---
+
+## 🦾 Superpowers Layer (v3.5)
+
+Freya was upgraded from a fixed 23-tool assistant into an extensible agent. The original
+tools still work unchanged; everything new sits on top of a **dynamic async tool registry**.
+
+### Foundation
+| Module | Role |
+| :--- | :--- |
+| `core/registry.py` | Central tool registry. Skills self-register via `@tool(...)`. `build_declarations(config)` merges static + dynamic (MCP, self-written) tools; `dispatch(name, args, ctx)` is **async-aware** (sync tools run in an executor so they never block the audio loop) and falls back to the legacy `core/tools.py` dispatcher for the original 23 tools. |
+| `core/runtime.py` | Publishes the live session's **proactive channels**. `inject(text)` makes Freya speak unprompted; `emit(evt, payload)` pushes UI events. Background powers reach the session through here. |
+| `core/safety.py` | Single guard every `dangerous=True` tool passes through — refuses destructive shell/file patterns and confines writes to allow-listed roots (`config.safety`). |
+| `core/model.py` | `_inject_text()` feeds a proactive turn into the Live API; `get_config()` now advertises static + registered tools; the tool loop calls `registry.dispatch` with a `ToolContext`. |
+
+### The powers (each a self-registering skill module, config-flag gated)
+| Module | Tools | Capability |
+| :--- | :--- | :--- |
+| `core/news.py` | `get_world_news`, `get_news` | Reads real headlines aloud (Google News RSS, no key). |
+| `core/mcp_client.py` | `mcp__<server>__<tool>` (dynamic) | Connects to **any MCP server** (`config.mcp_servers`), auto-discovers tools, namespaces & routes them. |
+| `core/agents.py` | `dispatch_agent`, `check_agents` | **Sub-agents** (researcher / coder / operator) run as background Gemini ReAct loops sharing the registry, reporting back via proactive speech. |
+| `core/screen.py` | `find_element`, `control_element`, `read_screen_elements`, `click_element`, `click_text` | **Accessibility-API control.** `control_element` operates a control by its visible name via UIA patterns (Invoke / SetValue / Toggle / Select / Expand) — no coordinates, no guessing — and returns the result so Freya self-verifies. Vision-guess clicking (`click`/`move_mouse`/`scroll`) was removed; `capture_screen` remains for *seeing* only. |
+| `core/browser_agent.py` | `browser_task` | **browser-use** drives real Chromium (Playwright) for autonomous web tasks. |
+| `core/system_tools.py` | clipboard / files / windows / volume / media / power | OS control suite. |
+| `core/rag_memory.py` | `recall`, `index_folder` | **Semantic memory** via Gemini embeddings + Chroma vector DB. |
+| `core/scheduler.py` | `schedule_task`, `list_tasks`, `cancel_task` | Persistent reminders + daily briefings that Freya **speaks** when due. |
+| `core/ambient.py` | `watch_screen`, `stop_watching` | **Proactive** screen-watching — speaks up when a condition becomes true. |
+| `core/self_extend.py` | `create_tool`, `run_code`, `edit_file` | Freya **writes & hot-loads her own tools**, plus dev/code execution. |
+
+**Proactive flow:** a background power (finished sub-agent, due reminder, ambient trigger) →
+`runtime.inject(text)` → `FreyaModel._inject_text()` → `session.send_client_content(...)` →
+Freya speaks it in her own voice. This is what lets her act unprompted.

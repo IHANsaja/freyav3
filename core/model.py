@@ -4,6 +4,8 @@ import json
 from google import genai
 from google.genai import types
 from core.tools import dispatch
+from core import runtime
+from core.registry import build_declarations, dispatch as registry_dispatch, ToolContext
 import base64
 
 # ─────────────────────────────────────────────
@@ -49,32 +51,9 @@ TOOL_DECLARATIONS = [
         )
     ),
     types.FunctionDeclaration(
-        name="web_search",
-        description="Search something on Google and open results in browser.",
-        parameters=types.Schema(
-            type=types.Type.OBJECT,
-            properties={
-                "query": types.Schema(type=types.Type.STRING,
-                    description="The search query")
-            },
-            required=["query"]
-        )
-    ),
-    types.FunctionDeclaration(
-        name="play_youtube",
-        description="Search and open YouTube for a video or song.",
-        parameters=types.Schema(
-            type=types.Type.OBJECT,
-            properties={
-                "query": types.Schema(type=types.Type.STRING,
-                    description="What to search on YouTube")
-            },
-            required=["query"]
-        )
-    ),
-    types.FunctionDeclaration(
         name="get_news",
-        description="Get latest news on a topic and open Google News.",
+        description="Fetch the latest news headlines for a topic and read them aloud (no browser). "
+                    "For general/world news prefer get_world_news.",
         parameters=types.Schema(
             type=types.Type.OBJECT,
             properties={
@@ -130,46 +109,6 @@ TOOL_DECLARATIONS = [
         )
     ),
     types.FunctionDeclaration(
-        name="set_reminder",
-        description="Set a reminder that Freya will speak after X minutes.",
-        parameters=types.Schema(
-            type=types.Type.OBJECT,
-            properties={
-                "message": types.Schema(type=types.Type.STRING,
-                    description="Reminder message"),
-                "minutes": types.Schema(type=types.Type.INTEGER,
-                    description="How many minutes from now")
-            },
-            required=["message", "minutes"]
-        )
-    ),
-    types.FunctionDeclaration(
-        name="search_docs",
-        description="Search official documentation for a technology or framework.",
-        parameters=types.Schema(
-            type=types.Type.OBJECT,
-            properties={
-                "technology": types.Schema(type=types.Type.STRING,
-                    description="Technology name e.g. python, react, javascript, docker"),
-                "query": types.Schema(type=types.Type.STRING,
-                    description="What to search for in the docs")
-            },
-            required=["technology", "query"]
-        )
-    ),
-    types.FunctionDeclaration(
-        name="explain_error",
-        description="Search for an error message on Stack Overflow to help debug.",
-        parameters=types.Schema(
-            type=types.Type.OBJECT,
-            properties={
-                "error_text": types.Schema(type=types.Type.STRING,
-                    description="The full error message or traceback")
-            },
-            required=["error_text"]
-        )
-    ),
-    types.FunctionDeclaration(
         name="open_project",
         description="Open a project folder in VS Code by project name.",
         parameters=types.Schema(
@@ -194,18 +133,6 @@ TOOL_DECLARATIONS = [
         )
     ),
     types.FunctionDeclaration(
-        name="search_stackoverflow",
-        description="Search Stack Overflow for a coding question and open the best result.",
-        parameters=types.Schema(
-            type=types.Type.OBJECT,
-            properties={
-                "query": types.Schema(type=types.Type.STRING,
-                    description="The coding question or problem to search")
-            },
-            required=["query"]
-        )
-    ),
-    types.FunctionDeclaration(
         name="dance_for_user",
         description="Make Freya perform a random dance animation when the user asks her to dance (e.g., 'can you dance for me', 'show me a dance', 'dance').",
         parameters=types.Schema(
@@ -224,32 +151,6 @@ TOOL_DECLARATIONS = [
         )
     ),
     types.FunctionDeclaration(
-        name="move_mouse",
-        description="Move the mouse cursor to screen coordinates.",
-        parameters=types.Schema(
-            type=types.Type.OBJECT,
-            properties={
-                "x": types.Schema(type=types.Type.INTEGER, description="X coordinate in pixels"),
-                "y": types.Schema(type=types.Type.INTEGER, description="Y coordinate in pixels"),
-            },
-            required=["x", "y"]
-        )
-    ),
-    types.FunctionDeclaration(
-        name="click",
-        description="Click the mouse at screen coordinates. Use after capture_screen so you know where to click.",
-        parameters=types.Schema(
-            type=types.Type.OBJECT,
-            properties={
-                "x": types.Schema(type=types.Type.INTEGER, description="X coordinate"),
-                "y": types.Schema(type=types.Type.INTEGER, description="Y coordinate"),
-                "button": types.Schema(type=types.Type.STRING, description="left, right, or middle"),
-                "double": types.Schema(type=types.Type.BOOLEAN, description="True for double click"),
-            },
-            required=["x", "y"]
-        )
-    ),
-    types.FunctionDeclaration(
         name="type_text",
         description="Type text using the keyboard.",
         parameters=types.Schema(
@@ -262,27 +163,14 @@ TOOL_DECLARATIONS = [
     ),
     types.FunctionDeclaration(
         name="press_key",
-        description="Press a keyboard key or hotkey. e.g. 'enter', 'escape', 'ctrl+c', 'ctrl+shift+t'.",
+        description="Press a keyboard key or hotkey into the focused window. e.g. 'enter', 'escape', "
+                    "'ctrl+c', 'ctrl+shift+t'.",
         parameters=types.Schema(
             type=types.Type.OBJECT,
             properties={
                 "key": types.Schema(type=types.Type.STRING, description="Key or hotkey combo e.g. enter, ctrl+c"),
             },
             required=["key"]
-        )
-    ),
-    types.FunctionDeclaration(
-        name="scroll",
-        description="Scroll the mouse wheel at screen coordinates.",
-        parameters=types.Schema(
-            type=types.Type.OBJECT,
-            properties={
-                "x": types.Schema(type=types.Type.INTEGER, description="X coordinate"),
-                "y": types.Schema(type=types.Type.INTEGER, description="Y coordinate"),
-                "direction": types.Schema(type=types.Type.STRING, description="up or down"),
-                "amount": types.Schema(type=types.Type.INTEGER, description="Number of scroll clicks"),
-            },
-            required=["x", "y"]
         )
     ),
 ]
@@ -338,7 +226,11 @@ class FreyaModel:
                     silence_duration_ms=int(vad_cfg.get("silence_duration_ms", 500)),
                 )
             ),
-            tools=[types.Tool(function_declarations=TOOL_DECLARATIONS)],
+            # Static tools (the original 23) + dynamically registered superpowers
+            # (news, screen, sub-agents, MCP servers, self-written skills, …).
+            tools=[types.Tool(
+                function_declarations=TOOL_DECLARATIONS + build_declarations(self.config)
+            )],
         )
 
     # Add these to FreyaModel class — override in subclass for UI broadcasting
@@ -351,6 +243,28 @@ class FreyaModel:
     async def on_state(self, value: str):
         pass  # overridden in server.py
 
+    async def on_event(self, event_type: str, payload: dict):
+        pass  # overridden in server.py — generic events (agent/mcp/schedule/ambient)
+
+    async def _inject_text(self, text: str):
+        """Proactive speech: feed a turn into the live session so Freya speaks it.
+        Used by the scheduler, ambient watcher and finished sub-agents."""
+        if not self.session:
+            return
+        try:
+            await self.session.send_client_content(
+                turns=types.Content(
+                    role="user",
+                    parts=[types.Part(text=(
+                        "[PROACTIVE — say this to Ihan out loud now, naturally, in your own "
+                        f"voice and style]: {text}"
+                    ))],
+                ),
+                turn_complete=True,
+            )
+        except Exception as e:
+            print(f"  inject failed: {e}")
+
     async def run(self, mic_stream, speaker_stream):
         print(f"\nConnecting to {self.model_id}...")
 
@@ -362,11 +276,29 @@ class FreyaModel:
         pending_playback_chunks = 0
         model_turn_complete = True
 
+        # Connect any configured MCP servers BEFORE building the tool list so
+        # their tools are advertised to Gemini in this session.
+        try:
+            from core.mcp_client import mcp_manager
+            await mcp_manager.start(self.config)
+        except Exception as e:
+            print(f"  MCP manager unavailable: {e}")
+
+        live_config = self.get_config()
+
         async with self.client.aio.live.connect(
             model=self.model_id,
-            config=self.get_config()
+            config=live_config
         ) as session:
             self.session = session
+            # Publish this session's channels so background powers can reach it.
+            runtime.set_channels(self._inject_text, self.on_event)
+            # Kick off scheduler + ambient loops bound to this session.
+            try:
+                from core.scheduler import scheduler
+                scheduler.attach(self.config)
+            except Exception:
+                pass
             print("Freya is live! Start talking. (Ctrl+C to stop)\n")
 
             freya_cfg = (self.config or {}).get("freya", {})
@@ -438,7 +370,8 @@ class FreyaModel:
                                     tool_args = dict(fc.args) if fc.args else {}
                                     call_id = fc.id
                                     print(f"  Tool : {tool_name}({tool_args})")
-                                    result = dispatch(tool_name, tool_args, self.config)
+                                    ctx = ToolContext(self.config, session=session)
+                                    result = await registry_dispatch(tool_name, tool_args, ctx)
                                     print(f"  Result: {result}")
                                     await self.on_tool(tool_name, tool_args, result)
 
@@ -556,8 +489,23 @@ class FreyaModel:
                         model_speaking.clear()
                         await self.on_state("listening")
 
-            await asyncio.gather(
-                send_audio(),
-                receive_audio(),
-                play_audio()
-            )
+            try:
+                await asyncio.gather(
+                    send_audio(),
+                    receive_audio(),
+                    play_audio()
+                )
+            finally:
+                # Release the proactive channels and background loops bound to
+                # this session so the next reconnect starts clean.
+                runtime.clear_channels()
+                try:
+                    from core.scheduler import scheduler
+                    scheduler.detach()
+                except Exception:
+                    pass
+                try:
+                    from core.ambient import ambient
+                    ambient.stop_all()
+                except Exception:
+                    pass

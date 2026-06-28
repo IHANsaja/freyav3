@@ -64,6 +64,11 @@ async def main():
     finally:
         mic.stop()
         speaker.stop()
+        try:
+            from core.mcp_client import mcp_manager
+            await mcp_manager.stop()
+        except Exception:
+            pass
         memory_key = get_memory_api_key()
         await update_memory(memory_key, transcript.get(), memory)
 

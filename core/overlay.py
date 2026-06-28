@@ -37,25 +37,73 @@ def _get():
 
 
 # ══════════════════════════════════════════════
+#  BACKEND SELECTION
+#  Prefer the GPU shader overlay ("Crimson Core Sync"); fall back to the tkinter
+#  effects below if the GPU/transparent window can't initialize.
+# ══════════════════════════════════════════════
+_gpu = None  # None = not probed yet, False = unavailable, module = available
+
+
+def _gpu_backend():
+    global _gpu
+    if _gpu is None:
+        try:
+            from core import shader_overlay
+            _gpu = shader_overlay if shader_overlay.start() else False
+        except Exception:
+            _gpu = False
+    return _gpu
+
+
+# ══════════════════════════════════════════════
 #  PUBLIC API  (safe to call from any thread)
 # ══════════════════════════════════════════════
+def show_element_effect(rect, label: str = ""):
+    """Lock the crimson energy field onto a real UI element's rectangle (l, t, r, b)."""
+    g = _gpu_backend()
+    if g:
+        try: g.show_element_effect(rect, label); return
+        except Exception: pass
+    try: _get().enqueue({'type': 'element', 'rect': rect})
+    except Exception: pass
+
 def show_click_effect(x: int, y: int):
+    g = _gpu_backend()
+    if g:
+        try: g.show_click_effect(x, y); return
+        except Exception: pass
     try: _get().enqueue({'type': 'click', 'x': x, 'y': y})
     except Exception: pass
 
 def show_scan_effect():
+    g = _gpu_backend()
+    if g:
+        try: g.show_scan_effect(); return
+        except Exception: pass
     try: _get().enqueue({'type': 'scan'})
     except Exception: pass
 
 def show_move_effect(x: int, y: int):
+    g = _gpu_backend()
+    if g:
+        try: g.show_move_effect(x, y); return
+        except Exception: pass
     try: _get().enqueue({'type': 'move', 'x': x, 'y': y})
     except Exception: pass
 
 def show_scroll_effect(x: int, y: int, direction: str):
+    g = _gpu_backend()
+    if g:
+        try: g.show_scroll_effect(x, y, direction); return
+        except Exception: pass
     try: _get().enqueue({'type': 'scroll', 'x': x, 'y': y, 'direction': direction})
     except Exception: pass
 
 def show_type_effect():
+    g = _gpu_backend()
+    if g:
+        try: g.show_type_effect(); return
+        except Exception: pass
     try: _get().enqueue({'type': 'type'})
     except Exception: pass
 
@@ -108,8 +156,46 @@ class OverlayManager:
                 self._effect_scroll(cmd['x'], cmd['y'], cmd['direction'])
             elif t == 'type':
                 self._effect_type()
+            elif t == 'element':
+                self._effect_element(cmd['rect'])
         except Exception as e:
             print(f"  Overlay error: {e}")
+
+    # ─────────────────────────────────────────
+    #  ELEMENT — crimson bracket box locking onto a real element rect (tkinter fallback)
+    # ─────────────────────────────────────────
+    def _effect_element(self, rect):
+        l, t, r, b = [int(v) for v in rect]
+        if r - l < 2 or b - t < 2:
+            return self._effect_click((l + r) // 2, (t + b) // 2)
+        pad = 6
+        win = tk.Toplevel(self._root)
+        win.overrideredirect(True)
+        win.attributes('-topmost', True)
+        win.attributes('-transparentcolor', TRANSPARENT_BG)
+        w, h = (r - l) + pad * 2, (b - t) + pad * 2
+        win.geometry(f'{w}x{h}+{l - pad}+{t - pad}')
+        win.config(bg=TRANSPARENT_BG)
+        canvas = tk.Canvas(win, width=w, height=h, bg=TRANSPARENT_BG, highlightthickness=0)
+        canvas.pack()
+        self._anim_element(win, canvas, w, h, 0)
+
+    def _anim_element(self, win, canvas, w, h, step):
+        if step > 14:
+            try: win.destroy()
+            except: pass
+            return
+        canvas.delete('all')
+        inset = max(0, 8 - step)          # brackets snap inward to lock on
+        x0, y0, x1, y1 = 3 + inset, 3 + inset, w - 3 - inset, h - 3 - inset
+        arm = 16
+        col = FREYA_RED if step % 2 == 0 else FREYA_RED_DIM
+        for (cx, cy, dx, dy) in [(x0, y0, 1, 1), (x1, y0, -1, 1), (x0, y1, 1, -1), (x1, y1, -1, -1)]:
+            canvas.create_line(cx, cy, cx + arm * dx, cy, fill=col, width=2)
+            canvas.create_line(cx, cy, cx, cy + arm * dy, fill=col, width=2)
+        if step < 10:
+            canvas.create_rectangle(x0, y0, x1, y1, outline=FREYA_RED_DIM, width=1)
+        win.after(32, self._anim_element, win, canvas, w, h, step + 1)
 
     # ─────────────────────────────────────────
     #  CLICK — expanding crosshair + ripple

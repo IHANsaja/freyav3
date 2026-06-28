@@ -39,6 +39,7 @@ export function useFreyaSocket() {
 
     const [state, setState] = useState<FreyaState>("idle");
     const [transcript, setTranscript] = useState<TranscriptEntry[]>([]);
+    const [liveText, setLiveText] = useState<string>(""); // Freya's words as she speaks
     const [toolLog, setToolLog] = useState<ToolEntry[]>([]);
     const [config, setConfig] = useState<FreyaConfig | null>(null);
     const [activeMode, setActiveMode] = useState<string>("default");
@@ -95,6 +96,7 @@ export function useFreyaSocket() {
                     ]);
                     freyaBuffer.current = "";
                 }
+                setLiveText(""); // turn done — stop the live typing line
             };
 
             socket.onmessage = (event) => {
@@ -110,8 +112,9 @@ export function useFreyaSocket() {
                     setActiveMode(msg.value);
                 } else if (msg.type === "transcript") {
                     if (msg.speaker === "Freya") {
-                        // Buffer Freya's words
+                        // Buffer Freya's words + stream them to the live typing line
                         freyaBuffer.current += " " + msg.text;
+                        setLiveText(freyaBuffer.current.trim());
                     } else {
                         // Flush any pending Freya buffer first
                         flushFreyaBuffer();
@@ -134,6 +137,19 @@ export function useFreyaSocket() {
                             name: msg.name,
                             args: msg.args,
                             result: msg.result,
+                            timestamp: new Date(),
+                        },
+                    ]);
+                } else if (["agent", "browser", "schedule", "ambient", "mcp"].includes(msg.type)) {
+                    // Superpower status events → surface them in the tool feed.
+                    const { type, ...rest } = msg;
+                    setToolLog((prev) => [
+                        ...prev,
+                        {
+                            id: counter.current++,
+                            name: `⚡ ${type}`,
+                            args: rest,
+                            result: rest.status || rest.task || "",
                             timestamp: new Date(),
                         },
                     ]);
@@ -189,6 +205,7 @@ export function useFreyaSocket() {
         state,
         connected,
         transcript,
+        liveText,
         toolLog,
         config,
         activeMode,
