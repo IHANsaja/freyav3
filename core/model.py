@@ -301,6 +301,11 @@ class FreyaModel:
             except Exception:
                 pass
             try:
+                from core.context_watch import tracker
+                tracker.attach(self.config)
+            except Exception:
+                pass
+            try:
                 from core.hotkeys import start_pause_hotkey
                 start_pause_hotkey(self.config)
             except Exception:
@@ -334,7 +339,7 @@ class FreyaModel:
                     if paused != last_paused:
                         last_paused = paused
                         print("  🔇 Mic paused." if paused else "  🔊 Mic resumed.")
-                        await self.on_event("mic", {"paused": paused})
+                        await runtime.emit("mic", {"paused": paused})
                     if paused:
                         continue
                     if model_speaking.is_set():
@@ -401,7 +406,7 @@ class FreyaModel:
 
                                         # Show the screenshot she's looking at on the dashboard canvas.
                                         try:
-                                            await self.on_event("image", {"data": b64_image, "label": "Screen capture"})
+                                            await runtime.emit("image", {"data": b64_image, "label": "Screen capture"})
                                         except Exception:
                                             pass
 
@@ -479,7 +484,7 @@ class FreyaModel:
                                 model_turn_complete = False
                                 # Stream the fragment live so the UI can type it out
                                 # in the center of the scene as she speaks.
-                                await self.on_event("speech", {"text": text})
+                                await runtime.emit("speech", {"text": text})
 
                         # Turn complete → emit full buffered sentences
                         if getattr(sc, 'turn_complete', False):
@@ -527,6 +532,11 @@ class FreyaModel:
                 try:
                     from core.scheduler import scheduler
                     scheduler.detach()
+                except Exception:
+                    pass
+                try:
+                    from core.context_watch import tracker
+                    tracker.detach()
                 except Exception:
                     pass
                 try:

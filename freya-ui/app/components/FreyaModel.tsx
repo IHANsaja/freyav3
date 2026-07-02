@@ -1,139 +1,149 @@
 "use client";
 
-import React, { useRef, useEffect, useState, Suspense } from 'react';
-import { Canvas } from '@react-three/fiber';
-import { useGLTF, useAnimations, OrbitControls } from '@react-three/drei';
+import React, { useEffect, useRef, useState, Suspense } from "react";
+import { Canvas, useFrame } from "@react-three/fiber";
+import { useGLTF, useAnimations, OrbitControls } from "@react-three/drei";
+import * as THREE from "three";
+import type { AvatarIntent } from "../hooks/useFreyaSocket";
+import { AvatarController, ExpressionEvent } from "./avatar/AvatarController";
+import { AVATAR_MODELS, DEFAULT_AVATAR, BaseState } from "./avatar/manifest";
 
-interface ModelProps {
-  state: "idle" | "listening" | "speaking";
-  toolLog?: any[];
+interface FreyaModelProps {
+    state: string; // socket state: idle | listening | speaking | interrupted
+    avatarIntent: AvatarIntent | null;
+    modelKey?: string;
 }
 
-interface InternalModelProps {
-  state: "idle" | "listening" | "speaking";
-  activeDance: string | null;
-}
-
-function Model({ state, activeDance }: InternalModelProps) {
-  const group = useRef<any>(null);
-  const { nodes, materials, animations } = useGLTF('/models/Freya.glb') as any;
-  const { actions } = useAnimations(animations, group);
-
-  useEffect(() => {
-    if (!actions) return;
-
-    // Determine the animation name based on the current socket state or dance override
-    let animName = 'Talk_Passionately';
-
-    if (activeDance) {
-      animName = activeDance;
-    } else if (state === 'speaking') {
-      const talkAnimations = [
-        'Talk_Passionately',
-        'Talk_with_Hands_Open',
-        'Talk_with_Left_Hand_Raised',
-        'Talk_with_Left_Hand_on_Hip'
-      ];
-      animName = talkAnimations[Math.floor(Math.random() * talkAnimations.length)];
-    } else if (state === 'listening') {
-      // Use a different attentive idle animation when listening
-      animName = 'Talk_Passionately';
-    } else {
-      // Idle state (before start is clicked)
-      animName = 'Talk_Passionately';
+/** Socket session states map to animation base states; richer states
+ *  (thinking/working/dance/seated) arrive as avatar intents instead. */
+function socketToBase(state: string): BaseState {
+    switch (state) {
+        case "speaking":
+            return "speaking";
+        case "listening":
+        case "interrupted":
+            return "listening";
+        default:
+            return "idle";
     }
+}
 
-    // Stop all actions first to prevent overlap and default animations
-    Object.keys(actions).forEach((key) => {
-      actions[key]?.stop();
+function Model({
+    state,
+    avatarIntent,
+    modelKey,
+    onExpression,
+}: FreyaModelProps & { onExpression: (e: ExpressionEvent | null) => void }) {
+    const manifest = AVATAR_MODELS[modelKey ?? DEFAULT_AVATAR];
+    const group = useRef<THREE.Group>(null!);
+    const { scene, animations } = useGLTF(manifest.url);
+    const { actions, mixer } = useAnimations(animations, group);
+    const controllerRef = useRef<AvatarController | null>(null);
+    const lastIntentSeq = useRef(0);
+
+    // Instantiate the controller once mixer/actions/skeleton exist.
+    useEffect(() => {
+        if (!actions || !mixer || !group.current) return;
+        const controller = new AvatarController(mixer, actions, manifest, group.current);
+        controller.onExpressionChange = onExpression;
+        controllerRef.current = controller;
+        return () => {
+            controller.dispose();
+            controllerRef.current = null;
+        };
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [actions, mixer, manifest]);
+
+    // Session state drives the base layer (free — no LLM involved). Dance and
+    // other intent-driven states own the base layer while they're active.
+    useEffect(() => {
+        const c = controllerRef.current;
+        if (!c) return;
+        const keep = ["dance", "thinking", "working", "seated"];
+        if (state === "speaking" || !keep.includes(c.getBaseState())) {
+            c.setBaseState(socketToBase(state));
+        }
+    }, [state, actions]);
+
+    // LLM intents layer on top.
+    useEffect(() => {
+        const c = controllerRef.current;
+        if (!c || !avatarIntent || avatarIntent.seq === lastIntentSeq.current) return;
+        lastIntentSeq.current = avatarIntent.seq;
+        c.applyIntent(avatarIntent);
+    }, [avatarIntent]);
+
+    useFrame((rootState, delta) => {
+        controllerRef.current?.update(delta, rootState.camera);
     });
 
-    const action = actions[animName];
-    if (action) {
-      action.reset().fadeIn(0.2).play();
-    }
-
-    return () => {
-      action?.fadeOut(0.2);
-    };
-  }, [state, activeDance, actions]);
-
-  return (
-    <group ref={group} dispose={null} position={[0, -1.2, 0]}>
-      <group name="Scene">
-        <group name="Armature" scale={0.018}>
-          <skinnedMesh
-            name="char1"
-            geometry={nodes.char1.geometry}
-            material={materials.Material_1}
-            skeleton={nodes.char1.skeleton}
-          />
-          <primitive object={nodes.Hips} />
+    // Render the glTF scene generically so any manifest model works without
+    // hardcoding node/material names.
+    return (
+        <group
+            ref={group}
+            dispose={null}
+            position={[0, manifest.yOffset, 0]}
+            scale={manifest.scale}
+        >
+            <primitive object={scene} />
         </group>
-      </group>
-    </group>
-  );
+    );
 }
 
-useGLTF.preload('/models/Freya.glb');
+useGLTF.preload(AVATAR_MODELS[DEFAULT_AVATAR].url);
 
-export default function FreyaModel({ state, toolLog }: ModelProps) {
-  const [danceAnim, setDanceAnim] = useState<string | null>(null);
+export default function FreyaModel({ state, avatarIntent, modelKey }: FreyaModelProps) {
+    const [accent, setAccent] = useState<string>("#d32f2f");
+    const [glow, setGlow] = useState(0);
 
-  useEffect(() => {
-    if (!toolLog || toolLog.length === 0) return;
-    const latestTool = toolLog[toolLog.length - 1];
-    if (latestTool.name === 'dance_for_user' && latestTool.result) {
-      const match = latestTool.result.match(/DANCING:(\w+)/);
-      if (match) {
-        const danceName = match[1];
-        setDanceAnim(danceName);
+    const handleExpression = (e: ExpressionEvent | null) => {
+        setAccent(e ? e.accent.accent : "#d32f2f");
+        setGlow(e ? e.accent.glowBoost * e.intensity : 0);
+    };
 
-        // Return to normal animations after 10 seconds
-        const timer = setTimeout(() => {
-          setDanceAnim(null);
-        }, 10000);
-        return () => clearTimeout(timer);
-      }
-    }
-  }, [toolLog]);
+    return (
+        <div className="w-full h-full relative flex items-center justify-center">
+            {/* Orbital rings, tinted by the live expression accent */}
+            <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
+                <div
+                    className="w-[340px] h-[340px] rounded-full border animate-[spin_24s_linear_infinite] transition-colors duration-1000"
+                    style={{ borderColor: `${accent}22` }}
+                />
+                <div className="absolute w-[390px] h-[390px] rounded-full border border-dashed border-outline-variant/10 animate-[spin_48s_linear_infinite_reverse]" />
+            </div>
 
-  return (
-    <div className="w-full h-full min-h-[350px] relative flex items-center justify-center">
-      {/* Hologram aesthetic rings around the container */}
-      <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
-        <div className="w-[300px] h-[300px] rounded-full border border-primary/10 animate-[spin_20s_linear_infinite]" />
-        <div className="absolute w-[340px] h-[340px] rounded-full border border-dashed border-outline-variant/10 animate-[spin_40s_linear_infinite_reverse]" />
-      </div>
-
-      <Canvas
-        camera={{ position: [0, 0, 3], fov: 70 }}
-        style={{ width: '100%', height: '100%', background: 'transparent' }}
-      >
-        <ambientLight intensity={0.7} />
-        <directionalLight position={[2, 4, 3]} intensity={1.2} />
-        <directionalLight position={[-2, 1, -1]} intensity={0.4} />
-
-        {/* Soft colored spotlight to give a futuristic cybernetic accent */}
-        <spotLight
-          position={[0, 5, 0]}
-          intensity={3}
-          angle={0.6}
-          penumbra={1}
-          color="#d32f2f" // Matches Freya's theme primary color
-        />
-
-        <Suspense fallback={null}>
-          <Model state={state} activeDance={danceAnim} />
-        </Suspense>
-
-        <OrbitControls
-          enableZoom={false}
-          enablePan={false}
-          minPolarAngle={Math.PI / 3}
-          maxPolarAngle={Math.PI / 1.8}
-        />
-      </Canvas>
-    </div>
-  );
+            <Canvas
+                camera={{ position: [0, 0.2, 3], fov: 60 }}
+                dpr={[1, 2]}
+                style={{ width: "100%", height: "100%", background: "transparent" }}
+            >
+                <ambientLight intensity={0.7} />
+                <directionalLight position={[2, 4, 3]} intensity={1.2} />
+                <directionalLight position={[-2, 1, -1]} intensity={0.4} />
+                {/* Accent spotlight follows the expression color */}
+                <spotLight
+                    position={[0, 5, 0]}
+                    intensity={3 + glow * 4}
+                    angle={0.6}
+                    penumbra={1}
+                    color={accent}
+                />
+                <Suspense fallback={null}>
+                    <Model
+                        state={state}
+                        avatarIntent={avatarIntent}
+                        modelKey={modelKey}
+                        onExpression={handleExpression}
+                    />
+                </Suspense>
+                <OrbitControls
+                    enableZoom={false}
+                    enablePan={false}
+                    minPolarAngle={Math.PI / 3}
+                    maxPolarAngle={Math.PI / 1.8}
+                />
+            </Canvas>
+        </div>
+    );
 }

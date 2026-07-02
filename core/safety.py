@@ -12,6 +12,7 @@ Returns (allowed: bool, message: str). When blocked, `message` is what Freya tel
 """
 
 import os
+import re
 
 # Patterns that are never allowed in a shell command, regardless of config.
 _HARD_BLOCK = [
@@ -79,3 +80,85 @@ def guard(tool_name: str, args: dict, config: dict) -> tuple[bool, str]:
             )
 
     return True, ""
+
+
+# ══════════════════════════════════════════════════════════════════════════
+#  Approval rules — which actions must pause for Ihan's explicit yes.
+#
+#  Distinct from `guard` above: guard *blocks* the outright destructive, this
+#  decides what is allowed but sensitive enough to need a human checkpoint
+#  (sending things, deleting things, changing the world outside the project).
+# ══════════════════════════════════════════════════════════════════════════
+
+# Tools that always need a yes, no matter the arguments.
+_ALWAYS_CONFIRM = {"shutdown_computer", "delete_file"}
+
+# Shell/code that changes state (vs. read-only inspection like `git status`).
+_MUTATING_CMD = re.compile(
+    r"\b(git\s+(push|commit|reset|checkout|merge|rebase)|pip\s+(install|uninstall)|"
+    r"npm\s+(install|uninstall|publish)|del|erase|rmdir|rd\b|move|ren\b|mklink|"
+    r"reg\s+add|reg\s+delete|schtasks|net\s+user|taskkill|curl\s+.*(-x|--request)\s*post|"
+    r"shutil\.rmtree|os\.remove|os\.rmdir|os\.unlink|\.unlink\(|send)\b",
+    re.IGNORECASE,
+)
+
+# Browser tasks that publish, purchase or submit on the user's behalf.
+_SENSITIVE_BROWSER = re.compile(
+    r"\b(send|submit|purchase|buy|order|post|publish|reply|sign\s*up|register|"
+    r"log\s*in|login|checkout|pay|transfer|delete|unsubscribe)\b",
+    re.IGNORECASE,
+)
+
+_PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+
+
+def _inside_project(path: str) -> bool:
+    try:
+        target = os.path.abspath(os.path.expanduser(path))
+        return os.path.commonpath([target, _PROJECT_ROOT]) == _PROJECT_ROOT
+    except Exception:
+        return False
+
+
+def needs_approval(tool_name: str, args: dict, entry: dict | None, config: dict) -> bool:
+    """True when this call must wait for the user's explicit approval."""
+    cfg = _cfg(config)
+    if cfg.get("unrestricted") or cfg.get("approval_mode", "confirm") == "off":
+        return False
+    if tool_name in (cfg.get("never_confirm") or []):
+        return False
+    if tool_name in (cfg.get("always_confirm") or []):
+        return True
+    if entry and entry.get("approval") == "confirm":
+        return True
+    if tool_name in _ALWAYS_CONFIRM:
+        return True
+
+    args = args or {}
+    if tool_name in ("run_terminal_command", "run_code"):
+        cmd = str(args.get("command") or args.get("code") or "")
+        return bool(_MUTATING_CMD.search(cmd))
+    if tool_name in ("write_file", "edit_file"):
+        path = str(args.get("path") or args.get("file_path") or "")
+        return bool(path) and not _inside_project(path)
+    if tool_name == "browser_task":
+        return bool(_SENSITIVE_BROWSER.search(str(args.get("task") or "")))
+    return False
+
+
+def describe_action(tool_name: str, args: dict) -> str:
+    """One human sentence for the approval card / spoken question."""
+    args = args or {}
+    if tool_name == "shutdown_computer":
+        return f"shut down the computer in {args.get('delay_seconds', 30)}s"
+    if tool_name == "delete_file":
+        return f"delete the file {args.get('path') or args.get('file_path')}"
+    if tool_name in ("write_file", "edit_file"):
+        return f"modify {args.get('path') or args.get('file_path')} (outside the project)"
+    if tool_name in ("run_terminal_command", "run_code"):
+        cmd = str(args.get("command") or args.get("code") or "")[:80]
+        return f"run the command: {cmd}"
+    if tool_name == "browser_task":
+        return f"do this in the browser: {str(args.get('task'))[:100]}"
+    preview = ", ".join(f"{k}={v}" for k, v in list(args.items())[:3])
+    return f"run {tool_name}({preview[:80]})"

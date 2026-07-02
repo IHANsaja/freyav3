@@ -94,6 +94,26 @@ class Scheduler:
         kept = [j for j in jobs if not (j.get("kind") == "once" and j.get("fired"))]
         if changed or len(kept) != len(jobs):
             _save(kept)
+        await self._memory_due_tick()
+
+    async def _memory_due_tick(self):
+        """Speak deadline/followup memory items when they come due (same poll
+        loop — no second timer). Spoken once, then deactivated."""
+        try:
+            from core.memory_store import get_store
+            loop = asyncio.get_running_loop()
+            store = get_store()
+            due = await loop.run_in_executor(None, store.due)
+            for item in due:
+                await runtime.inject(
+                    f"Reminder from your memory: {item.subject} — {item.content} "
+                    f"(was due {item.due_at})."
+                )
+                await runtime.emit("schedule", {"id": f"mem-{item.id}", "status": "fired",
+                                                "action": item.subject})
+                await loop.run_in_executor(None, store.deactivate, item.id)
+        except Exception as e:
+            print(f"  [scheduler] memory due check failed: {e}")
 
     async def _fire(self, job: dict):
         action = job.get("action", "")

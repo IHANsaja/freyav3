@@ -75,6 +75,18 @@ def index_memory_file():
         pass
 
 
+def upsert_memory_item(doc_id: str, text: str):
+    """Mirror one structured-memory item into the vector store (used by the
+    `remember` tool so semantic recall covers voice-saved memories too)."""
+    col = _get_collection()
+    col.upsert(
+        ids=[hashlib.md5(doc_id.encode()).hexdigest()],
+        documents=[text],
+        embeddings=_embed([text]),
+        metadatas=[{"source": doc_id}],
+    )
+
+
 # ══════════════════════════════════════════════
 #  TOOLS
 # ══════════════════════════════════════════════
@@ -89,6 +101,16 @@ def recall(args, ctx) -> str:
     query = (args.get("query") or "").strip()
     if not query:
         return "What would you like me to recall?"
+
+    # Structured-memory FTS hits first — exact, cheap, no API call.
+    fts_lines: list[str] = []
+    try:
+        from core.memory_store import get_store
+        for item in get_store().search(query, limit=5):
+            fts_lines.append(f"[memory #{item.id}] {item.subject}: {item.content}")
+    except Exception:
+        pass
+
     try:
         col = _get_collection()
         if col.count() == 0:
@@ -96,12 +118,15 @@ def recall(args, ctx) -> str:
         vec = _embed([query])[0]
         res = col.query(query_embeddings=[vec], n_results=5)
         docs = (res.get("documents") or [[]])[0]
-        if not docs:
-            return f"I don't have anything indexed about '{query}' yet."
-        joined = " … ".join(d.strip().replace("\n", " ")[:400] for d in docs)
-        return f"Here's what I found about '{query}': {joined}"
     except Exception as e:
+        if fts_lines:
+            return f"From my memory about '{query}': " + " … ".join(fts_lines)
         return f"Recall failed: {e}"
+
+    joined_parts = fts_lines + [d.strip().replace("\n", " ")[:400] for d in docs]
+    if not joined_parts:
+        return f"I don't have anything indexed about '{query}' yet."
+    return f"Here's what I found about '{query}': " + " … ".join(joined_parts[:8])
 
 
 @tool(

@@ -49,11 +49,19 @@ def OBJ(properties: dict | None = None, required: list | None = None) -> types.S
 
 # ── Tool context passed to every handler ──────────────────────────────────
 class ToolContext:
-    """Everything a handler might need: config + channels to the live session."""
+    """Everything a handler might need: config + channels to the live session.
 
-    def __init__(self, config: dict, session=None):
+    `source` decides how the approval gate behaves for sensitive calls:
+      "live"          → the voice session; approval must not block, so the call
+                        returns an APPROVAL_REQUIRED token and defers the work.
+      "mission:<id>"  → a background mission step; it genuinely awaits the
+                        user's decision.
+    """
+
+    def __init__(self, config: dict, session=None, source: str = "live"):
         self.config = config
         self.session = session
+        self.source = source
 
     async def inject(self, text: str):
         """Make Freya say `text` out loud now (proactive speech)."""
@@ -68,19 +76,27 @@ class ToolContext:
 
 # ── The registry itself ────────────────────────────────────────────────────
 # name -> {"decl": FunctionDeclaration|None, "handler": callable,
-#          "gate": "a.b.c"|None, "dangerous": bool}
+#          "gate": "a.b.c"|None, "dangerous": bool, "approval": str,
+#          "skill": str|None}
 _REGISTRY: dict[str, dict] = {}
 _skills_loaded = False
 
+# Set by core/skills/loader.py around each skill-module import so tools are
+# stamped with their owning skill id (powers the skill catalog + toggles).
+_current_skill: str | None = None
 
-def register(name, handler, decl=None, *, gate=None, dangerous=False):
+
+def register(name, handler, decl=None, *, gate=None, dangerous=False, approval="none"):
     """Register a handler. If `decl` is None it's a handler-only override of an
     existing (statically declared) tool — dispatch will use it but it won't be
-    re-declared to Gemini."""
-    _REGISTRY[name] = {"decl": decl, "handler": handler, "gate": gate, "dangerous": dangerous}
+    re-declared to Gemini. `approval="confirm"` forces the human approval gate
+    for every call regardless of arguments."""
+    _REGISTRY[name] = {"decl": decl, "handler": handler, "gate": gate,
+                       "dangerous": dangerous, "approval": approval,
+                       "skill": _current_skill}
 
 
-def tool(name, description, parameters=None, *, gate=None, dangerous=False):
+def tool(name, description, parameters=None, *, gate=None, dangerous=False, approval="none"):
     """Decorator: declare + register a brand-new tool in one step."""
     decl = types.FunctionDeclaration(
         name=name,
@@ -89,7 +105,7 @@ def tool(name, description, parameters=None, *, gate=None, dangerous=False):
     )
 
     def deco(fn):
-        register(name, fn, decl=decl, gate=gate, dangerous=dangerous)
+        register(name, fn, decl=decl, gate=gate, dangerous=dangerous, approval=approval)
         return fn
 
     return deco
@@ -107,36 +123,20 @@ def _gate_open(gate, config) -> bool:
 
 
 def _load_skills():
-    """Import every skill module once so they self-register. Missing optional
-    dependencies degrade gracefully (the module just won't register its tools)."""
+    """Import every skill once via the manifest-aware loader (core/skills/loader.py).
+    Missing optional dependencies degrade gracefully."""
     global _skills_loaded
     if _skills_loaded:
         return
     _skills_loaded = True
-    modules = [
-        "core.news",
-        "core.system_tools",
-        "core.screen",
-        "core.agents",
-        "core.browser_agent",
-        "core.rag_memory",
-        "core.scheduler",
-        "core.ambient",
-        "core.self_extend",
-        "core.listening_tools",
-        "core.web",
-    ]
-    for mod in modules:
-        try:
-            __import__(mod)
-        except Exception as e:
-            print(f"  [registry] skill '{mod}' unavailable: {e}")
-    # Hot-load any custom tools Freya wrote in previous sessions.
-    try:
-        from core.self_extend import load_custom_tools
-        load_custom_tools()
-    except Exception:
-        pass
+    from core.skills.loader import load_all
+    load_all()
+
+
+def skill_catalog(config: dict) -> list[dict]:
+    """Manifest + tool list + gate state for every skill (dashboard catalog)."""
+    from core.skills.loader import catalog
+    return catalog(config)
 
 
 def build_declarations(config: dict) -> list[types.FunctionDeclaration]:
@@ -155,11 +155,8 @@ def build_declarations(config: dict) -> list[types.FunctionDeclaration]:
     return decls
 
 
-async def dispatch(name: str, args: dict, ctx: ToolContext) -> str:
-    """Route a Gemini function call. Async-aware, with legacy fallback."""
-    _load_skills()
-    entry = _REGISTRY.get(name)
-
+async def _execute(name: str, args: dict, ctx: ToolContext, entry: dict | None) -> str:
+    """Actually run the tool: registry handler, MCP call, or legacy fallback."""
     # MCP tools live outside the registry.
     if entry is None and name.startswith("mcp__"):
         try:
@@ -192,6 +189,45 @@ async def dispatch(name: str, args: dict, ctx: ToolContext) -> str:
         return await loop.run_in_executor(None, lambda: handler(args, ctx))
     except Exception as e:
         return f"Tool error in {name}: {e}"
+
+
+async def dispatch(name: str, args: dict, ctx: ToolContext) -> str:
+    """Route a Gemini function call. Async-aware, with legacy fallback.
+
+    Sensitive calls hit the approval gate BEFORE execution — including legacy
+    and MCP tools, which is why the check lives here and not in `_execute`.
+    """
+    _load_skills()
+    entry = _REGISTRY.get(name)
+
+    try:
+        from core.safety import needs_approval, describe_action
+        gated = needs_approval(name, args, entry, ctx.config)
+    except Exception:
+        gated = False
+
+    if gated:
+        from core.approvals import approvals
+        summary = describe_action(name, args)
+        timeout = float((ctx.config or {}).get("safety", {}).get("approval_timeout_s", 120))
+
+        if ctx.source == "live":
+            async def thunk(name=name, args=args, ctx=ctx, entry=entry):
+                return await _execute(name, args, ctx, entry)
+
+            pid = approvals.request_deferred(summary, name, args, thunk, timeout=timeout)
+            return (
+                f"APPROVAL_REQUIRED[{pid}]: This is a sensitive action ({summary}) and it "
+                f"has NOT run yet. Briefly tell Ihan what you're about to do and ask for a "
+                f"yes or no. If he agrees, call approve_action with action_id '{pid}' — its "
+                f"result is the real outcome. If he declines, call reject_action."
+            )
+
+        approved = await approvals.wait(summary, name, args, source=ctx.source, timeout=timeout)
+        if not approved:
+            return f"Ihan declined this action ({summary}). Do not retry it; adapt or skip."
+
+    return await _execute(name, args, ctx, entry)
 
 
 def registered_names() -> list[str]:

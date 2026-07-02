@@ -28,7 +28,12 @@ def load_config():
                         config["modes"][mode_id] = {
                             "label": mode_id.replace("_", " ").title() + " Mode",
                             "model_override": local_data.get("active_model"),
-                            "personality_override": personality
+                            "personality_override": personality,
+                            # Optional persona extras a custom mode file may define
+                            "voice_override": local_data.get("voice_override"),
+                            "speech_style": local_data.get("speech_style"),
+                            "theme": local_data.get("theme"),
+                            "avatar_idle": local_data.get("avatar_idle"),
                         }
                 except Exception as le:
                     print(f"Error loading custom mode from {filename}: {le}")
@@ -62,15 +67,19 @@ def get_mode_personality(config, base_personality):
     modes = config.get("modes", {})
     mode = modes.get(mode_id, {})
     override = mode.get("personality_override")
-    if not override:
+    style = mode.get("speech_style")
+    if not override and not style:
         return base_personality
     label = mode.get("label", mode_id)
-    return (
-        f"{base_personality}\n\n"
-        f"[ACTIVE MODE \u2014 {label}]\n"
-        f"{override}\n"
-        "All of your tools and screen-control abilities remain fully available in this mode."
-    )
+    parts = [base_personality]
+    if override:
+        parts.append(
+            f"[ACTIVE MODE \u2014 {label}]\n{override}\n"
+            "All of your tools and screen-control abilities remain fully available in this mode."
+        )
+    if style:
+        parts.append(f"[DELIVERY] {style}")
+    return "\n\n".join(parts)
 
 def get_mode_model(config):
     """Returns mode-specific model override if set, otherwise returns active_model."""
@@ -83,6 +92,22 @@ def get_mode_model(config):
 def get_active_voice(config):
     provider = config["active_provider"]
     return config["providers"][provider]["active_voice"]
+
+def get_mode_voice(config):
+    """Mode-specific voice override, else the provider's active voice."""
+    mode = config.get("modes", {}).get(get_active_mode(config), {})
+    return mode.get("voice_override") or get_active_voice(config)
+
+def get_mode_theme(config):
+    """Mode UI theme: accent color, glow level, optional shader params, idle pose."""
+    mode = config.get("modes", {}).get(get_active_mode(config), {})
+    theme = mode.get("theme") or {}
+    return {
+        "accent": theme.get("accent", "#d32f2f"),
+        "glow": float(theme.get("glow", 1.0)),
+        "coreParams": theme.get("coreParams"),
+        "avatarIdle": mode.get("avatar_idle", "standing"),
+    }
 
 def get_personality(config):
     return config["freya"]["personality"]

@@ -64,9 +64,13 @@ async def inject(text: str):
 
 
 async def emit(event_type: str, payload: dict):
-    """Broadcast a status event to the dashboard (no-op if nothing is listening)."""
-    if _emit_fn is not None:
-        try:
-            await _emit_fn(event_type, payload)
-        except Exception as e:
-            print(f"  [runtime] emit failed: {e}")
+    """Broadcast a status event to the dashboard.
+
+    Transport is the session-independent event bus (core/events.py): server.py
+    subscribes its WebSocket broadcaster once at startup, so mission progress,
+    approval requests and suggestions reach the UI even when no voice session
+    is live. `_emit_fn` is intentionally NOT called here anymore — it caused
+    every event to be delivered twice once the bus existed.
+    """
+    from core.events import bus
+    await bus.publish(event_type, payload)

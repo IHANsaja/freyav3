@@ -1,9 +1,13 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useFreyaSocket } from "./hooks/useFreyaSocket";
+import FreyaModel from "./components/FreyaModel";
 import SettingsModal from "./components/SettingsModal";
 import ActivityIndicator from "./components/ActivityIndicator";
+import ApprovalPrompt from "./components/ApprovalPrompt";
+import MissionPanel from "./components/MissionPanel";
+import SuggestionChips from "./components/SuggestionChips";
 import FreyaCore from "./components/FreyaCore";
 import CenterCaption from "./components/CenterCaption";
 import SceneStage from "./components/SceneStage";
@@ -39,23 +43,53 @@ export default function Home() {
     config,
     activeMode,
     micPaused,
-    memory,
+    memoryVersion,
+    approvals,
+    activeMission,
+    avatarIntent,
+    suggestions,
+    contextInfo,
+    persona,
     startFreya,
     stopFreya,
     setModel,
     setVoice,
     setMode,
     toggleListening,
-    saveMemory,
+    respondApproval,
+    cancelMission,
+    respondSuggestion,
   } = useFreyaSocket();
 
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+  const [embodiment, setEmbodiment] = useState<"core" | "figure">("core");
+  useEffect(() => {
+    const saved = localStorage.getItem("freya_embodiment");
+    if (saved === "figure" || saved === "core") setEmbodiment(saved);
+  }, []);
+  const toggleEmbodiment = () => {
+    const next = embodiment === "core" ? "figure" : "core";
+    setEmbodiment(next);
+    localStorage.setItem("freya_embodiment", next);
+  };
   const isRunning = state !== "idle";
   const modes =
     config?.modes && Object.keys(config.modes).length > 0 ? config.modes : FALLBACK_MODES;
 
+  // Persona theme recolors the whole UI via CSS custom properties.
+  const personaStyle = persona?.theme?.accent
+    ? ({
+        "--color-primary": persona.theme.accent,
+        "--color-primary-container": persona.theme.accent,
+        transition: "all 0.8s ease",
+      } as React.CSSProperties)
+    : undefined;
+
   return (
-    <main className="h-screen max-h-screen overflow-hidden bg-surface text-parchment flex flex-col font-sans selection:bg-primary-container/30 selection:text-parchment">
+    <main
+      className="h-screen max-h-screen overflow-hidden bg-surface text-parchment flex flex-col font-sans selection:bg-primary-container/30 selection:text-parchment"
+      style={personaStyle}
+    >
 
       {/* ─── Top Bar ─── */}
       <header className="z-40 border-b border-outline-variant/20 px-8 py-4 flex items-center justify-between bg-surface/70 backdrop-blur-md">
@@ -100,11 +134,27 @@ export default function Home() {
                 <span>MIC PAUSED</span>
               </div>
             )}
+            {contextInfo && (
+              <div className="hidden lg:flex items-center gap-1.5 max-w-[280px]">
+                <span>CTX:</span>
+                <span className="text-outline/80 truncate normal-case">
+                  {contextInfo.app.replace(/\.exe$/i, "")} — {contextInfo.title}
+                </span>
+              </div>
+            )}
           </div>
         </div>
 
         <div className="flex items-center gap-5">
           <ActivityIndicator active={isRunning} />
+          <button
+            onClick={toggleEmbodiment}
+            className="px-3 py-2 border border-outline-variant/30 hover:border-primary/50 text-[10px] font-mono tracking-widest uppercase text-outline hover:text-parchment transition-all hover:bg-surface-container-high/30"
+            title="Switch between the shader core and the humanoid figure"
+            style={{ borderRadius: "0px" }}
+          >
+            {embodiment === "core" ? "CORE" : "FIGURE"}
+          </button>
           <button
             onClick={() => setIsSettingsOpen(true)}
             className="p-2 border border-outline-variant/30 hover:border-primary/50 text-outline hover:text-parchment transition-all hover:bg-surface-container-high/30"
@@ -121,9 +171,13 @@ export default function Home() {
       {/* ─── Full-bleed Scene Stage (Freya centered) ─── */}
       <div className="flex-1 relative overflow-hidden">
 
-        {/* The 3D core fills the whole stage */}
+        {/* The 3D embodiment fills the whole stage: shader core or humanoid figure */}
         <div className="absolute inset-0">
-          <FreyaCore state={state} toolLog={toolLog} />
+          {embodiment === "figure" ? (
+            <FreyaModel state={state} avatarIntent={avatarIntent} />
+          ) : (
+            <FreyaCore state={state} avatarIntent={avatarIntent} persona={persona} />
+          )}
         </div>
 
         {/* Dynamic projection field — the globe scatters & manipulates her outputs */}
@@ -131,6 +185,15 @@ export default function Home() {
 
         {/* Live captions, layered above the canvas, centered */}
         <CenterCaption state={state} liveText={liveText} />
+
+        {/* Human-in-the-loop approval cards (above the control dock) */}
+        <ApprovalPrompt approvals={approvals} onRespond={respondApproval} />
+
+        {/* Live reasoning panel — the active mission's plan and progress */}
+        <MissionPanel mission={activeMission} onCancel={cancelMission} />
+
+        {/* Proactive suggestion chips */}
+        <SuggestionChips suggestions={suggestions} onRespond={respondSuggestion} />
 
         {/* ─── Floating control dock (bottom center) ─── */}
         <div className="absolute bottom-8 left-1/2 -translate-x-1/2 w-full max-w-[560px] px-4 pointer-events-none z-30">
@@ -208,10 +271,9 @@ export default function Home() {
         onClose={() => setIsSettingsOpen(false)}
         state={state}
         config={config}
-        memory={memory}
+        memoryVersion={memoryVersion}
         onModelChange={setModel}
         onVoiceChange={setVoice}
-        onSaveMemory={saveMemory}
       />
     </main>
   );

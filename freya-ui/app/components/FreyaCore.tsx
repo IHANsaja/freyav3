@@ -12,11 +12,16 @@ import * as THREE from "three";
 //  Fully reactive to Freya's live state and dance events.
 // ─────────────────────────────────────────────────────────
 
-type VisualState = "idle" | "listening" | "speaking" | "interrupted";
+import type { AvatarIntent } from "../hooks/useFreyaSocket";
+import type { PersonaPayload } from "../types/events";
+import { EXPRESSION_ACCENTS, ExpressionAccent } from "./avatar/manifest";
+
+type VisualState = "idle" | "listening" | "speaking" | "interrupted" | "thinking" | "working";
 
 interface FreyaCoreProps {
   state: string;
-  toolLog?: { name: string; result?: string }[];
+  avatarIntent?: AvatarIntent | null;
+  persona?: PersonaPayload | null;
 }
 
 const TARGETS: Record<VisualState, { amp: number; speed: number; glow: number; spin: number }> = {
@@ -24,6 +29,8 @@ const TARGETS: Record<VisualState, { amp: number; speed: number; glow: number; s
   listening: { amp: 0.18, speed: 0.75, glow: 0.55, spin: 0.14 },
   speaking: { amp: 0.42, speed: 1.9, glow: 1.0, spin: 0.32 },
   interrupted: { amp: 0.05, speed: 2.4, glow: 0.14, spin: 0.03 },
+  thinking: { amp: 0.08, speed: 0.5, glow: 0.35, spin: 0.04 },
+  working: { amp: 0.26, speed: 1.3, glow: 0.7, spin: 0.5 },
 };
 
 const DANCE_TARGET = { amp: 0.55, speed: 2.6, glow: 1.25, spin: 1.5 };
@@ -157,7 +164,19 @@ function useParticleGeometry(count = 1200) {
   }, [count]);
 }
 
-function CoreEntity({ visual, dancing }: { visual: VisualState; dancing: boolean }) {
+function CoreEntity({
+  visual,
+  dancing,
+  accent,
+  accentIntensity,
+  persona,
+}: {
+  visual: VisualState;
+  dancing: boolean;
+  accent: ExpressionAccent | null;
+  accentIntensity: number;
+  persona?: PersonaPayload | null;
+}) {
   const group = useRef<THREE.Group>(null!);
   const ring = useRef<THREE.Points>(null!);
 
@@ -222,7 +241,24 @@ function CoreEntity({ visual, dancing }: { visual: VisualState; dancing: boolean
 
   useFrame((_, delta) => {
     const t = (coreMat.uniforms.uTime.value += delta);
-    const target = dancing ? DANCE_TARGET : TARGETS[visual];
+    const base = dancing ? DANCE_TARGET : TARGETS[visual];
+    // Expression accents (from set_expression) bias the state targets.
+    const boost = accent
+      ? {
+          amp: accent.ampBoost * accentIntensity,
+          speed: accent.speedBoost * accentIntensity,
+          glow: accent.glowBoost * accentIntensity,
+        }
+      : { amp: 0, speed: 0, glow: 0 };
+    // Persona theme scales the whole mood: glow multiplier + core param overrides.
+    const personaGlow = persona?.theme?.glow ?? 1;
+    const coreParams = persona?.theme?.coreParams ?? {};
+    const target = {
+      amp: Math.max(0.02, (coreParams.amp ?? base.amp) + boost.amp),
+      speed: Math.max(0.1, (coreParams.speed ?? base.speed) + boost.speed),
+      glow: Math.max(0.05, (base.glow + boost.glow) * personaGlow),
+      spin: base.spin,
+    };
     const k = Math.min(1, delta * 3.2);
 
     coreMat.uniforms.uAmp.value = THREE.MathUtils.lerp(coreMat.uniforms.uAmp.value, target.amp, k);
@@ -230,6 +266,12 @@ function CoreEntity({ visual, dancing }: { visual: VisualState; dancing: boolean
     const pulse = dancing ? 1 + Math.sin(t * 6.0) * 0.25 : 1;
     coreMat.uniforms.uGlow.value = THREE.MathUtils.lerp(coreMat.uniforms.uGlow.value, target.glow * pulse, k);
     haloMat.uniforms.uGlow.value = coreMat.uniforms.uGlow.value;
+
+    // Drift the core color toward the expression accent, else the persona accent.
+    const restColor = persona?.theme?.accent ?? "#d32f2f";
+    const targetColor = accent ? new THREE.Color(accent.accent) : new THREE.Color(restColor);
+    (coreMat.uniforms.uColor.value as THREE.Color).lerp(targetColor, k * 0.6);
+    (haloMat.uniforms.uColor.value as THREE.Color).lerp(targetColor, k * 0.6);
 
     if (group.current) {
       group.current.rotation.y += delta * target.spin;
@@ -258,22 +300,49 @@ function CoreEntity({ visual, dancing }: { visual: VisualState; dancing: boolean
   );
 }
 
-export default function FreyaCore({ state, toolLog }: FreyaCoreProps) {
+export default function FreyaCore({ state, avatarIntent, persona }: FreyaCoreProps) {
   const [dancing, setDancing] = useState(false);
+  const [override, setOverride] = useState<VisualState | null>(null);
+  const [accent, setAccent] = useState<ExpressionAccent | null>(null);
+  const [accentIntensity, setAccentIntensity] = useState(0.7);
 
-  // Map the dance_for_user tool to a special shader animation sequence
+  // Avatar intents drive the core too: dance, thinking/working overlays, and
+  // expression accents (color + glow bias) — same events the 3D figure uses.
   useEffect(() => {
-    if (!toolLog || toolLog.length === 0) return;
-    const latest = toolLog[toolLog.length - 1];
-    if (latest.name === "dance_for_user" && latest.result?.startsWith("DANCING:")) {
-      setDancing(true);
-      const timer = setTimeout(() => setDancing(false), 10000);
-      return () => clearTimeout(timer);
+    if (!avatarIntent) return;
+    if (avatarIntent.intent === "state") {
+      if (avatarIntent.name === "dance") {
+        setDancing(true);
+        const timer = setTimeout(
+          () => setDancing(false),
+          avatarIntent.durationMs ?? 10000
+        );
+        return () => clearTimeout(timer);
+      }
+      if (avatarIntent.name === "thinking" || avatarIntent.name === "working") {
+        setOverride(avatarIntent.name);
+      } else {
+        setOverride(null);
+      }
+    } else if (avatarIntent.intent === "expression") {
+      const found = EXPRESSION_ACCENTS[avatarIntent.name];
+      if (found) {
+        setAccent(found);
+        setAccentIntensity(avatarIntent.intensity ?? 0.7);
+        const timer = setTimeout(() => setAccent(null), 12000);
+        return () => clearTimeout(timer);
+      }
     }
-  }, [toolLog]);
+  }, [avatarIntent]);
 
-  const visual: VisualState =
+  // Speaking/interrupted always reclaim the core from thinking/working overlays.
+  useEffect(() => {
+    if (state === "speaking" || state === "interrupted") setOverride(null);
+  }, [state]);
+
+  const sessionVisual: VisualState =
     state === "listening" || state === "speaking" || state === "interrupted" ? state : "idle";
+  const visual = override ?? sessionVisual;
 
   return (
     /* Fill the entire parent — parent must be position:relative or absolute */
@@ -291,7 +360,13 @@ export default function FreyaCore({ state, toolLog }: FreyaCoreProps) {
         dpr={[1, 2]}
         style={{ width: "100%", height: "100%", background: "transparent" }}
       >
-        <CoreEntity visual={visual} dancing={dancing} />
+        <CoreEntity
+          visual={visual}
+          dancing={dancing}
+          accent={accent}
+          accentIntensity={accentIntensity}
+          persona={persona}
+        />
         <OrbitControls enableZoom={false} enablePan={false} />
       </Canvas>
     </div>

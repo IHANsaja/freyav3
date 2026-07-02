@@ -87,46 +87,70 @@ def _declarations(spec: dict, config: dict):
     return decls
 
 
-async def _run_agent(job_id: str, agent_type: str, task: str, config: dict):
-    spec = _spec(agent_type, config)
-    ctx = ToolContext(config, session=None)  # background: no realtime session
+async def react_loop(system: str, task: str, tool_names: list[str], model: str,
+                     config: dict, ctx: ToolContext, max_steps: int = MAX_STEPS,
+                     on_tool=None) -> str:
+    """Shared ReAct executor: a background Gemini text model calling registry
+    tools until it answers in plain text. Used by quick sub-agents AND by each
+    mission step (core/missions.py). `on_tool(name, args, result)` — optional
+    async callback fired after every tool call (evidence collection, UI events).
+
+    Raises on API errors — callers decide how to phrase failures.
+    """
     client = genai.Client(api_key=get_agent_api_key())
-    decls = _declarations(spec, config)
+    decls = _declarations({"tools": tool_names}, config)
     cfg = types.GenerateContentConfig(
-        system_instruction=spec["system"],
+        system_instruction=system,
         tools=[types.Tool(function_declarations=decls)] if decls else None,
         temperature=0.4,
     )
     contents = [types.Content(role="user", parts=[types.Part(text=task)])]
 
-    final = "(no result)"
+    for _step in range(max_steps):
+        resp = await client.aio.models.generate_content(
+            model=model, contents=contents, config=cfg
+        )
+        cand = (resp.candidates or [None])[0]
+        if cand is None or cand.content is None:
+            return resp.text or "(empty response)"
+        parts = cand.content.parts or []
+        fcalls = [p.function_call for p in parts if getattr(p, "function_call", None)]
+        if not fcalls:
+            return resp.text or "Done."
+        contents.append(cand.content)
+        tool_parts = []
+        for fc in fcalls:
+            args = dict(fc.args or {})
+            result = await registry_dispatch(fc.name, args, ctx)
+            if on_tool is not None:
+                try:
+                    await on_tool(fc.name, args, str(result))
+                except Exception:
+                    pass
+            tool_parts.append(types.Part(function_response=types.FunctionResponse(
+                name=fc.name, response={"result": str(result)[:4000]})))
+        contents.append(types.Content(role="user", parts=tool_parts))
+    return "I ran out of steps before fully finishing that."
+
+
+def quota_hit(e: Exception) -> bool:
+    text = str(e).lower()
+    return "429" in text or "resource_exhausted" in text or "quota" in text
+
+
+async def _run_agent(job_id: str, agent_type: str, task: str, config: dict):
+    spec = _spec(agent_type, config)
+    ctx = ToolContext(config, session=None)  # background: no realtime session
+
+    async def on_tool(name, args, result):
+        await runtime.emit("agent", {"id": job_id, "type": agent_type,
+                                     "step": name, "status": "working"})
+
     try:
-        for _step in range(MAX_STEPS):
-            resp = await client.aio.models.generate_content(
-                model=spec["model"], contents=contents, config=cfg
-            )
-            cand = (resp.candidates or [None])[0]
-            if cand is None or cand.content is None:
-                final = resp.text or "(empty response)"
-                break
-            parts = cand.content.parts or []
-            fcalls = [p.function_call for p in parts if getattr(p, "function_call", None)]
-            if not fcalls:
-                final = resp.text or "Done."
-                break
-            contents.append(cand.content)
-            tool_parts = []
-            for fc in fcalls:
-                result = await registry_dispatch(fc.name, dict(fc.args or {}), ctx)
-                await runtime.emit("agent", {"id": job_id, "type": agent_type,
-                                             "step": fc.name, "status": "working"})
-                tool_parts.append(types.Part(function_response=types.FunctionResponse(
-                    name=fc.name, response={"result": str(result)[:4000]})))
-            contents.append(types.Content(role="user", parts=tool_parts))
-        else:
-            final = "I ran out of steps before fully finishing that."
+        final = await react_loop(spec["system"], task, spec.get("tools", []),
+                                 spec["model"], config, ctx, on_tool=on_tool)
     except Exception as e:
-        if "429" in str(e) or "resource_exhausted" in str(e).lower() or "quota" in str(e).lower():
+        if quota_hit(e):
             final = ("I hit the daily free-tier Gemini quota, so I couldn't finish. Try again "
                      "later, or add billing / a second API key to lift the limit.")
         else:

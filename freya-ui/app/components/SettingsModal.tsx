@@ -2,16 +2,17 @@
 
 import { useState, useEffect } from "react";
 import { FreyaConfig, FreyaState } from "../hooks/useFreyaSocket";
+import MemoryPanel from "./MemoryPanel";
+import SkillsPanel from "./SkillsPanel";
 
 interface SettingsModalProps {
   isOpen: boolean;
   onClose: () => void;
   state: FreyaState;
   config: FreyaConfig | null;
-  memory: string;
+  memoryVersion: number;
   onModelChange: (model: string) => void;
   onVoiceChange: (voice: string) => void;
-  onSaveMemory: (content: string) => Promise<void>;
 }
 
 export default function SettingsModal({
@@ -19,16 +20,14 @@ export default function SettingsModal({
   onClose,
   state,
   config,
-  memory,
+  memoryVersion,
   onModelChange,
   onVoiceChange,
-  onSaveMemory,
 }: SettingsModalProps) {
   const isRunning = state !== "idle";
 
   const [localModel, setLocalModel] = useState("");
   const [localVoice, setLocalVoice] = useState("");
-  const [localMemory, setLocalMemory] = useState("");
   const [saving, setSaving] = useState(false);
 
   // Sync state when props load or change
@@ -36,10 +35,6 @@ export default function SettingsModal({
     if (config?.active_model) setLocalModel(config.active_model);
     if (config?.active_voice) setLocalVoice(config.active_voice);
   }, [config]);
-
-  useEffect(() => {
-    setLocalMemory(memory);
-  }, [memory]);
 
   if (!isOpen) return null;
 
@@ -51,9 +46,6 @@ export default function SettingsModal({
       }
       if (localVoice !== config?.active_voice && !isRunning) {
         onVoiceChange(localVoice);
-      }
-      if (localMemory !== memory) {
-        await onSaveMemory(localMemory);
       }
       onClose();
     } catch (e) {
@@ -149,21 +141,22 @@ export default function SettingsModal({
             )}
           </div>
 
-          {/* LONG_TERM_SYSTEM_CONTEXT */}
+          {/* LONG_TERM_MEMORY_CORE — structured, searchable, editable */}
           <div className="flex flex-col gap-2">
             <div className="flex items-center gap-2 text-[11px] font-bold text-outline uppercase tracking-wider">
               <span>[⁝]</span>
-              <span>LONG_TERM_SYSTEM_CONTEXT</span>
+              <span>LONG_TERM_MEMORY_CORE</span>
             </div>
-            <textarea
-              value={localMemory}
-              onChange={(e) => setLocalMemory(e.target.value)}
-              spellCheck={false}
-              className="w-full h-36 bg-surface-container-lowest border border-outline-variant/40 text-on-surface text-[11px]
-                         p-4 focus:outline-none focus:border-primary-container font-mono resize-none leading-relaxed uppercase"
-              style={{ borderRadius: "0px" }}
-              placeholder="NO DIRECTIVES REGISTERED IN LONG TERM MEMORY CORE..."
-            />
+            <MemoryPanel refreshKey={memoryVersion} />
+          </div>
+
+          {/* SKILL_MODULES — capability catalog with gates */}
+          <div className="flex flex-col gap-2">
+            <div className="flex items-center gap-2 text-[11px] font-bold text-outline uppercase tracking-wider">
+              <span>⌬</span>
+              <span>SKILL_MODULES</span>
+            </div>
+            <SkillsPanel />
           </div>
         </div>
 

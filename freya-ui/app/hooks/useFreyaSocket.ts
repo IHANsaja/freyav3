@@ -1,4 +1,16 @@
 import { useEffect, useRef, useState, useCallback } from "react";
+import type {
+    ApprovalPayload,
+    AvatarIntentPayload,
+    ContextPayload,
+    MissionEventPayload,
+    MissionPayload,
+    PendingApproval,
+    PersonaPayload,
+    SuggestionPayload,
+} from "../types/events";
+
+export type AvatarIntent = AvatarIntentPayload & { seq: number };
 
 // ── Types ──
 export type FreyaState = "idle" | "listening" | "speaking" | "interrupted";
@@ -62,10 +74,17 @@ export function useFreyaSocket() {
     const [config, setConfig] = useState<FreyaConfig | null>(null);
     const [activeMode, setActiveMode] = useState<string>("default");
     const [micPaused, setMicPaused] = useState(false);
-    const [memory, setMemory] = useState<string>("");
+    const [memoryVersion, setMemoryVersion] = useState(0);
     const [connected, setConnected] = useState(false);
+    const [approvals, setApprovals] = useState<PendingApproval[]>([]);
+    const [missions, setMissions] = useState<Record<string, MissionPayload>>({});
+    const [avatarIntent, setAvatarIntent] = useState<AvatarIntent | null>(null);
+    const avatarSeq = useRef(0);
+    const [suggestions, setSuggestions] = useState<SuggestionPayload[]>([]);
+    const [contextInfo, setContextInfo] = useState<ContextPayload | null>(null);
+    const [persona, setPersona] = useState<PersonaPayload | null>(null);
 
-    // ── Fetch initial config and memory ──
+    // ── Fetch initial config ──
     useEffect(() => {
         fetch("http://localhost:8000/config")
             .then((r) => r.json())
@@ -73,11 +92,6 @@ export function useFreyaSocket() {
                 setConfig(cfg);
                 if (cfg.active_mode) setActiveMode(cfg.active_mode);
             })
-            .catch(console.error);
-
-        fetch("http://localhost:8000/memory")
-            .then((r) => r.json())
-            .then((d) => setMemory(d.content))
             .catch(console.error);
     }, []);
 
@@ -192,6 +206,48 @@ export function useFreyaSocket() {
                     setNewsItems((prev) =>
                         prev.map((it) => (it.id === msg.id ? { ...it, image: msg.image } : it))
                     );
+                } else if (msg.type === "persona") {
+                    const p = msg.payload as PersonaPayload;
+                    setPersona(p);
+                    // Persona idle pose rides the avatar intent channel.
+                    if (p.theme?.avatarIdle) {
+                        setAvatarIntent({
+                            intent: "idle",
+                            name: p.theme.avatarIdle,
+                            seq: ++avatarSeq.current,
+                        });
+                    }
+                } else if (msg.type === "memory_changed") {
+                    setMemoryVersion((v) => v + 1);
+                } else if (msg.type === "suggestion") {
+                    const p = msg.payload as SuggestionPayload;
+                    if (p.event === "created") {
+                        setSuggestions((prev) =>
+                            prev.some((s) => s.id === p.id) ? prev : [...prev.slice(-2), p]
+                        );
+                    } else {
+                        setSuggestions((prev) => prev.filter((s) => s.id !== p.id));
+                    }
+                } else if (msg.type === "context") {
+                    setContextInfo(msg.payload as ContextPayload);
+                } else if (msg.type === "avatar") {
+                    setAvatarIntent({
+                        ...(msg.payload as AvatarIntentPayload),
+                        seq: ++avatarSeq.current,
+                    });
+                } else if (msg.type === "mission") {
+                    const p = msg.payload as MissionEventPayload;
+                    setMissions((prev) => ({ ...prev, [p.mission.id]: p.mission }));
+                } else if (msg.type === "approval") {
+                    const p = msg.payload as ApprovalPayload;
+                    if (p.event === "requested") {
+                        const { event: _event, ...action } = p;
+                        setApprovals((prev) =>
+                            prev.some((a) => a.id === action.id) ? prev : [...prev, action]
+                        );
+                    } else {
+                        setApprovals((prev) => prev.filter((a) => a.id !== p.id));
+                    }
                 } else if (["agent", "browser", "schedule", "ambient", "mcp"].includes(msg.type)) {
                     // Superpower status events → surface them in the tool feed.
                     const { type, ...rest } = msg;
@@ -246,14 +302,26 @@ export function useFreyaSocket() {
         setMicPaused(next); // optimistic; server confirms via "mic"
     }, [send, micPaused]);
 
-    const saveMemory = useCallback(async (content: string) => {
-        await fetch("http://localhost:8000/memory", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ content }),
-        });
-        setMemory(content);
-    }, []);
+    const respondApproval = useCallback((id: string, approved: boolean) => {
+        send({ type: "approval_response", id, approved });
+        setApprovals((prev) => prev.filter((a) => a.id !== id)); // optimistic
+    }, [send]);
+
+    const cancelMission = useCallback((id: string) => {
+        send({ type: "mission_command", action: "cancel", id });
+    }, [send]);
+
+    const respondSuggestion = useCallback((id: string, accepted: boolean) => {
+        send({ type: "suggestion_response", id, accepted });
+        setSuggestions((prev) => prev.filter((s) => s.id !== id)); // optimistic
+    }, [send]);
+
+    // Most recent mission that is still running, else the most recent overall.
+    const missionList = Object.values(missions);
+    const activeMission =
+        missionList
+            .filter((m) => !["done", "failed", "cancelled"].includes(m.status))
+            .at(-1) ?? missionList.at(-1) ?? null;
 
     const clearTranscript = useCallback(() => setTranscript([]), []);
     const clearToolLog = useCallback(() => setToolLog([]), []);
@@ -270,7 +338,14 @@ export function useFreyaSocket() {
         config,
         activeMode,
         micPaused,
-        memory,
+        memoryVersion,
+        approvals,
+        missions,
+        activeMission,
+        avatarIntent,
+        suggestions,
+        contextInfo,
+        persona,
         // Actions
         startFreya,
         stopFreya,
@@ -278,7 +353,9 @@ export function useFreyaSocket() {
         setVoice,
         setMode,
         toggleListening,
-        saveMemory,
+        respondApproval,
+        cancelMission,
+        respondSuggestion,
         clearTranscript,
         clearToolLog,
     };

@@ -41,18 +41,25 @@ def _ensure_pkg():
 
 
 def load_custom_tools():
-    """Re-import every previously-created custom skill so it re-registers."""
+    """Re-import every previously-created custom skill so it re-registers.
+    Tools loaded here are stamped with the 'custom' skill id for the catalog."""
+    from core import registry
+    previous = registry._current_skill
+    registry._current_skill = previous or "custom"
     _ensure_pkg()
-    for name in os.listdir(_CUSTOM_DIR):
-        if name.endswith(".py") and name != "__init__.py":
-            mod = f"core.skills.custom.{name[:-3]}"
-            try:
-                if mod in sys.modules:
-                    importlib.reload(sys.modules[mod])
-                else:
-                    importlib.import_module(mod)
-            except Exception as e:
-                print(f"  [self_extend] couldn't load custom tool {name}: {e}")
+    try:
+        for name in os.listdir(_CUSTOM_DIR):
+            if name.endswith(".py") and name != "__init__.py":
+                mod = f"core.skills.custom.{name[:-3]}"
+                try:
+                    if mod in sys.modules:
+                        importlib.reload(sys.modules[mod])
+                    else:
+                        importlib.import_module(mod)
+                except Exception as e:
+                    print(f"  [self_extend] couldn't load custom tool {name}: {e}")
+    finally:
+        registry._current_skill = previous
 
 
 @tool(
