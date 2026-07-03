@@ -15,11 +15,11 @@ export interface OrbFx {
   paused: number;
   /** Set to 1 on mode switch; decays each frame for a brief hue flash. */
   modeFlash: number;
-  /** Set to 1 on avatar expression change; decays each frame. Dissolves the
-   *  solid/wireframe shell while the points layer shimmers/swells along the
-   *  sphere's silhouette, so the orb reads as "made of particles" (still
-   *  globe-shaped) and settles back into a solid globe as the new
-   *  expression's accent color arrives via moodRef. */
+  /** One-shot trigger: set to 1 on avatar expression change; the Orb
+   *  consumes it and runs an attack→hold→decay envelope — the shell
+   *  dissolves while the points layer visibly scatters outward (still
+   *  globe-shaped), hovers, then reforms as the new expression's accent
+   *  color arrives via moodRef. */
   expressionBurst: number;
 }
 
@@ -134,8 +134,11 @@ void main() {
 `;
 
 const POINTS_VERTEX = `
-uniform float uPointSize; // sprite size at reference depth
-uniform float uBurst;     // 0→1 loosens the points into a shimmering shell
+uniform float uPointSize;  // sprite size at reference depth
+uniform float uBurst;      // scatter envelope: 0 (formed) → 1 (fully scattered) → 0
+uniform float uBurstTime;  // seconds since the burst fired — drives turbulence phase
+attribute vec3 aDir;       // per-particle flight direction (radial + random jitter)
+attribute vec4 aRand;      // per-particle randoms: x=distance y=size z/w=turbulence phase
 varying float vDisp;
 ${NOISE_GLSL}
 ${DISPLACE_GLSL}
@@ -144,17 +147,26 @@ void main() {
   float disp;
   vec3 p = displaced(position, disp) * 1.015; // sit just above the surface
   vDisp = disp;
-  // Expression-change burst: the shell loosens into a shimmering skin of
-  // particles that still traces the sphere's silhouette — a small radial
-  // swell, not an explosion — so it reads as "the globe made of particles,"
-  // not a scatter into the background dust field. uBurst decays
-  // exponentially on the JS side so it settles back into a solid globe as
-  // the new expression's color arrives.
-  vec3 dir = normalize(position);
-  float shimmer = 0.06 + abs(disp) * 0.14;
-  p += dir * uBurst * shimmer;
+  // ── GPU scatter ──────────────────────────────────────────────────────
+  // Each particle owns a randomized flight direction (aDir) and distance
+  // (aRand.x), so the globe blows apart into a genuine cloud instead of a
+  // uniform shell inflation. While airborne, three offset simplex fields
+  // add curl-ish turbulence so the cloud swirls organically. The envelope
+  // (uBurst) both drives the flight and pulls every particle back to its
+  // home vertex, reforming the globe in the new expression's color. Max
+  // travel ~0.8 units keeps the cloud clear of the background dust field.
+  float dist = (0.15 + aRand.x * 0.4) * uBurst;
+  vec3 turb = vec3(
+    snoise(position * 2.3 + vec3(uBurstTime * 1.4 + aRand.z * 17.0, 0.0, 0.0)),
+    snoise(position * 2.3 + vec3(0.0, uBurstTime * 1.4 + aRand.w * 13.0, 0.0)),
+    snoise(position * 2.3 + vec3(0.0, 0.0, uBurstTime * 1.4 + aRand.y * 11.0))
+  );
+  p += aDir * dist + turb * 0.1 * uBurst;
   vec4 mv = modelViewMatrix * vec4(p, 1.0);
-  gl_PointSize = uPointSize * (1.0 + max(disp, 0.0)) * (1.0 + uBurst * 1.3) * (4.0 / max(-mv.z, 0.5));
+  // At rest the points are a faint dusting (the solid shell carries the
+  // look); during the burst they swell into the visible particle cloud.
+  float sizeEnv = mix(0.55, 1.7 + aRand.y * 1.5, uBurst);
+  gl_PointSize = uPointSize * (1.0 + max(disp, 0.0)) * sizeEnv * (4.0 / max(-mv.z, 0.5));
   gl_Position = projectionMatrix * mv;
 }
 `;
@@ -171,10 +183,10 @@ void main() {
   float d = length(uv);
   if (d > 0.5) discard;
   float soft = smoothstep(0.5, 0.0, d);
-  vec3 col = uColor * (0.55 + uGlow * 0.8 + max(vDisp, 0.0) * 0.5 + uBurst * 1.3);
+  vec3 col = uColor * (0.55 + uGlow * 0.8 + max(vDisp, 0.0) * 0.5 + uBurst * 0.7);
   float luma = dot(col, vec3(0.299, 0.587, 0.114));
   col = mix(col, vec3(luma), uPaused * 0.7);
-  gl_FragColor = vec4(col, soft * mix(0.6, 0.9, uBurst));
+  gl_FragColor = vec4(col, soft * mix(0.35, 1.0, uBurst));
 }
 `;
 
@@ -191,6 +203,8 @@ interface OrbProps {
 export default function Orb({ moodRef, fxRef, position = [0, 0.45, 0] }: OrbProps) {
   const group = useRef<THREE.Group>(null!);
   const timeRef = useRef(0);
+  // Elapsed seconds since the last expression burst fired; -1 = idle.
+  const burstClock = useRef(-1);
 
   const uniforms = useMemo(
     () => ({
@@ -205,6 +219,7 @@ export default function Orb({ moodRef, fxRef, position = [0, 0.45, 0] }: OrbProp
       uPaused: { value: 0 },
       uModeFlash: { value: 0 },
       uBurst: { value: 0 },
+      uBurstTime: { value: 0 },
       uOpacity: { value: 1 },
       uPointSize: { value: 5 },
     }),
@@ -219,6 +234,9 @@ export default function Orb({ moodRef, fxRef, position = [0, 0.45, 0] }: OrbProp
         fragmentShader: ORB_FRAGMENT,
         transparent: true,
         toneMapped: false,
+        // No depth write: when the shell fades out during the expression
+        // burst it must not occlude the particle cloud behind it.
+        depthWrite: false,
       }),
     [uniforms]
   );
@@ -248,13 +266,48 @@ export default function Orb({ moodRef, fxRef, position = [0, 0.45, 0] }: OrbProp
     [uniforms]
   );
 
+  // Scatter geometry: sphere vertices plus per-particle flight attributes.
+  // Directions are mostly radial with random jitter so the burst puffs into
+  // a cloud (not spikes); aRand feeds distance/size/turbulence-phase.
+  const burstGeo = useMemo(() => {
+    const geo = new THREE.IcosahedronGeometry(0.9, 5);
+    const posAttr = geo.attributes.position;
+    const count = posAttr.count;
+    const aDir = new Float32Array(count * 3);
+    const aRand = new Float32Array(count * 4);
+    const v = new THREE.Vector3();
+    for (let i = 0; i < count; i++) {
+      v.set(posAttr.getX(i), posAttr.getY(i), posAttr.getZ(i))
+        .normalize()
+        .add(
+          new THREE.Vector3(
+            (Math.random() - 0.5) * 0.9,
+            (Math.random() - 0.5) * 0.9,
+            (Math.random() - 0.5) * 0.9
+          )
+        )
+        .normalize();
+      aDir[i * 3] = v.x;
+      aDir[i * 3 + 1] = v.y;
+      aDir[i * 3 + 2] = v.z;
+      aRand[i * 4] = Math.random();
+      aRand[i * 4 + 1] = Math.random();
+      aRand[i * 4 + 2] = Math.random();
+      aRand[i * 4 + 3] = Math.random();
+    }
+    geo.setAttribute("aDir", new THREE.BufferAttribute(aDir, 3));
+    geo.setAttribute("aRand", new THREE.BufferAttribute(aRand, 4));
+    return geo;
+  }, []);
+
   useEffect(
     () => () => {
       solidMat.dispose();
       wireMat.dispose();
       pointsMat.dispose();
+      burstGeo.dispose();
     },
-    [solidMat, wireMat, pointsMat]
+    [solidMat, wireMat, pointsMat, burstGeo]
   );
 
   useFrame((_, delta) => {
@@ -277,11 +330,29 @@ export default function Orb({ moodRef, fxRef, position = [0, 0.45, 0] }: OrbProp
     fx.modeFlash *= Math.pow(0.05, delta); // ~95% decay per second-ish, frame-rate independent
     uniforms.uModeFlash.value = fx.modeFlash;
 
-    // Expression-change burst: instant scatter, ~1.5–2s exponential reform —
-    // by the time it settles, mood.color has already drifted toward the new
-    // expression's accent (see useSceneMood), so it reforms in the new hue.
-    fx.expressionBurst *= Math.pow(0.2, delta);
-    uniforms.uBurst.value = fx.expressionBurst;
+    // Expression-change burst: consume the one-shot trigger, then run an
+    // attack→hold→decay envelope so the scatter is a visible motion, not a
+    // single-frame jump — particles fly out over ~0.25s, hover ~0.4s, then
+    // ease back over ~1.5s. By the time the globe reforms, mood.color has
+    // already drifted toward the new expression's accent (see useSceneMood),
+    // so it reassembles in the new hue.
+    if (fx.expressionBurst > 0) {
+      burstClock.current = 0;
+      fx.expressionBurst = 0;
+    }
+    if (burstClock.current >= 0) {
+      burstClock.current += delta;
+      const t = burstClock.current;
+      const rise = THREE.MathUtils.smoothstep(t, 0, 0.25);
+      const fall = t < 0.7 ? 1 : Math.exp(-(t - 0.7) * 1.4);
+      const env = rise * fall;
+      uniforms.uBurst.value = env;
+      uniforms.uBurstTime.value = t;
+      if (t > 1 && env < 0.02) {
+        burstClock.current = -1;
+        uniforms.uBurst.value = 0;
+      }
+    }
 
     // Rotation: slow Y spin + subtle X wobble; halts while imploded/paused.
     const motion = (1 - uniforms.uImplode.value) * pauseScale;
@@ -299,9 +370,9 @@ export default function Orb({ moodRef, fxRef, position = [0, 0.45, 0] }: OrbProp
       <mesh material={wireMat} scale={1.02}>
         <icosahedronGeometry args={[0.9, 3]} />
       </mesh>
-      <points material={pointsMat}>
-        <icosahedronGeometry args={[0.9, 4]} />
-      </points>
+      {/* ~10k particles with per-particle flight attributes: the globe's
+          skin at rest, a swirling scatter cloud during expression bursts. */}
+      <points material={pointsMat} geometry={burstGeo} />
     </group>
   );
 }

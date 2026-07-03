@@ -41,14 +41,14 @@ const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v
 // independent random placement — so concurrent projections can never stack on
 // top of each other regardless of how many happen to hash close together.
 const LEFT_SLOTS: { x: number; y: number }[] = [
-  { x: 0.15, y: 0.20 },
-  { x: 0.10, y: 0.48 },
-  { x: 0.16, y: 0.76 },
+  { x: 0.18, y: 0.20 },
+  { x: 0.15, y: 0.48 },
+  { x: 0.19, y: 0.76 },
 ];
 const RIGHT_SLOTS: { x: number; y: number }[] = [
-  { x: 0.85, y: 0.20 },
-  { x: 0.90, y: 0.48 },
-  { x: 0.84, y: 0.76 },
+  { x: 0.82, y: 0.20 },
+  { x: 0.85, y: 0.48 },
+  { x: 0.81, y: 0.76 },
 ];
 
 // slotIndex: this projection's position among CURRENTLY VISIBLE ones (0-based).
@@ -89,6 +89,8 @@ const TOOL_ICON: Record<string, string> = {
   control_element: "🖱️", click_element: "🖱️", click_text: "🖱️",
   recall: "🧠", index_folder: "🧠", browser_task: "🌐",
   dispatch_agent: "🤖", schedule_task: "⏰", watch_screen: "👁️",
+  mission: "🛰️", agent: "🤖", browser: "🌐", schedule: "⏰",
+  ambient: "👁️", mcp: "🔌",
 };
 
 export default function SceneStage({

@@ -1,7 +1,8 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
-import { useFreyaSocket } from "./hooks/useFreyaSocket";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useFreyaSocket, type ToolEntry, type NewsItem } from "./hooks/useFreyaSocket";
+import SceneStage from "./components/SceneStage";
 import { useEngineStatus } from "./hooks/useEngineStatus";
 import SettingsModal from "./components/SettingsModal";
 import ApprovalPrompt from "./components/ApprovalPrompt";
@@ -38,6 +39,9 @@ export default function Home() {
     state,
     connected,
     liveText,
+    toolLog,
+    images,
+    newsItems,
     config,
     activeMode,
     micPaused,
@@ -77,6 +81,45 @@ export default function Home() {
     orbFxRef.current.paused = status.engine === "paused" ? 1 : 0;
   }, [status.engine]);
 
+  // Missions surface in the projection field too: every status/step change
+  // becomes a synthetic tool entry so mission execution is visible on the
+  // hologram stage alongside real tool calls and sub-agent activity.
+  const [missionFeed, setMissionFeed] = useState<ToolEntry[]>([]);
+  const missionFingerprint = useRef("");
+  const missionFeedId = useRef(0);
+  useEffect(() => {
+    if (!activeMission) return;
+    const fp = `${activeMission.id}|${activeMission.status}|${activeMission.steps
+      .map((s) => s.status)
+      .join(",")}`;
+    if (fp === missionFingerprint.current) return;
+    missionFingerprint.current = fp;
+    const running = activeMission.steps.find(
+      (s) => s.status === "running" || s.status === "verifying" || s.status === "awaiting_approval"
+    );
+    const detail = running ? `▶ ${running.title}` : activeMission.status.toUpperCase();
+    missionFeedId.current += 1;
+    // Entry is built eagerly — inside the updater the counter ref would have
+    // already advanced past queued sibling calls, minting duplicate ids.
+    const entry: ToolEntry = {
+      // Timestamp+counter id: never collides with the socket's small
+      // incrementing toolLog ids, with itself across same-ms calls, or
+      // with surviving state after a Fast Refresh resets the counter.
+      id: Date.now() + missionFeedId.current,
+      name: "mission",
+      args: {},
+      result: `${activeMission.goal} — ${detail}`,
+      timestamp: new Date(),
+    };
+    setMissionFeed((f) => [...f.slice(-2), entry]);
+  }, [activeMission]);
+
+  // Everything Freya does feeds the hologram stage: tool calls + sub-agent /
+  // browser / schedule / mcp events (already in toolLog) + mission updates.
+  const stageLog = useMemo(() => [...toolLog, ...missionFeed], [toolLog, missionFeed]);
+  const [debugNews, setDebugNews] = useState<NewsItem[]>([]);
+  const stageNews = useMemo(() => [...newsItems, ...debugNews], [newsItems, debugNews]);
+
   // Avatar gesture intents surface as ANIMATE TRANSITION telemetry.
   useEffect(() => {
     if (!avatarIntent || avatarIntent.intent !== "gesture") return;
@@ -107,11 +150,34 @@ export default function Home() {
     });
   }, []);
 
-  // TEMP DEBUG — manual trigger for verifying the burst visually without a
-  // live backend. Removed before this change ships.
+  // Dev preview hooks: expressions/tools/news normally arrive from the
+  // backend, so with server.py offline these let you see the stage react.
+  // From the browser console:
+  //   __debugExpr('joyful' | 'warm' | 'playful' | 'focused' | 'stern' |
+  //               'curious' | 'calm' | 'alert')
+  //   __debugTool('browser_task', 'Scanning arxiv for new papers…')
+  //   __debugNews('Global markets rally 4.2% on AI optimism', 'Reuters')
   useEffect(() => {
-    (window as unknown as { __debugExpr?: (n: string) => void }).__debugExpr = (name: string) =>
+    const w = window as unknown as {
+      __debugExpr?: (n: string) => void;
+      __debugTool?: (name: string, result: string) => void;
+      __debugNews?: (title: string, source?: string) => void;
+      __debugFx?: (patch: Partial<OrbFx>) => void;
+    };
+    // e.g. __debugFx({ implode: 0 }) to un-collapse the orb while STANDBY.
+    w.__debugFx = (patch) => Object.assign(orbFxRef.current, patch);
+    w.__debugExpr = (name: string) =>
       handleExpression({ name, intensity: 0.9, accent: EXPRESSION_ACCENTS[name] ?? EXPRESSION_ACCENTS.joyful });
+    w.__debugTool = (name: string, result: string) => {
+      missionFeedId.current += 1;
+      const entry: ToolEntry = { id: Date.now() + missionFeedId.current, name, args: {}, result, timestamp: new Date() };
+      setMissionFeed((f) => [...f.slice(-2), entry]);
+    };
+    w.__debugNews = (title: string, source = "WIRE") => {
+      missionFeedId.current += 1;
+      const item: NewsItem = { id: Date.now() + missionFeedId.current, title, source, image: null, logo: null, timestamp: new Date() };
+      setDebugNews((n) => [...n.slice(-2), item]);
+    };
   }, [handleExpression]);
 
   const handleSelectMode = useCallback(
@@ -206,6 +272,9 @@ export default function Home() {
                 </p>
               </div>
             )}
+            {/* Holographic projection field: news, screen captures, tool
+                calls, sub-agents, and mission steps beam out of the orb */}
+            <SceneStage toolLog={stageLog} images={images} newsItems={stageNews} />
             <CenterCaption state={state} liveText={liveText} />
           </CenterStage>
 
