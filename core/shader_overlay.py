@@ -184,11 +184,32 @@ void main(){
       col += hot * max(hx, hy) * fade;
     }
     else {
-      // ── SCAN: full-screen sweep line with tick marks ──
-      float ys = age * u_res.y;
-      float sl = ln(abs(px.y - ys), 1.8);
-      float tick = step(0.92, fract(px.x / 80.0)) * ln(abs(px.y - ys), 5.0);
-      col += crim * (sl + tick * 0.6) * (1.0 - age / LIFE_C);
+      // ── SCAN: a capture frame snaps onto the WHOLE screen — corner
+      // brackets pull inward from a wide margin to a tight one plus a thin
+      // connecting outline, like a camera viewfinder locking focus and
+      // firing its shutter. Reads as "I just looked at your screen" rather
+      // than a passive sweep.
+      float snap = smoothstep(0.0, 0.22, age);
+      float m = mix(70.0, 22.0, snap);                  // margin from true edge
+      float arm = mix(36.0, 96.0, snap);                // bracket arm, grows in
+      float L = m, T = m, Rr = u_res.x - m, B = u_res.y - m;
+
+      float d = 1e9;
+      d = min(d, sdSeg(px, vec2(L,T),  vec2(L+arm,T)));   d = min(d, sdSeg(px, vec2(L,T),  vec2(L,T+arm)));
+      d = min(d, sdSeg(px, vec2(Rr,T), vec2(Rr-arm,T)));  d = min(d, sdSeg(px, vec2(Rr,T), vec2(Rr,T+arm)));
+      d = min(d, sdSeg(px, vec2(L,B),  vec2(L+arm,B)));   d = min(d, sdSeg(px, vec2(L,B),  vec2(L,B-arm)));
+      d = min(d, sdSeg(px, vec2(Rr,B), vec2(Rr-arm,B)));  d = min(d, sdSeg(px, vec2(Rr,B), vec2(Rr,B-arm)));
+
+      float br = ln(d, 2.5);
+      float glow = exp(-d * 0.05) * 0.10;
+      col += (crim * br * flash + crim * glow) * fade;
+
+      // Faint outline connecting the corners into a full frame.
+      float edgeDist = min(min(abs(px.x - L), abs(px.x - Rr)), min(abs(px.y - T), abs(px.y - B)));
+      col += hot * ln(edgeDist, 1.2) * 0.30 * fade;
+
+      // Brief overall brighten right at capture, like a shutter flash.
+      col += crim * (1.0 - smoothstep(0.0, 0.12, age)) * 0.05;
     }
   }
 

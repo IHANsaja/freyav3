@@ -107,12 +107,14 @@ export function useFreyaSocket() {
 
             socket.onclose = () => {
                 setConnected(false);
-                console.log("Freya WebSocket disconnected, retrying in 2s...");
+                console.log("Freya backend offline (is server.py running?) — retrying in 2s...");
                 setTimeout(connect, 2000); // auto-reconnect
             };
 
-            socket.onerror = (e) => {
-                console.error("WebSocket error", e);
+            // Expected while the backend is down (we retry via onclose) —
+            // console.warn keeps it out of the Next.js dev-overlay issue count.
+            socket.onerror = () => {
+                console.warn("Freya WebSocket connection failed — will retry.");
             };
 
             const flushFreyaBuffer = () => {

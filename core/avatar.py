@@ -29,9 +29,8 @@ async def _emit(ctx, payload: dict) -> None:
 @tool(
     "set_expression",
     "Set your avatar's emotional expression so your body language matches your words. "
-    f"Expressions: {', '.join(EXPRESSIONS)}. Use sparingly at genuine emotional beats, "
-    "not every sentence.",
-    OBJ({"expression": P(STR, f"One of: {', '.join(EXPRESSIONS)}"),
+    "Use sparingly at genuine emotional beats, not every sentence.",
+    OBJ({"expression": P(STR, "Your avatar's expression", enum=EXPRESSIONS),
          "intensity": P(NUM, "0.0-1.0, default 0.7")},
         ["expression"]),
 )
@@ -47,8 +46,8 @@ async def set_expression(args, ctx) -> str:
 @tool(
     "set_gesture",
     "Play a one-shot body gesture on your avatar to punctuate what you're saying. "
-    f"Gestures: {', '.join(GESTURES)}. It plays once and returns to your current pose.",
-    OBJ({"gesture": P(STR, f"One of: {', '.join(GESTURES)}")}, ["gesture"]),
+    "It plays once and returns to your current pose.",
+    OBJ({"gesture": P(STR, "The gesture to play", enum=GESTURES)}, ["gesture"]),
 )
 async def set_gesture(args, ctx) -> str:
     name = str(args.get("gesture", "")).lower().strip()
@@ -62,7 +61,7 @@ async def set_gesture(args, ctx) -> str:
     "set_idle_state",
     "Change your avatar's resting posture. States: standing (default), seated "
     "(relaxed night-time presence), attentive (leaning in, focused on Ihan).",
-    OBJ({"state": P(STR, f"One of: {', '.join(IDLE_STATES)}")}, ["state"]),
+    OBJ({"state": P(STR, "The idle posture", enum=IDLE_STATES)}, ["state"]),
 )
 async def set_idle_state(args, ctx) -> str:
     name = str(args.get("state", "")).lower().strip()
@@ -103,9 +102,8 @@ async def trigger_listening(args, ctx) -> str:
 
 @tool(
     "animate_transition",
-    "Play a dramatic transition animation (persona/mode changes, big reveals). "
-    f"Styles: {', '.join(TRANSITIONS)}.",
-    OBJ({"style": P(STR, f"One of: {', '.join(TRANSITIONS)} (default flourish)")}),
+    "Play a dramatic transition animation (persona/mode changes, big reveals).",
+    OBJ({"style": P(STR, "Transition style (default flourish)", enum=TRANSITIONS)}),
 )
 async def animate_transition(args, ctx) -> str:
     style = str(args.get("style", "flourish")).lower().strip()

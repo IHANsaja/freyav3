@@ -18,6 +18,14 @@ export interface AvatarModelManifest {
     gestures: Record<string, string>;
     /** Bone node names for the procedural layer (breathing, look-at) */
     bones: { head: string; neck: string; spine: string[] };
+    /** Camera framing tuned to this model's real proportions (world units,
+     *  post scale+yOffset) — each model has a different bind-pose size, so a
+     *  single global camera cannot frame all of them correctly. */
+    camera: { position: [number, number, number]; fov: number; target?: [number, number, number] };
+    /** Optional alternate framing for the HoloScene HUD (slightly elevated,
+     *  wider to show the holo platform beneath the model). Falls back to
+     *  `camera` when absent. */
+    hudCamera?: { position: [number, number, number]; fov: number; target?: [number, number, number] };
 }
 
 export const AVATAR_MODELS: Record<string, AvatarModelManifest> = {
@@ -50,6 +58,13 @@ export const AVATAR_MODELS: Record<string, AvatarModelManifest> = {
             transition_flourish: "Celebrate",
         },
         bones: { head: "spine.006", neck: "spine.005", spine: ["spine.001", "spine.002", "spine.003"] },
+        // Measured bind-pose bbox: feet y=0, head y=1.899 (before yOffset centers it
+        // to -0.95..0.95). Distance/fov fit-to-view: half-height 0.95 with ~35% margin
+        // (room for raised-arm gestures like Celebrate) at fov 50 -> d ~= 2.8.
+        camera: { position: [0, 0.05, 2.8], fov: 50, target: [0, 0, 0] },
+        // Slightly elevated + pulled back so the holo platform reads under her
+        // feet without clipping the raised-arm gesture headroom above.
+        hudCamera: { position: [0, 0.35, 3.2], fov: 45, target: [0, -0.1, 0] },
     },
     freya: {
         url: "/models/Freya.glb",
@@ -90,6 +105,8 @@ export const AVATAR_MODELS: Record<string, AvatarModelManifest> = {
             transition_flourish: "Magic_Genie",
         },
         bones: { head: "Head", neck: "neck", spine: ["Spine01", "Spine02"] },
+        // Preserves the original hand-tuned camera this model always used.
+        camera: { position: [0, 0.2, 3], fov: 60, target: [0, 0, 0] },
     },
 };
 

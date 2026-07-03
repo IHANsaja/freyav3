@@ -7,12 +7,20 @@ it a natural-language task ("find the cheapest flight to Tokyo next month and th
 runs in the background and reports the answer out loud via the proactive channel.
 
 The browser agent uses its own Gemini model (ChatGoogle) so it can read page screenshots/DOM
-independently of the live voice model. Heavy + slow, so it always runs as a background task.
+independently of the live voice model. Heavy + slow, so it always runs as a background task —
+AND on its own OS thread with its own asyncio event loop (see `_run_browser_thread`). This
+isolation matters: browser-use's CDP screenshot/DOM extraction can stall for 10+ seconds under
+load (observed directly in logs — ScreenshotWatchdog handler timeouts), and if that work ran on
+the SAME event loop as the live voice session (as it did before), those stalls starved the
+mic/speaker scheduling and Gemini Live's receive loop, causing audible lag or dead air. Running
+it on a dedicated loop means it can stall all it wants without ever blocking audio; the only
+cross-thread traffic is two small status callbacks marshaled back via run_coroutine_threadsafe.
 """
 
 import asyncio
 import itertools
 import os
+import threading
 
 from config import get_agent_api_key
 from core import runtime
@@ -29,13 +37,27 @@ def _is_quota(text) -> bool:
     return "429" in t or "resource_exhausted" in t or "quota" in t
 
 
-async def _run_browser(job_id: str, task: str, config: dict):
+def _emit_threadsafe(main_loop: asyncio.AbstractEventLoop, coro):
+    """Fire an async runtime call from the worker thread onto the main loop.
+    Fire-and-forget: we don't block the worker thread waiting for the result."""
+    try:
+        asyncio.run_coroutine_threadsafe(coro, main_loop)
+    except Exception as e:
+        print(f"  [browser_agent] cross-loop emit failed: {e}")
+
+
+def _run_browser_thread(job_id: str, task: str, config: dict, main_loop: asyncio.AbstractEventLoop):
+    """Entry point for the dedicated worker thread. Creates its OWN event loop
+    (Proactor, per server.py's process-wide policy) so Playwright/CDP can do
+    whatever blocking-ish async work it needs without ever touching the loop
+    that owns the live voice session."""
     bcfg = (config or {}).get("browser", {})
     model = bcfg.get("llm_model", "gemini-2.5-flash")
     fallback_model = bcfg.get("fallback_model", "gemini-2.5-flash-lite")
     max_steps = int(bcfg.get("max_steps", 25))
     result = "(no result)"
-    try:
+
+    async def _do_run():
         from browser_use import Agent, ChatGoogle
         key = get_agent_api_key()  # secondary key — spares the voice quota
         os.environ.setdefault("GOOGLE_API_KEY", key)
@@ -54,8 +76,12 @@ async def _run_browser(job_id: str, task: str, config: dict):
         except TypeError:
             agent = Agent(task=task, llm=llm)
 
-        await runtime.emit("browser", {"id": job_id, "status": "running", "task": task})
+        _emit_threadsafe(main_loop, runtime.emit("browser", {"id": job_id, "status": "running", "task": task}))
         history = await agent.run(max_steps=max_steps)
+        return history
+
+    try:
+        history = asyncio.run(_do_run())
         try:
             final = history.final_result()
         except Exception:
@@ -70,15 +96,17 @@ async def _run_browser(job_id: str, task: str, config: dict):
         result = _QUOTA if _is_quota(e) else f"The browser agent hit an error: {e}"
 
     _jobs[job_id].update(status="done", result=result)
-    await runtime.emit("browser", {"id": job_id, "status": "done"})
+    _emit_threadsafe(main_loop, runtime.emit("browser", {"id": job_id, "status": "done"}))
     if result == _QUOTA:
-        await runtime.inject(
-            "I couldn't finish browsing — I've hit the daily free-tier quota on the Gemini API "
+        _emit_threadsafe(main_loop, runtime.inject(
+            "I couldn't finish browsing — I've hit the free-tier quota on the Gemini API "
             "for web tasks. Tell Ihan: try again later, or add billing / a second API key to lift "
             "the limit. For quick facts I can still read the news instead."
-        )
+        ))
     else:
-        await runtime.inject(f"The browser finished your task '{task}'. Result: {str(result)[:1200]}")
+        _emit_threadsafe(main_loop, runtime.inject(
+            f"The browser finished your task '{task}'. Result: {str(result)[:1200]}"
+        ))
 
 
 @tool(
@@ -100,6 +128,10 @@ async def browser_task(args, ctx) -> str:
         return "Give me a web task to do."
     job_id = f"web-{next(_counter)}"
     _jobs[job_id] = {"task": task, "status": "running", "result": None}
-    asyncio.create_task(_run_browser(job_id, task, ctx.config))
+    main_loop = asyncio.get_running_loop()
+    threading.Thread(
+        target=_run_browser_thread, args=(job_id, task, ctx.config, main_loop),
+        daemon=True, name=f"browser-agent-{job_id}",
+    ).start()
     return (f"On it — I've opened a browser and started working on: {task}. "
             "I'll tell you what I find when it's done.")

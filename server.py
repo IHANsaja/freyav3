@@ -14,6 +14,28 @@ from fastapi.responses import JSONResponse
 if sys.platform == "win32":
     asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
 
+# Browsers attach every cookie stored for 'localhost' to the WebSocket handshake
+# (the cookie jar is shared across ALL localhost ports, so other dev tools count).
+# The websockets library rejects any header line over 8 KiB, which uvicorn surfaces
+# as an endless "connection rejected (400 Bad Request)" loop. Raise the limits so a
+# fat cookie jar can't break the dashboard connection. Note: the effective cap is
+# 32 KiB — the legacy reader's StreamReader line buffer (read_limit // 2) — which
+# is still 4x the default failure point. If a handshake ever exceeds that, clear
+# cookies for 'localhost' in the browser.
+os.environ.setdefault("WEBSOCKETS_MAX_LINE_LENGTH", str(64 * 1024))
+os.environ.setdefault("WEBSOCKETS_MAX_NUM_HEADERS", "512")
+try:
+    import websockets.http11 as _ws_http11
+    _ws_http11.MAX_LINE_LENGTH = 64 * 1024
+    _ws_http11.MAX_NUM_HEADERS = 512
+    # uvicorn's default 'websockets' implementation parses the handshake with the
+    # legacy module, which has its own copies of these constants.
+    import websockets.legacy.http as _ws_legacy_http
+    _ws_legacy_http.MAX_LINE_LENGTH = 64 * 1024
+    _ws_legacy_http.MAX_NUM_HEADERS = 512
+except Exception:
+    pass
+
 from contextlib import asynccontextmanager
 
 from config import load_config, get_api_key, get_active_model, get_active_voice, get_personality

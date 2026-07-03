@@ -35,13 +35,32 @@ function mulberry32(a: number) {
 }
 const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v));
 
-// stable scatter: offset from center, clear of the globe + header + dock
-function place(seed: number) {
+// Fixed, non-overlapping anchor slots (3 per side, generously spaced so a
+// ~250px-wide, up to ~260px-tall card never touches its neighbor). Cards are
+// assigned a slot by their position in the sorted projection list — NOT by
+// independent random placement — so concurrent projections can never stack on
+// top of each other regardless of how many happen to hash close together.
+const LEFT_SLOTS: { x: number; y: number }[] = [
+  { x: 0.15, y: 0.20 },
+  { x: 0.10, y: 0.48 },
+  { x: 0.16, y: 0.76 },
+];
+const RIGHT_SLOTS: { x: number; y: number }[] = [
+  { x: 0.85, y: 0.20 },
+  { x: 0.90, y: 0.48 },
+  { x: 0.84, y: 0.76 },
+];
+
+// slotIndex: this projection's position among CURRENTLY VISIBLE ones (0-based).
+// Alternates left/right; small seeded jitter keeps it feeling organic without
+// risking a collision (slots are ~0.28 apart vertically, jitter is +/-0.015).
+function place(seed: number, slotIndex: number) {
+  const slots = slotIndex % 2 === 0 ? LEFT_SLOTS : RIGHT_SLOTS;
+  const slot = slots[Math.floor(slotIndex / 2) % slots.length];
   const r = mulberry32(seed);
-  const side = r() < 0.5 ? -1 : 1;
-  const x = 0.5 + side * (0.27 + r() * 0.12); // -> ~0.11–0.39 or 0.61–0.89
-  const y = 0.17 + r() * 0.60;                // -> 0.17–0.77
-  return { x: clamp(x, 0.09, 0.91), y: clamp(y, 0.15, 0.80) };
+  const jitterX = (r() - 0.5) * 0.03;
+  const jitterY = (r() - 0.5) * 0.03;
+  return { x: clamp(slot.x + jitterX, 0.06, 0.94), y: clamp(slot.y + jitterY, 0.14, 0.82) };
 }
 
 // wrap numbers inside a headline with animated LiveFigures
@@ -117,6 +136,11 @@ export default function SceneStage({
   const cx = size.w / 2;
   const cy = size.h / 2;
 
+  // Positions computed ONCE per render and reused for both the beam SVG and
+  // the card divs, so a beam always points exactly at its own card and both
+  // loops agree on the same collision-free slot assignment.
+  const placed = projections.map((p, i) => ({ p, pos: place(hashStr(p.key), i) }));
+
   return (
     <div ref={ref} className="absolute inset-0 pointer-events-none overflow-hidden">
       {/* Energy beams: globe (center) -> each projection */}
@@ -129,10 +153,9 @@ export default function SceneStage({
               <stop offset="100%" stopColor="#ffb3ac" stopOpacity="0.9" />
             </linearGradient>
           </defs>
-          {projections.map((p) => {
-            const { x, y } = place(hashStr(p.key));
-            const ax = x * size.w;
-            const ay = y * size.h;
+          {placed.map(({ p, pos }) => {
+            const ax = pos.x * size.w;
+            const ay = pos.y * size.h;
             return (
               <g key={`beam-${p.key}`}>
                 <line x1={cx} y1={cy} x2={ax} y2={ay}
@@ -148,8 +171,7 @@ export default function SceneStage({
       )}
 
       {/* Projection panels */}
-      {projections.map((p) => {
-        const { x, y } = place(hashStr(p.key));
+      {placed.map(({ p, pos: { x, y } }) => {
         return (
           <div
             key={p.key}

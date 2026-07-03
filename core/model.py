@@ -410,28 +410,49 @@ class FreyaModel:
                                         except Exception:
                                             pass
 
-                                        # Send tool response + image together
+                                        # Send the screenshot through send_client_content, NOT
+                                        # send_realtime_input. Realtime input is the latency-
+                                        # optimized STREAMING channel (webcam/screen feeds): the
+                                        # Live API samples frames from it on its own cadence, so a
+                                        # one-shot image sent there can be ingested late — or
+                                        # dropped — relative to the conversation stream. The model
+                                        # then answered from the tool-response text alone (a
+                                        # hallucinated guess) and only saw the real pixels a turn
+                                        # later. Client content is appended to the conversation
+                                        # context deterministically and in order; turn_complete=
+                                        # False adds the image WITHOUT triggering generation, so
+                                        # the tool response that follows is what resumes the model
+                                        # — with the image guaranteed already in context.
+                                        await session.send_client_content(
+                                            turns=types.Content(
+                                                role="user",
+                                                parts=[
+                                                    types.Part(text=(
+                                                        f"[SCREEN CAPTURE — {gw}x{gh} screenshot of the user's "
+                                                        "REAL screen, taken this instant]"
+                                                    )),
+                                                    types.Part(inline_data=types.Blob(
+                                                        data=base64.b64decode(b64_image),
+                                                        mime_type="image/jpeg",
+                                                    )),
+                                                ],
+                                            ),
+                                            turn_complete=False,
+                                        )
                                         await session.send_tool_response(
                                             function_responses=[types.FunctionResponse(
                                                 id=call_id,
                                                 name=tool_name,
                                                 response={"result": (
-                                                    f"Screen captured. A {gw}x{gh} screenshot of the user's REAL "
-                                                    "current screen is attached as the next image input. Describe "
-                                                    "and interact based STRICTLY on that image - never guess or "
-                                                    "imagine screen content. All click/move/scroll coordinates "
-                                                    "must be measured on this exact image."
+                                                    "Screen captured. The screenshot of the user's REAL current "
+                                                    "screen is already in your context (the image right above "
+                                                    "this). Describe and interact based STRICTLY on that image "
+                                                    "- never guess or imagine screen content. All click/move/"
+                                                    "scroll coordinates must be measured on this exact image."
                                                 )}
                                             )]
                                         )
-                                        # Send the actual image as a follow-up input
-                                        await session.send_realtime_input(
-                                            video=types.Blob(
-                                                data=base64.b64decode(b64_image),
-                                                mime_type="image/jpeg"
-                                            )
-                                        )
-                                        print("  Screen sent to Gemini.")
+                                        print("  Screen sent to Gemini (client_content).")
                                     else:
                                         await session.send_tool_response(
                                             function_responses=[types.FunctionResponse(

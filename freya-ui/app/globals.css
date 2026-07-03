@@ -1,46 +1,164 @@
 @import "tailwindcss";
 
 @theme {
-  --color-surface: #131313;
-  --color-surface-dim: #131313;
-  --color-surface-bright: #393939;
-  --color-surface-container-lowest: #0e0e0e;
-  --color-surface-container-low: #1c1b1b;
-  --color-surface-container: #201f1f;
-  --color-surface-container-high: #2a2a2a;
-  --color-surface-container-highest: #353534;
-  
-  --color-primary: #ffb3ac; /* Light peach/crimson accent */
-  --color-primary-container: #d32f2f; /* Deep brand crimson */
-  --color-secondary: #ffb4a8;
+  --color-surface: #050507;
+  --color-surface-dim: #030304;
+  --color-surface-bright: #2a1416;
+  --color-surface-container-lowest: #030304;
+  --color-surface-container-low: #0a0709;
+  --color-surface-container: #0e0a0c;
+  --color-surface-container-high: #150d10;
+  --color-surface-container-highest: #1c1216;
+
+  --color-primary: #ff4d4d; /* Hot crimson HUD accent */
+  --color-primary-container: #d32f2f; /* Deep brand crimson — persona anchor */
+  --color-secondary: #ff8a75;
   --color-secondary-container: #920703; /* Muted blood red */
-  
-  --color-on-surface: #e5e2e1;
+
+  --color-on-surface: #ece6e4;
   --color-on-surface-variant: #e4beba;
-  
-  --color-outline: #ab8985;
-  --color-outline-variant: #5b403d;
-  
-  --color-parchment: #f5f5dc; /* Warm parchment ink */
+
+  --color-outline: #9a6f6b;
+  --color-outline-variant: #4a2c2a;
+
+  --color-parchment: #f2ece4; /* HUD ink */
   --color-muted-blood: #8b0000;
-  --color-deep-charcoal: #1a1a1a;
-  
+  --color-deep-charcoal: #0e0a0c;
+
   --font-sans: var(--font-sans), sans-serif;
   --font-mono: var(--font-mono), monospace;
+  --font-display: var(--font-orbitron), sans-serif;
+  --font-ui: var(--font-rajdhani), sans-serif;
 }
 
 :root {
-  background-color: #131313;
-  color: #f5f5dc;
+  background-color: #050507;
+  color: #f2ece4;
+
+  /* ── HUD structural tokens (non-color values can't live in @theme) ──
+     These derive from --color-primary-container via color-mix, so a
+     persona event overriding that var auto-recolors every panel. */
+  --notch: 12px;
+  --hud-line: color-mix(in srgb, var(--color-primary-container) 35%, transparent);
+  --hud-line-strong: color-mix(in srgb, var(--color-primary-container) 60%, transparent);
+  --hud-fill: color-mix(in srgb, var(--color-primary-container) 5%, rgba(6, 4, 5, 0.78));
+  --hud-glow: color-mix(in srgb, var(--color-primary-container) 45%, transparent);
+
+  /* ── Archival System (V3.0 HUD) design tokens ── */
+  --bg-base: #07050a;
+  --panel-bg: rgba(18, 10, 11, 0.55);
+  --panel-border: rgba(255, 60, 60, 0.22);
+  --panel-border-hover: rgba(255, 90, 90, 0.55);
+  --accent-red: #ff2b3a;
+  --accent-red-dim: #7a0f16;
+  --accent-red-glow: #ff5563;
+  --accent-green: #34e9a0;
+  --text-primary: #f3efec;
+  --text-secondary: #97929a;
+  --text-tertiary: #5b565e;
+  --danger: #ff2b3a;
+  --radius: 10px;
+  --blur: 14px;
 }
 
 body {
-  background-color: #131313;
-  color: #f5f5dc;
+  background-color: #050507;
+  color: #f2ece4;
   font-family: var(--font-sans), sans-serif;
 }
 
-/* Custom animations for Crimson Archival theme */
+/* ─────────────────────────────────────────────────────────
+   HUD structural utilities
+   ───────────────────────────────────────────────────────── */
+
+/* Corner-notch panel silhouette (top-left + bottom-right cut). Apply to a
+   wrapper whose child layers use .hud-notch-fill / .hud-notch-line. */
+.hud-notch {
+  clip-path: polygon(
+    var(--notch) 0,
+    100% 0,
+    100% calc(100% - var(--notch)),
+    calc(100% - var(--notch)) 100%,
+    0 100%,
+    0 var(--notch)
+  );
+}
+.hud-notch-rev {
+  clip-path: polygon(
+    0 0,
+    calc(100% - var(--notch)) 0,
+    100% var(--notch),
+    100% 100%,
+    var(--notch) 100%,
+    0 calc(100% - var(--notch))
+  );
+}
+
+/* Scanline texture overlay — a faint repeating grid plus a slow drifting band */
+.hud-scanlines {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background-image: repeating-linear-gradient(
+    0deg,
+    transparent 0px,
+    transparent 2px,
+    rgba(255, 255, 255, 0.025) 2px,
+    rgba(255, 255, 255, 0.025) 3px
+  );
+  mix-blend-mode: overlay;
+}
+.hud-scanlines::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(
+    180deg,
+    transparent 0%,
+    color-mix(in srgb, var(--color-primary) 10%, transparent) 50%,
+    transparent 100%
+  );
+  background-size: 100% 220%;
+  animation: scanline-drift 7s linear infinite;
+  opacity: 0.35;
+}
+
+@keyframes scanline-drift {
+  0% { background-position: 0 -120%; }
+  100% { background-position: 0 120%; }
+}
+
+/* Concentric ring spin (session ring, voice ring, platform hoops) */
+@keyframes ring-spin {
+  to { transform: rotate(360deg); }
+}
+@keyframes ring-spin-rev {
+  to { transform: rotate(-360deg); }
+}
+
+/* Subtle hologram flicker — use sparingly on brand/critical text */
+@keyframes flicker {
+  0%, 92%, 100% { opacity: 1; }
+  94% { opacity: 0.6; }
+  96% { opacity: 0.9; }
+  98% { opacity: 0.7; }
+}
+.hud-flicker { animation: flicker 6s ease-in-out infinite; }
+
+/* Breathing glow — box-shadow/text-shadow driven by --hud-glow */
+@keyframes glow-pulse {
+  0%, 100% { opacity: 0.6; }
+  50% { opacity: 1; }
+}
+.hud-glow-pulse { animation: glow-pulse 2.4s ease-in-out infinite; }
+
+/* Dotted leader-line flow (elbow beams from the core to projection cards) */
+@keyframes dash-flow { to { stroke-dashoffset: -24; } }
+.dash-flow { animation: dash-flow 0.9s linear infinite; }
+
+/* ─────────────────────────────────────────────────────────
+   Legacy keyframes — still used by restyled components
+   ───────────────────────────────────────────────────────── */
 @keyframes blink {
   0%, 100% { opacity: 1; }
   50% { opacity: 0; }
@@ -51,7 +169,7 @@ body {
   display: inline-block;
   width: 8px;
   height: 15px;
-  background-color: #ffb3ac;
+  background-color: var(--color-primary);
   vertical-align: middle;
   margin-left: 4px;
 }
@@ -62,10 +180,10 @@ body {
   width: 7px;
   height: 1em;
   margin-left: 2px;
-  background-color: #ffb3ac;
+  background-color: var(--color-primary);
   vertical-align: text-bottom;
   animation: blink 0.9s step-end infinite;
-  box-shadow: 0 0 8px rgba(255, 179, 172, 0.7);
+  box-shadow: 0 0 8px color-mix(in srgb, var(--color-primary) 70%, transparent);
 }
 
 /* Contextual cards sliding in as Freya talks about things */
@@ -109,19 +227,175 @@ body {
 .animate-pulse-line-4 { animation: pulse-line 1s ease-in-out infinite 0.1s; }
 .animate-pulse-line-5 { animation: pulse-line 1.3s ease-in-out infinite 0.3s; }
 
+/* ─────────────────────────────────────────────────────────
+   Archival System (V3.0 HUD) — layout, panels, motion
+   ───────────────────────────────────────────────────────── */
+
+/* Root HUD shell: locked to the viewport on desktop, scrollable when stacked */
+.hud-main {
+  height: 100vh;
+  max-height: 100vh;
+  overflow: hidden;
+}
+@media (max-width: 1100px) {
+  .hud-main {
+    height: auto;
+    max-height: none;
+    min-height: 100vh;
+    overflow: visible;
+  }
+}
+
+/* 12-col-inspired dashboard grid: fixed side columns, fluid center stage. */
+.hud-grid {
+  display: grid;
+  grid-template-columns: 280px minmax(0, 1fr) 300px;
+  gap: 16px;
+  padding: 16px 20px 20px;
+  height: 100%;
+  min-height: 0;
+}
+@media (max-width: 1100px) {
+  .hud-grid {
+    grid-template-columns: 1fr;
+    height: auto;
+  }
+  .hud-grid > .hud-col-center { order: -1; }
+}
+
+/* Sonar ping — voice-interaction rings expanding outward */
+@keyframes sonar-ping {
+  0% { transform: scale(0.55); opacity: 0.9; }
+  70% { opacity: 0.25; }
+  100% { transform: scale(1.35); opacity: 0; }
+}
+
+/* Active mode pill breathing glow */
+@keyframes pill-breathe {
+  0%, 100% { box-shadow: 0 0 10px color-mix(in srgb, var(--accent-red) 35%, transparent); }
+  50% { box-shadow: 0 0 22px color-mix(in srgb, var(--accent-red) 65%, transparent); }
+}
+
+/* Surveillance-feed glitch line sweeping down the portrait viewport */
+@keyframes glitch-line {
+  0% { top: -4%; opacity: 0; }
+  8% { opacity: 0.7; }
+  92% { opacity: 0.6; }
+  100% { top: 104%; opacity: 0; }
+}
+
+/* Settings gear: continuous slow spin; hover/click classes retime it */
+@keyframes gear-spin { to { transform: rotate(360deg); } }
+.hud-gear { animation: gear-spin 12s linear infinite; }
+.hud-gear:hover { animation-duration: 6s; }
+.hud-gear-fast { animation-duration: 1.2s !important; }
+
+/* Row hover: soft highlight band sweeping left → right (runs on :hover) */
+@keyframes row-sweep {
+  from { transform: translateX(-100%); }
+  to { transform: translateX(100%); }
+}
+.hud-row { position: relative; overflow: hidden; }
+.hud-row::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  transform: translateX(-100%);
+  background: linear-gradient(
+    90deg,
+    transparent,
+    color-mix(in srgb, var(--accent-red) 12%, transparent),
+    transparent
+  );
+  pointer-events: none;
+}
+.hud-row:hover::after { animation: row-sweep 0.55s ease-out; }
+
+/* Click ripple (buttons/tabs) — the element is positioned at the click point */
+@keyframes hud-ripple {
+  from { transform: translate(-50%, -50%) scale(0); opacity: 0.55; }
+  to { transform: translate(-50%, -50%) scale(4); opacity: 0; }
+}
+.hud-ripple {
+  position: absolute;
+  border-radius: 9999px;
+  background: radial-gradient(circle, rgba(255, 85, 99, 0.6) 0%, transparent 70%);
+  pointer-events: none;
+  animation: hud-ripple 0.55s ease-out forwards;
+}
+
+/* Panel hover: one diagonal specular sheen pass across the surface */
+@keyframes panel-sheen {
+  from { transform: translateX(-130%) skewX(-18deg); }
+  to { transform: translateX(240%) skewX(-18deg); }
+}
+
+/* Mission progress: glow sweeping along the filled cells */
+@keyframes progress-glow {
+  from { background-position: -80px 0; }
+  to { background-position: 160px 0; }
+}
+
+/* Telemetry callout entrance */
+@keyframes callout-in {
+  from { opacity: 0; transform: translateY(8px) scale(0.96); }
+  to { opacity: 1; transform: none; }
+}
+
+/* Callout connector line "drawing on" from card toward the orb */
+@keyframes connector-draw {
+  from { clip-path: inset(0 100% 0 0); }
+  to { clip-path: inset(0 0 0 0); }
+}
+
+/* Status-strip text swap */
+@keyframes strip-swap {
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 1; transform: none; }
+}
+
+/* Hide the native cursor while the reticle cursor is active (fine pointers only) */
+@media (pointer: fine) {
+  body.hud-cursor-active,
+  body.hud-cursor-active * {
+    cursor: none !important;
+  }
+}
+
+/* Keyboard focus: thin glow outline on every interactive element */
+button:focus-visible,
+a:focus-visible,
+[role="button"]:focus-visible {
+  outline: 1px solid var(--accent-red-glow);
+  outline-offset: 2px;
+}
+
+/* Reduced motion: collapse every CSS animation/transition; state changes
+   snap. JS-driven motion (jitter, scramble, cursor, callout cycling) is
+   disabled separately via useReducedMotion. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
 /* Custom scrollbar */
 ::-webkit-scrollbar {
   width: 6px;
   height: 6px;
 }
 ::-webkit-scrollbar-track {
-  background: #131313;
+  background: var(--color-surface);
 }
 ::-webkit-scrollbar-thumb {
-  background: #2a2a2a;
+  background: var(--hud-line-strong);
   border-radius: 0px;
 }
 ::-webkit-scrollbar-thumb:hover {
-  background: #8b0000;
+  background: var(--color-primary);
 }
-

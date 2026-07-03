@@ -260,14 +260,17 @@ class OverlayManager:
         win.after(28, self._anim_click, win, canvas, c, step + 1)
 
     # ─────────────────────────────────────────
-    #  SCAN — red border flash + sweep line
+    #  SCAN — a frame flashes around the whole screen (fallback for when
+    #  the GPU shader overlay can't init). No sweep line: this should read
+    #  as "I just looked at your screen", like a camera capture flash,
+    #  not a passive scanner pass.
     # ─────────────────────────────────────────
     def _effect_scan(self):
         import pyautogui
         sw, sh = pyautogui.size()
-        border = 3
+        border = 4
 
-        # Four border bars
+        # Four border bars framing the whole screen, flashing then fading.
         specs = [
             (sw, border, 0, 0),              # top
             (sw, border, 0, sh - border),     # bottom
@@ -280,18 +283,8 @@ class OverlayManager:
             win.attributes('-topmost', True)
             win.geometry(f'{w}x{h}+{x}+{y}')
             win.config(bg=FREYA_RED)
-            win.attributes('-alpha', 0.85)
-            self._fade_out(win, 0, 0.085)
-
-        # Horizontal scan line sweeping top → bottom
-        line_h = 2
-        scan = tk.Toplevel(self._root)
-        scan.overrideredirect(True)
-        scan.attributes('-topmost', True)
-        scan.geometry(f'{sw}x{line_h}+0+0')
-        scan.config(bg=FREYA_RED)
-        scan.attributes('-alpha', 0.6)
-        self._sweep(scan, 0, sh, sw, line_h)
+            win.attributes('-alpha', 0.9)
+            self._fade_out(win, 0, 0.07)
 
         # "👁 SCANNING" badge at top centre
         badge_w, badge_h = 180, 28
@@ -315,16 +308,6 @@ class OverlayManager:
         try: win.attributes('-alpha', alpha)
         except: pass
         win.after(delay, self._fade_out, win, step + 1, rate, start_alpha, delay)
-
-    def _sweep(self, win, y, max_y, sw, line_h):
-        if y >= max_y:
-            try: win.destroy()
-            except: pass
-            return
-        try: win.geometry(f'{sw}x{line_h}+0+{y}')
-        except: return
-        step = max(4, int((max_y - y) * 0.025) + 4)
-        win.after(5, self._sweep, win, y + step, max_y, sw, line_h)
 
     # ─────────────────────────────────────────
     #  MOVE — pulsing dot at destination

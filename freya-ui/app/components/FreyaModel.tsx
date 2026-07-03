@@ -97,6 +97,13 @@ export default function FreyaModel({ state, avatarIntent, modelKey }: FreyaModel
     const [accent, setAccent] = useState<string>("#d32f2f");
     const [glow, setGlow] = useState(0);
 
+    // Camera framing is per-model (each GLB has different real-world proportions
+    // — a single global camera can't correctly frame both the old Mixamo rig and
+    // the full-scale Blender export), so it's resolved once here alongside the
+    // model itself rather than hardcoded on the Canvas.
+    const manifest = AVATAR_MODELS[modelKey ?? DEFAULT_AVATAR];
+    const cam = manifest.camera;
+
     const handleExpression = (e: ExpressionEvent | null) => {
         setAccent(e ? e.accent.accent : "#d32f2f");
         setGlow(e ? e.accent.glowBoost * e.intensity : 0);
@@ -114,7 +121,8 @@ export default function FreyaModel({ state, avatarIntent, modelKey }: FreyaModel
             </div>
 
             <Canvas
-                camera={{ position: [0, 0.2, 3], fov: 60 }}
+                key={modelKey ?? DEFAULT_AVATAR}
+                camera={{ position: cam.position, fov: cam.fov }}
                 dpr={[1, 2]}
                 style={{ width: "100%", height: "100%", background: "transparent" }}
             >
@@ -140,6 +148,7 @@ export default function FreyaModel({ state, avatarIntent, modelKey }: FreyaModel
                 <OrbitControls
                     enableZoom={false}
                     enablePan={false}
+                    target={cam.target ?? [0, 0, 0]}
                     minPolarAngle={Math.PI / 3}
                     maxPolarAngle={Math.PI / 1.8}
                 />
