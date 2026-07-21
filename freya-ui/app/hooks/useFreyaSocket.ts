@@ -80,6 +80,8 @@ export function useFreyaSocket() {
     const [missions, setMissions] = useState<Record<string, MissionPayload>>({});
     const [avatarIntent, setAvatarIntent] = useState<AvatarIntent | null>(null);
     const avatarSeq = useRef(0);
+    const [orbGestureEvent, setOrbGestureEvent] = useState<{ gesture: string; seq: number } | null>(null);
+    const orbGestureSeq = useRef(0);
     const [suggestions, setSuggestions] = useState<SuggestionPayload[]>([]);
     const [contextInfo, setContextInfo] = useState<ContextPayload | null>(null);
     const [persona, setPersona] = useState<PersonaPayload | null>(null);
@@ -237,6 +239,11 @@ export function useFreyaSocket() {
                         ...(msg.payload as AvatarIntentPayload),
                         seq: ++avatarSeq.current,
                     });
+                } else if (msg.type === "orb_gesture") {
+                    // Telemetry echo of a webcam hand gesture the backend already
+                    // routed to Gemini via runtime.inject — HUD callout only, this
+                    // never touches avatarIntent (no GLB animation actually plays).
+                    setOrbGestureEvent({ gesture: String(msg.gesture ?? ""), seq: ++orbGestureSeq.current });
                 } else if (msg.type === "mission") {
                     const p = msg.payload as MissionEventPayload;
                     setMissions((prev) => ({ ...prev, [p.mission.id]: p.mission }));
@@ -313,6 +320,10 @@ export function useFreyaSocket() {
         send({ type: "mission_command", action: "cancel", id });
     }, [send]);
 
+    const sendGestureTouch = useCallback((gesture: string) => {
+        send({ type: "gesture_touch", gesture });
+    }, [send]);
+
     const respondSuggestion = useCallback((id: string, accepted: boolean) => {
         send({ type: "suggestion_response", id, accepted });
         setSuggestions((prev) => prev.filter((s) => s.id !== id)); // optimistic
@@ -345,6 +356,7 @@ export function useFreyaSocket() {
         missions,
         activeMission,
         avatarIntent,
+        orbGestureEvent,
         suggestions,
         contextInfo,
         persona,
@@ -356,6 +368,7 @@ export function useFreyaSocket() {
         setMode,
         toggleListening,
         respondApproval,
+        sendGestureTouch,
         cancelMission,
         respondSuggestion,
         clearTranscript,

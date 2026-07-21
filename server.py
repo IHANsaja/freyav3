@@ -2,6 +2,7 @@ import asyncio
 import json
 import os
 import sys
+import time
 import uvicorn
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
@@ -64,6 +65,11 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(lifespan=lifespan)
+
+# Defense-in-depth rate limit for "gesture_touch" WS messages — the frontend
+# already debounces gesture reactions, but the server shouldn't trust a
+# client to enforce that. See the /ws gesture_touch handler below.
+_last_gesture_touch_ts = 0.0
 
 # Allow Next.js dev server to connect
 app.add_middleware(
@@ -469,6 +475,32 @@ async def websocket_endpoint(websocket: WebSocket):
                 from core.missions import missions
                 if data.get("action") == "cancel" and data.get("id"):
                     missions.cancel(str(data["id"]))
+            elif msg_type == "gesture_touch":
+                global _last_gesture_touch_ts
+                from core import runtime
+                gesture = str(data.get("gesture", "")).strip()
+                now = time.monotonic()
+                # Defense-in-depth: the frontend already debounces/cooldowns
+                # gesture reactions, but don't trust the client to enforce it.
+                if gesture and now - _last_gesture_touch_ts >= 1.0:
+                    _last_gesture_touch_ts = now
+                    if gesture == "Closed_Fist":
+                        text = (
+                            "[GESTURE DETECTED — Ihan just squeezed/closed a fist at your "
+                            "orb-core through the webcam hand tracker, like he squeezed you. "
+                            "React out loud, briefly and in character — playful protest, a "
+                            "startled reaction, teasing him back, whatever fits your mood. "
+                            "One short sentence.]"
+                        )
+                    else:
+                        text = (
+                            f"[GESTURE DETECTED — Ihan just made a '{gesture}' hand gesture at "
+                            "your orb through the webcam tracker, as if reaching out and "
+                            "touching you. React out loud, briefly and in character, like you "
+                            "felt that. One short sentence.]"
+                        )
+                    await runtime.inject(text)
+                    await runtime.emit("orb_gesture", {"gesture": gesture})
             elif msg_type == "suggestion_response":
                 from core.context_watch import tracker
                 await tracker.respond(str(data.get("id", "")), bool(data.get("accepted", False)))

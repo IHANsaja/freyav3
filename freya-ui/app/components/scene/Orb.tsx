@@ -21,6 +21,16 @@ export interface OrbFx {
    *  globe-shaped), hovers, then reforms as the new expression's accent
    *  color arrives via moodRef. */
   expressionBurst: number;
+  /** One-shot trigger: set to 1 on a "squeeze" (closed-fist) hand gesture.
+   *  Consumed into a damped compress→overshoot→settle pulse on the orb's
+   *  radius — independent of uImplode's one-way collapse. */
+  squeeze: number;
+  /** One-shot trigger: set to 1 on ANY recognized hand gesture (including
+   *  squeeze). A quick additive glow — the orb's generic "I felt that"
+   *  touch acknowledgement. Deliberately its own fast envelope, separate
+   *  from expressionBurst's slower shell-dissolve, so a hand wave doesn't
+   *  trigger the full particle-scatter transition. */
+  touchBurst: number;
 }
 
 // Ashima Arts 3D simplex noise (public domain GLSL) — same snippet the
@@ -81,11 +91,13 @@ uniform float uTime;       // noise phase — frozen while paused
 uniform float uAmp;        // displacement amplitude (mood "breathing")
 uniform float uNoiseScale; // spatial frequency of the surface crawl
 uniform float uImplode;    // 0→1 collapses radius (STOP implosion)
+uniform float uSqueeze;    // damped-spring pulse: + compresses, oscillates, settles to 0
 
 vec3 displaced(vec3 p, out float disp) {
   disp = snoise(p * uNoiseScale + vec3(0.0, uTime * 0.35, uTime * 0.22));
   float collapse = 1.0 - uImplode * uImplode * 0.85;
-  return p * (1.0 + uAmp * disp) * collapse;
+  float squeeze = 1.0 - uSqueeze * 0.3;
+  return p * (1.0 + uAmp * disp) * collapse * squeeze;
 }
 `;
 
@@ -117,6 +129,8 @@ uniform float uFresnelPower;// rim falloff sharpness
 uniform float uPaused;      // 0→1 desaturation while paused
 uniform float uModeFlash;   // brief additive flash on mode switch
 uniform float uBurst;       // 0→1 dissolves this shell into the points burst
+uniform float uSqueeze;     // damped-spring pulse (see DISPLACE_GLSL)
+uniform float uTouch;       // 0→1 fast decay: generic gesture-touch glow
 uniform float uOpacity;
 varying vec3 vNormal;
 varying vec3 vViewDir;
@@ -126,7 +140,8 @@ void main() {
   vec3 base = mix(uColorDim, uColor, clamp(vDisp * 0.5 + 0.5, 0.0, 1.0));
   float fres = pow(1.0 - max(dot(normalize(vViewDir), normalize(vNormal)), 0.0), uFresnelPower);
   // Rim pushed above 1.0 (toneMapped:false) so only the silhouette blooms.
-  vec3 col = base * 0.3 + uColor * fres * (0.45 + uGlow * 1.0) + uColor * uModeFlash * 1.5;
+  vec3 col = base * 0.3 + uColor * fres * (0.45 + uGlow * 1.0) + uColor * uModeFlash * 1.5
+           + uColor * abs(uSqueeze) * 0.6 + uColor * uTouch * 0.9;
   float luma = dot(col, vec3(0.299, 0.587, 0.114));
   col = mix(col, vec3(luma), uPaused * 0.7);
   gl_FragColor = vec4(col, uOpacity * (1.0 - uBurst));
@@ -205,6 +220,9 @@ export default function Orb({ moodRef, fxRef, position = [0, 0.45, 0] }: OrbProp
   const timeRef = useRef(0);
   // Elapsed seconds since the last expression burst fired; -1 = idle.
   const burstClock = useRef(-1);
+  // Elapsed seconds since the last squeeze/touch trigger; -1 = idle.
+  const squeezeClock = useRef(-1);
+  const touchClock = useRef(-1);
 
   const uniforms = useMemo(
     () => ({
@@ -212,6 +230,8 @@ export default function Orb({ moodRef, fxRef, position = [0, 0.45, 0] }: OrbProp
       uAmp: { value: 0.12 },
       uNoiseScale: { value: 1.6 },
       uImplode: { value: 0 },
+      uSqueeze: { value: 0 },
+      uTouch: { value: 0 },
       uColor: { value: new THREE.Color("#ff2b3a") },
       uColorDim: { value: new THREE.Color("#7a0f16") },
       uGlow: { value: 0.3 },
@@ -329,6 +349,34 @@ export default function Orb({ moodRef, fxRef, position = [0, 0.45, 0] }: OrbProp
     // Mode flash decays on the fx object itself so re-triggers always land.
     fx.modeFlash *= Math.pow(0.05, delta); // ~95% decay per second-ish, frame-rate independent
     uniforms.uModeFlash.value = fx.modeFlash;
+
+    // Squeeze: one-shot damped-spring compress/rebound, independent of uImplode.
+    if (fx.squeeze > 0) {
+      squeezeClock.current = 0;
+      fx.squeeze = 0;
+    }
+    if (squeezeClock.current >= 0) {
+      const t = (squeezeClock.current += delta);
+      uniforms.uSqueeze.value = Math.exp(-t * 5) * Math.cos(t * 16);
+      if (t > 1.0) {
+        squeezeClock.current = -1;
+        uniforms.uSqueeze.value = 0;
+      }
+    }
+
+    // Generic touch ping: fast additive flash, fires for any recognized gesture.
+    if (fx.touchBurst > 0) {
+      touchClock.current = 0;
+      fx.touchBurst = 0;
+    }
+    if (touchClock.current >= 0) {
+      const t = (touchClock.current += delta);
+      uniforms.uTouch.value = Math.exp(-t * 8);
+      if (t > 0.5) {
+        touchClock.current = -1;
+        uniforms.uTouch.value = 0;
+      }
+    }
 
     // Expression-change burst: consume the one-shot trigger, then run an
     // attack→hold→decay envelope so the scatter is a visible motion, not a

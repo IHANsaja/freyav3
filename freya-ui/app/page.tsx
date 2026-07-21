@@ -14,6 +14,8 @@ import type { OrbFx } from "./components/scene/Orb";
 import type { ExpressionEvent } from "./components/avatar/AvatarController";
 import { EXPRESSION_ACCENTS } from "./components/avatar/manifest";
 import HeaderBar from "./components/hud/HeaderBar";
+import { useHandGestures } from "./hooks/useHandGestures";
+import { useGestureOrbBridge } from "./hooks/useGestureOrbBridge";
 import CenterStage from "./components/hud/CenterStage";
 import CustomCursor from "./components/hud/CustomCursor";
 import PortraitCard from "./components/hud/PortraitCard";
@@ -49,6 +51,7 @@ export default function Home() {
     approvals,
     activeMission,
     avatarIntent,
+    orbGestureEvent,
     suggestions,
     persona,
     startFreya,
@@ -58,6 +61,7 @@ export default function Home() {
     setMode,
     toggleListening,
     respondApproval,
+    sendGestureTouch,
     cancelMission,
     respondSuggestion,
   } = useFreyaSocket();
@@ -73,13 +77,39 @@ export default function Home() {
     config?.modes && Object.keys(config.modes).length > 0 ? config.modes : FALLBACK_MODES;
 
   // Orb effects — mutated directly (no state churn), lerped by the shader.
-  const orbFxRef = useRef<OrbFx>({ implode: 0, paused: 0, modeFlash: 0, expressionBurst: 0 });
+  const orbFxRef = useRef<OrbFx>({
+    implode: 0,
+    paused: 0,
+    modeFlash: 0,
+    expressionBurst: 0,
+    squeeze: 0,
+    touchBurst: 0,
+  });
 
   // Engine state drives implosion/pause so server-side changes animate too.
   useEffect(() => {
     orbFxRef.current.implode = status.engine === "stopped" ? 1 : 0;
     orbFxRef.current.paused = status.engine === "paused" ? 1 : 0;
   }, [status.engine]);
+
+  // Webcam hand tracking — opt-in via the HeaderBar toggle. Orbits the orb's
+  // camera (OrbCameraRig, wired through OrbScene's gestureRef prop) and, via
+  // useGestureOrbBridge, dispatches squeeze/touch shader reactions + a
+  // gesture_touch WS message so Freya reacts through the live Gemini session.
+  const [handTrackingEnabled, setHandTrackingEnabled] = useState(false);
+  const { stateRef: gestureRef, status: handTrackingStatus } = useHandGestures(handTrackingEnabled);
+  useGestureOrbBridge(gestureRef, orbFxRef, sendGestureTouch);
+
+  // Telemetry echo of a webcam gesture the backend already routed to Gemini.
+  useEffect(() => {
+    if (!orbGestureEvent) return;
+    calloutSeq.current += 1;
+    setCalloutEvent({
+      seq: calloutSeq.current,
+      title: "ORB TOUCHED",
+      body: `GESTURE:${orbGestureEvent.gesture.toUpperCase()}`,
+    });
+  }, [orbGestureEvent]);
 
   // Missions surface in the projection field too: every status/step change
   // becomes a synthetic tool entry so mission execution is visible on the
@@ -219,7 +249,14 @@ export default function Home() {
 
       {/* Full-bleed WebGL stage: void nebula, dais, particle stream, the orb */}
       <div className="absolute inset-0 z-0" aria-hidden>
-        <OrbScene state={state} avatarIntent={avatarIntent} persona={persona} expression={expression} fxRef={orbFxRef} />
+        <OrbScene
+          state={state}
+          avatarIntent={avatarIntent}
+          persona={persona}
+          expression={expression}
+          fxRef={orbFxRef}
+          gestureRef={gestureRef}
+        />
       </div>
 
       <div className="relative z-40">
@@ -228,6 +265,9 @@ export default function Home() {
           status={status}
           modeLabel={modeLabel}
           onOpenSettings={() => setIsSettingsOpen(true)}
+          handTrackingEnabled={handTrackingEnabled}
+          handTrackingStatus={handTrackingStatus}
+          onToggleHandTracking={() => setHandTrackingEnabled((v) => !v)}
         />
       </div>
 

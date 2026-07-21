@@ -3,6 +3,7 @@
 import { useRef, useState } from "react";
 import { useScramble } from "../../hooks/useScramble";
 import type { EngineStatus } from "../../hooks/useEngineStatus";
+import type { HandTrackingStatus } from "../../hooks/useHandGestures";
 import Waveform from "./Waveform";
 
 interface HeaderBarProps {
@@ -10,12 +11,41 @@ interface HeaderBarProps {
   status: EngineStatus;
   modeLabel: string;
   onOpenSettings: () => void;
+  handTrackingEnabled: boolean;
+  handTrackingStatus: HandTrackingStatus;
+  onToggleHandTracking: () => void;
 }
+
+const HAND_TRACKING_COLOR: Record<HandTrackingStatus, string> = {
+  idle: "var(--text-secondary)",
+  starting: "var(--text-secondary)",
+  active: "var(--accent-green)",
+  denied: "var(--accent-red)",
+  unsupported: "var(--accent-red-dim)",
+  error: "var(--accent-red-dim)",
+};
+
+const HAND_TRACKING_LABEL: Record<HandTrackingStatus, string> = {
+  idle: "Enable hand tracking (camera)",
+  starting: "Starting camera…",
+  active: "Disable hand tracking",
+  denied: "Camera access denied",
+  unsupported: "Hand tracking unsupported in this browser",
+  error: "Hand tracking failed to start",
+};
 
 const DIVIDER = <span aria-hidden className="w-px h-3 self-center" style={{ background: "var(--panel-border)" }} />;
 
 /** Full-width 64px command header: wordmark, live readouts, EQ + settings. */
-export default function HeaderBar({ connected, status, modeLabel, onOpenSettings }: HeaderBarProps) {
+export default function HeaderBar({
+  connected,
+  status,
+  modeLabel,
+  onOpenSettings,
+  handTrackingEnabled,
+  handTrackingStatus,
+  onToggleHandTracking,
+}: HeaderBarProps) {
   const scrambledMode = useScramble(modeLabel.toUpperCase());
   const [fastSpin, setFastSpin] = useState(false);
   const spinTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -79,6 +109,25 @@ export default function HeaderBar({ connected, status, modeLabel, onOpenSettings
 
       <div className="flex items-center gap-4">
         <Waveform active={status.engine === "listening" || status.engine === "processing"} bars={5} />
+        <button
+          onClick={onToggleHandTracking}
+          aria-label={HAND_TRACKING_LABEL[handTrackingStatus]}
+          title={HAND_TRACKING_LABEL[handTrackingStatus]}
+          className="w-9 h-9 flex items-center justify-center border transition-colors duration-300 hover:border-[var(--panel-border-hover)]"
+          style={{
+            borderColor: handTrackingEnabled ? "var(--accent-red)" : "var(--panel-border)",
+            borderRadius: "6px",
+            color: HAND_TRACKING_COLOR[handTrackingStatus],
+          }}
+        >
+          <svg viewBox="0 0 24 24" className="w-4 h-4" fill="none" stroke="currentColor" strokeWidth="1.25" aria-hidden>
+            <path
+              d="M8 12.5V6a1.5 1.5 0 0 1 3 0v5M11 11V4.5a1.5 1.5 0 0 1 3 0V11M14 11.2V6a1.5 1.5 0 0 1 3 0v7.5M17 12v-2.2a1.5 1.5 0 0 1 3 0V15c0 3.6-2.7 6.5-6.5 6.5h-1C9.5 21.5 7 19 6.3 16.8L4.6 12.2c-.3-.9.1-1.9 1-2.2.8-.3 1.7 0 2.1.8l1 2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            />
+          </svg>
+        </button>
         <button
           onClick={handleGearClick}
           aria-label="Open system configuration"

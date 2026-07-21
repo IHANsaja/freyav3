@@ -87,23 +87,38 @@ def _og_image(link: str, timeout: int = 5) -> str | None:
 
 
 async def _scrape_images(items: list[dict], ctx):
-    """Background: scrape each headline's photo, DOWNLOAD it server-side, and project it onto
-    the scene as a data URI (so it always renders — no hotlink/CORS failures)."""
+    """Background: find each headline's photo, DOWNLOAD it server-side, and project it onto
+    the scene as a data URI (so it always renders — no hotlink/CORS failures).
+
+    Google News RSS links point at news.google.com interstitial pages (JS-only redirect,
+    no og:image), so scraping the feed link directly almost never yields a photo. Fallback:
+    web-search the headline (DuckDuckGo returns the real publisher URL) and take the top
+    result's og:image. Items run concurrently (capped) so all cards fill in within seconds."""
     loop = asyncio.get_running_loop()
-    from core.web import download_image_raw
-    for it in items:
-        if not it.get("link"):
-            continue
+    from core.web import download_image_raw, _find_image_url
+    sem = asyncio.Semaphore(2)  # polite to DDG; keeps total fill-in fast
+
+    async def one(it: dict):
         try:
-            img_url = await loop.run_in_executor(None, _og_image, it["link"])
-            if not img_url:
-                continue
-            raw = await loop.run_in_executor(None, lambda u=img_url, l=it["link"]: download_image_raw(u, l))
-            if raw:
-                await ctx.emit("news_image",
-                               {"id": _hid(it["title"]), "image": "data:image/jpeg;base64," + raw})
+            async with sem:
+                img_url = None
+                link = it.get("link") or ""
+                if link and "news.google.com" not in link:
+                    img_url = await loop.run_in_executor(None, _og_image, link)
+                if not img_url:
+                    query = f"{it['title']} {it.get('source', '')}".strip()
+                    img_url = await loop.run_in_executor(None, _find_image_url, query)
+                if not img_url:
+                    return
+                raw = await loop.run_in_executor(
+                    None, lambda u=img_url: download_image_raw(u, link or None))
+                if raw:
+                    await ctx.emit("news_image",
+                                   {"id": _hid(it["title"]), "image": "data:image/jpeg;base64," + raw})
         except Exception:
-            continue
+            pass
+
+    await asyncio.gather(*(one(it) for it in items if it.get("title")))
 
 
 async def _emit_and_speak(items: list[dict], label: str, ctx) -> str:
