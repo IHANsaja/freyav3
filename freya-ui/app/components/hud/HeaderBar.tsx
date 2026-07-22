@@ -4,6 +4,7 @@ import { useRef, useState } from "react";
 import { useScramble } from "../../hooks/useScramble";
 import type { EngineStatus } from "../../hooks/useEngineStatus";
 import type { HandTrackingStatus } from "../../hooks/useHandGestures";
+import type { VideoDevice } from "../../hooks/useVideoDevices";
 import Waveform from "./Waveform";
 
 interface HeaderBarProps {
@@ -14,6 +15,9 @@ interface HeaderBarProps {
   handTrackingEnabled: boolean;
   handTrackingStatus: HandTrackingStatus;
   onToggleHandTracking: () => void;
+  videoDevices: VideoDevice[];
+  selectedVideoDeviceId: string;
+  onSelectVideoDevice: (deviceId: string) => void;
 }
 
 const HAND_TRACKING_COLOR: Record<HandTrackingStatus, string> = {
@@ -45,6 +49,9 @@ export default function HeaderBar({
   handTrackingEnabled,
   handTrackingStatus,
   onToggleHandTracking,
+  videoDevices,
+  selectedVideoDeviceId,
+  onSelectVideoDevice,
 }: HeaderBarProps) {
   const scrambledMode = useScramble(modeLabel.toUpperCase());
   const [fastSpin, setFastSpin] = useState(false);
@@ -109,6 +116,22 @@ export default function HeaderBar({
 
       <div className="flex items-center gap-4">
         <Waveform active={status.engine === "listening" || status.engine === "processing"} bars={5} />
+        {videoDevices.length > 1 && (
+          <select
+            value={selectedVideoDeviceId}
+            onChange={(e) => onSelectVideoDevice(e.target.value)}
+            aria-label="Select camera for hand tracking"
+            title="Select camera for hand tracking"
+            className="h-9 bg-transparent border text-[10px] font-mono uppercase tracking-wider px-2 focus:outline-none"
+            style={{ borderColor: "var(--panel-border)", borderRadius: "6px", color: "var(--text-secondary)" }}
+          >
+            {videoDevices.map((d) => (
+              <option key={d.deviceId} value={d.deviceId} className="bg-black">
+                {d.label}
+              </option>
+            ))}
+          </select>
+        )}
         <button
           onClick={onToggleHandTracking}
           aria-label={HAND_TRACKING_LABEL[handTrackingStatus]}

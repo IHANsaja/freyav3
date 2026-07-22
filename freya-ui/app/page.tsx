@@ -16,6 +16,7 @@ import { EXPRESSION_ACCENTS } from "./components/avatar/manifest";
 import HeaderBar from "./components/hud/HeaderBar";
 import { useHandGestures } from "./hooks/useHandGestures";
 import { useGestureOrbBridge } from "./hooks/useGestureOrbBridge";
+import { useVideoDevices } from "./hooks/useVideoDevices";
 import CenterStage from "./components/hud/CenterStage";
 import CustomCursor from "./components/hud/CustomCursor";
 import PortraitCard from "./components/hud/PortraitCard";
@@ -33,6 +34,7 @@ const FALLBACK_MODES: Record<string, { label: string }> = {
   night_guardian: { label: "Night Guardian" },
   language_learning: { label: "Language Tutor" },
   coding: { label: "Coding Mode" },
+  brainstorming: { label: "Brainstorming" },
   horny: { label: "Horny Mode" },
 };
 
@@ -54,10 +56,12 @@ export default function Home() {
     orbGestureEvent,
     suggestions,
     persona,
+    audioDevices,
     startFreya,
     stopFreya,
     setModel,
     setVoice,
+    setAudioDevice,
     setMode,
     toggleListening,
     respondApproval,
@@ -92,12 +96,18 @@ export default function Home() {
     orbFxRef.current.paused = status.engine === "paused" ? 1 : 0;
   }, [status.engine]);
 
-  // Webcam hand tracking — opt-in via the HeaderBar toggle. Orbits the orb's
+  // Webcam hand tracking — on by default (requests camera access on load);
+  // the HeaderBar toggle still lets it be switched off. Orbits the orb's
   // camera (OrbCameraRig, wired through OrbScene's gestureRef prop) and, via
   // useGestureOrbBridge, dispatches squeeze/touch shader reactions + a
   // gesture_touch WS message so Freya reacts through the live Gemini session.
-  const [handTrackingEnabled, setHandTrackingEnabled] = useState(false);
-  const { stateRef: gestureRef, status: handTrackingStatus } = useHandGestures(handTrackingEnabled);
+  const [handTrackingEnabled, setHandTrackingEnabled] = useState(true);
+  const videoDevices = useVideoDevices();
+  const [selectedVideoDeviceId, setSelectedVideoDeviceId] = useState("");
+  const { stateRef: gestureRef, status: handTrackingStatus } = useHandGestures(
+    handTrackingEnabled,
+    selectedVideoDeviceId || undefined
+  );
   useGestureOrbBridge(gestureRef, orbFxRef, sendGestureTouch);
 
   // Telemetry echo of a webcam gesture the backend already routed to Gemini.
@@ -268,6 +278,9 @@ export default function Home() {
           handTrackingEnabled={handTrackingEnabled}
           handTrackingStatus={handTrackingStatus}
           onToggleHandTracking={() => setHandTrackingEnabled((v) => !v)}
+          videoDevices={videoDevices}
+          selectedVideoDeviceId={selectedVideoDeviceId}
+          onSelectVideoDevice={setSelectedVideoDeviceId}
         />
       </div>
 
@@ -335,6 +348,8 @@ export default function Home() {
       <SettingsModal
         isOpen={isSettingsOpen}
         onClose={() => setIsSettingsOpen(false)}
+        audioDevices={audioDevices}
+        onAudioDeviceChange={setAudioDevice}
         state={state}
         config={config}
         memoryVersion={memoryVersion}

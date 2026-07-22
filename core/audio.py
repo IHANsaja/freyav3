@@ -7,6 +7,24 @@ CHANNELS = 1
 SEND_SAMPLE_RATE = 16000   # mic input → Gemini
 RECEIVE_SAMPLE_RATE = 24000  # Gemini output → speaker
 
+def list_audio_devices():
+    """Structured device list for the frontend's mic-select dropdown: PyAudio
+    lists every device once with both channel counts, split here into
+    separate input/output lists (a device can appear in both)."""
+    p = pyaudio.PyAudio()
+    input_devices = []
+    output_devices = []
+    for i in range(p.get_device_count()):
+        info = p.get_device_info_by_index(i)
+        entry = {"index": i, "name": info["name"]}
+        if info["maxInputChannels"] > 0:
+            input_devices.append(entry)
+        if info["maxOutputChannels"] > 0:
+            output_devices.append(dict(entry))
+    p.terminate()
+    return {"input": input_devices, "output": output_devices}
+
+
 def get_audio_devices():
     p = pyaudio.PyAudio()
     print("\nAvailable audio devices:")

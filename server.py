@@ -260,6 +260,8 @@ async def get_config_endpoint():
         "active_voice": config["providers"]["gemini"]["active_voice"],
         "models": config["providers"]["gemini"]["models"],
         "voices": config["providers"]["gemini"]["voices"],
+        "input_device_index": config.get("audio", {}).get("input_device_index"),
+        "output_device_index": config.get("audio", {}).get("output_device_index"),
         "modes": {
             mode_id: {
                 "label": mode.get("label", mode_id),
@@ -271,6 +273,12 @@ async def get_config_endpoint():
     })
 
 
+@app.get("/audio/devices")
+async def get_audio_devices_endpoint():
+    from core.audio import list_audio_devices
+    return JSONResponse(list_audio_devices())
+
+
 @app.post("/config")
 async def update_config_endpoint(body: dict):
     config_path = os.path.join("config", "freya_config.json")
@@ -280,6 +288,10 @@ async def update_config_endpoint(body: dict):
         config["active_model"] = body["model"]
     if "voice" in body:
         config["providers"]["gemini"]["active_voice"] = body["voice"]
+    if "input_device_index" in body:
+        config.setdefault("audio", {})["input_device_index"] = body["input_device_index"]
+    if "output_device_index" in body:
+        config.setdefault("audio", {})["output_device_index"] = body["output_device_index"]
     with open(config_path, "w") as f:
         json.dump(config, f, indent=2)
     return JSONResponse({"status": "updated"})
@@ -462,6 +474,14 @@ async def websocket_endpoint(websocket: WebSocket):
                 await update_config_endpoint({"model": data.get("model")})
             elif msg_type == "set_voice":
                 await update_config_endpoint({"voice": data.get("voice")})
+            elif msg_type == "set_audio_device":
+                body = {}
+                if "input_device_index" in data:
+                    body["input_device_index"] = data.get("input_device_index")
+                if "output_device_index" in data:
+                    body["output_device_index"] = data.get("output_device_index")
+                if body:
+                    await update_config_endpoint(body)
             elif msg_type == "set_listening":
                 from core import runtime
                 runtime.set_paused(bool(data.get("paused", False)))

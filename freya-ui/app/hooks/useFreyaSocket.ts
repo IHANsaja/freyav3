@@ -50,11 +50,18 @@ export interface FreyaMode {
     label: string;
 }
 
+export interface AudioDevice {
+    index: number;
+    name: string;
+}
+
 export interface FreyaConfig {
     active_model: string;
     active_voice: string;
     models: { id: string; label: string }[];
     voices: string[];
+    input_device_index?: number | null;
+    output_device_index?: number | null;
     modes?: Record<string, FreyaMode>;
     active_mode?: string;
 }
@@ -72,6 +79,10 @@ export function useFreyaSocket() {
     const [images, setImages] = useState<ImageEntry[]>([]);
     const [newsItems, setNewsItems] = useState<NewsItem[]>([]);
     const [config, setConfig] = useState<FreyaConfig | null>(null);
+    const [audioDevices, setAudioDevices] = useState<{ input: AudioDevice[]; output: AudioDevice[] }>({
+        input: [],
+        output: [],
+    });
     const [activeMode, setActiveMode] = useState<string>("default");
     const [micPaused, setMicPaused] = useState(false);
     const [memoryVersion, setMemoryVersion] = useState(0);
@@ -94,6 +105,10 @@ export function useFreyaSocket() {
                 setConfig(cfg);
                 if (cfg.active_mode) setActiveMode(cfg.active_mode);
             })
+            .catch(console.error);
+        fetch("http://localhost:8000/audio/devices")
+            .then((r) => r.json())
+            .then((devices: { input: AudioDevice[]; output: AudioDevice[] }) => setAudioDevices(devices))
             .catch(console.error);
     }, []);
 
@@ -300,6 +315,19 @@ export function useFreyaSocket() {
         setConfig((prev) => prev ? { ...prev, active_voice: voice } : prev);
     }, [send]);
 
+    const setAudioDevice = useCallback((inputDeviceIndex?: number, outputDeviceIndex?: number) => {
+        send({
+            type: "set_audio_device",
+            ...(inputDeviceIndex !== undefined ? { input_device_index: inputDeviceIndex } : {}),
+            ...(outputDeviceIndex !== undefined ? { output_device_index: outputDeviceIndex } : {}),
+        });
+        setConfig((prev) => prev ? {
+            ...prev,
+            ...(inputDeviceIndex !== undefined ? { input_device_index: inputDeviceIndex } : {}),
+            ...(outputDeviceIndex !== undefined ? { output_device_index: outputDeviceIndex } : {}),
+        } : prev);
+    }, [send]);
+
     const setMode = useCallback((mode: string) => {
         send({ type: "set_mode", mode });
         setActiveMode(mode); // optimistic; server re-broadcasts on success
@@ -349,6 +377,7 @@ export function useFreyaSocket() {
         images,
         newsItems,
         config,
+        audioDevices,
         activeMode,
         micPaused,
         memoryVersion,
@@ -365,6 +394,7 @@ export function useFreyaSocket() {
         stopFreya,
         setModel,
         setVoice,
+        setAudioDevice,
         setMode,
         toggleListening,
         respondApproval,

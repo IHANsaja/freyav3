@@ -37,7 +37,9 @@ const PALM_LANDMARKS = [0, 5, 9, 13, 17]; // wrist + finger MCPs — stable cent
  *  elsewhere in the orb scene. Every failure path (no camera, permission denied,
  *  model load failure) degrades to an idle ref rather than throwing — callers never
  *  need to special-case errors, just read `status` for an optional UI indicator. */
-export function useHandGestures(enabled: boolean): {
+/** @param deviceId Optional specific camera to use (from useVideoDevices). Falls
+ *  back to the system default front-facing camera when omitted. */
+export function useHandGestures(enabled: boolean, deviceId?: string): {
   stateRef: MutableRefObject<HandGestureState>;
   status: HandTrackingStatus;
 } {
@@ -69,7 +71,9 @@ export function useHandGestures(enabled: boolean): {
     (async () => {
       try {
         stream = await navigator.mediaDevices.getUserMedia({
-          video: { facingMode: "user", width: { ideal: 320 }, height: { ideal: 240 } },
+          video: deviceId
+            ? { deviceId: { exact: deviceId }, width: { ideal: 320 }, height: { ideal: 240 } }
+            : { facingMode: "user", width: { ideal: 320 }, height: { ideal: 240 } },
         });
         if (cancelled) {
           stream.getTracks().forEach((t) => t.stop());
@@ -162,7 +166,7 @@ export function useHandGestures(enabled: boolean): {
       recognizer?.close?.();
       stateRef.current = { ...IDLE_STATE };
     };
-  }, [enabled]);
+  }, [enabled, deviceId]);
 
   return { stateRef, status };
 }
