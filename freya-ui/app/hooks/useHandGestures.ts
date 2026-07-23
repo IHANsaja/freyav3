@@ -25,54 +25,88 @@ export interface HandGestureState {
    *  and independent of the discrete `gesture` label, so the orb can be
    *  squeezed by degrees rather than only on a recognized Closed_Fist. */
   grip: number;
+  /** Apparent palm length (wrist→middle knuckle) in normalized frame units —
+   *  a proxy for how close the hand is to the camera. Unaffected by finger
+   *  curl, so it stays independent of `grip`. */
+  span: number;
+  /** Thumb-tip → index-tip distance in palm-lengths: ~0.2 when the fingers are
+   *  touching, ~2.5 with the hand wide open. Scale-invariant like `grip`, and
+   *  measured from fingers that `grip` deliberately ignores, so pinching to
+   *  zoom and clenching to squeeze can't be mistaken for one another. */
+  pinch: number;
 }
 
 export type HandTrackingStatus = "idle" | "starting" | "active" | "denied" | "unsupported" | "error";
 
 const IDLE_STATE: HandGestureState = {
-  present: false, x: 0.5, y: 0.5, gesture: "None", confidence: 0, grip: 0,
+  present: false, x: 0.5, y: 0.5, gesture: "None", confidence: 0, grip: 0, span: 0,
+  pinch: 0,
 };
 
 const CONFIDENCE_FLOOR = 0.5;
 const INFER_INTERVAL_MS = 66; // ~15fps — inference is far more expensive than the render loop
 const PALM_LANDMARKS = [0, 5, 9, 13, 17]; // wrist + finger MCPs — stable centroid
-const FINGERTIPS = [8, 12, 16, 20];        // index→pinky; thumb excluded (see _grip)
+const THUMB_TIP = 4;
+const INDEX_TIP = 8;
+// Middle, ring and pinky only. The index is deliberately left out: it pairs
+// with the thumb to form the pinch that drives zoom, so counting it here would
+// make every pinch read as a partial squeeze. Grip and pinch therefore measure
+// disjoint sets of fingers and stay genuinely independent. The thumb is out for
+// the original reason — it folds across the palm at wildly varying angles.
+const GRIP_FINGERTIPS = [12, 16, 20];
 
 // Curl ratio (mean fingertip→palm distance ÷ hand span) at the extremes. Tuned
 // against a real webcam: a flat open hand sits near 2.0, a tight fist near 0.8.
 const GRIP_OPEN = 1.95;
 const GRIP_CLOSED = 0.85;
 
-/** Analog grip strength from hand landmarks, 0 (open) → 1 (tight fist).
- *
- *  Measured as mean fingertip→palm-centre distance divided by the wrist→middle-
- *  knuckle span. Dividing by that span is what makes it work at any distance
- *  from the camera: both terms scale together, so a fist far away still reads
- *  as a fist. The thumb is excluded — it folds across the palm at wildly
- *  different angles between people and adds noise without adding signal. */
-function _grip(lm: { x: number; y: number }[]): number {
-  const wrist = lm[0];
-  const midMcp = lm[9];
-  const span = Math.hypot(midMcp.x - wrist.x, midMcp.y - wrist.y);
-  if (span < 1e-4) return 0; // degenerate detection — treat as not gripping
-
+/** Centroid of wrist + finger knuckles — a stable stand-in for "where the hand
+ *  is", far less jittery than any single landmark. */
+function _palm(lm: { x: number; y: number }[]): { x: number; y: number } {
   let px = 0;
   let py = 0;
   for (const i of PALM_LANDMARKS) {
     px += lm[i].x;
     py += lm[i].y;
   }
-  px /= PALM_LANDMARKS.length;
-  py /= PALM_LANDMARKS.length;
+  return { x: px / PALM_LANDMARKS.length, y: py / PALM_LANDMARKS.length };
+}
+
+/** The three continuous analog channels, measured so they don't collide.
+ *
+ *  `grip` (0 open → 1 tight fist): mean middle/ring/pinky-tip → palm-centre
+ *  distance, divided by hand span. Dividing by span is what makes it work at
+ *  any distance from the camera — both terms scale together, so a fist far
+ *  away still reads as a fist.
+ *
+ *  `pinch`: thumb-tip → index-tip distance in those same span units. Uses the
+ *  two fingers `grip` ignores, so a deliberate pinch (thumb and index together,
+ *  other fingers extended) registers zoom without registering squeeze, and a
+ *  fist registers squeeze while the caller's fist-guard suppresses zoom.
+ *
+ *  `span` is the raw wrist→middle-knuckle length. It measures the palm, not the
+ *  fingers, so curling changes nothing — only distance from the camera does. */
+function _metrics(
+  lm: { x: number; y: number }[]
+): { grip: number; span: number; pinch: number } {
+  const wrist = lm[0];
+  const midMcp = lm[9];
+  const span = Math.hypot(midMcp.x - wrist.x, midMcp.y - wrist.y);
+  if (span < 1e-4) return { grip: 0, span: 0, pinch: 0 }; // degenerate detection
+
+  const { x: px, y: py } = _palm(lm);
 
   let reach = 0;
-  for (const i of FINGERTIPS) {
+  for (const i of GRIP_FINGERTIPS) {
     reach += Math.hypot(lm[i].x - px, lm[i].y - py);
   }
-  const ratio = reach / FINGERTIPS.length / span;
-
+  const ratio = reach / GRIP_FINGERTIPS.length / span;
   const t = (GRIP_OPEN - ratio) / (GRIP_OPEN - GRIP_CLOSED);
-  return Math.max(0, Math.min(1, t));
+
+  const pinch =
+    Math.hypot(lm[THUMB_TIP].x - lm[INDEX_TIP].x, lm[THUMB_TIP].y - lm[INDEX_TIP].y) / span;
+
+  return { grip: Math.max(0, Math.min(1, t)), span, pinch };
 }
 
 /** MediaPipe's WASM writes ALL its diagnostics — including plain INFO lines — to
@@ -224,33 +258,29 @@ export function useHandGestures(enabled: boolean, deviceId?: string): {
           // instantiation, so per-frame logs already route through the filter
           // installed back then.
           const result = recognizer.recognizeForVideo(video, now);
-          const landmarks = result.landmarks?.[0];
+          const allHands: { x: number; y: number }[][] = result.landmarks ?? [];
+          const primary = allHands[0];
           const topGesture = result.gestures?.[0]?.[0];
 
-          if (!landmarks || !topGesture) {
+          if (!primary || !topGesture) {
             stateRef.current = { ...IDLE_STATE };
             return;
           }
 
-          let sx = 0;
-          let sy = 0;
-          for (const i of PALM_LANDMARKS) {
-            sx += landmarks[i].x;
-            sy += landmarks[i].y;
-          }
-          const avgX = sx / PALM_LANDMARKS.length;
-          const avgY = sy / PALM_LANDMARKS.length;
-
+          const palm = _palm(primary);
           const confidence = topGesture.score ?? 0;
           const gesture = (confidence >= CONFIDENCE_FLOOR ? topGesture.categoryName : "None") as GestureLabel;
+          const { grip, span, pinch } = _metrics(primary);
 
           stateRef.current = {
             present: true,
-            x: 1 - avgX, // mirror for selfie-view intuition
-            y: avgY,
+            x: 1 - palm.x, // mirror for selfie-view intuition
+            y: palm.y,
             gesture,
             confidence,
-            grip: _grip(landmarks),
+            grip,
+            span,
+            pinch,
           };
         };
         rafId = requestAnimationFrame(loop);

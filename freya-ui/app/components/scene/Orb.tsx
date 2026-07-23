@@ -223,6 +223,34 @@ const GRIP_DEADZONE = 0.15;
 // the jitter of a 15fps landmark stream.
 const GRIP_ATTACK = 14;
 
+// One-hand pinch zoom. Thumb-to-index distance (in palm-lengths) relative to
+// where the pinch began: spread the fingers to zoom in, close them to zoom out.
+const BASE_SCALE = 0.85; // the orb's resting size; zoom multiplies this
+const MIN_ZOOM = 0.55;
+const MAX_ZOOM = 1.9;
+const ZOOM_SMOOTHING = 6;
+// Pinch ratios inside this band count as holding still — without it, landmark
+// noise would make the orb breathe in and out while the hand is held steady.
+const ZOOM_DEADZONE = 0.05;
+// How strongly a change in finger separation translates into zoom. Above 1
+// means less finger travel is needed to cover the zoom range.
+const PINCH_GAIN = 1.2;
+
+// Pinch engage/release, with hysteresis. Engaging needs a real pinch (fingers
+// nearly touching); releasing needs the hand to open well past that. Without
+// the gap, the very act of spreading to zoom in would immediately disengage.
+//
+// Release must stay inside what a hand can actually reach: thumb-to-index on a
+// fully spread hand is only ~1.6–2.2 palm-lengths, so a higher threshold would
+// latch the pinch permanently and silently kill rotation. 1.6 is comfortably
+// reachable while still sitting above a relaxed open hand.
+const PINCH_ENGAGE = 0.75;
+const PINCH_RELEASE = 1.6;
+// A fist also brings thumb and index together, so it would read as a pinch.
+// Grip (middle/ring/pinky) tells the two apart: above this the hand is closing
+// into a fist, which means squeeze — not zoom.
+const PINCH_FIST_GUARD = 0.45;
+
 interface OrbProps {
   moodRef: MutableRefObject<SceneMood>;
   fxRef: MutableRefObject<OrbFx>;
@@ -257,6 +285,14 @@ export default function Orb({ moodRef, fxRef, position = [0, 0.45, 0], gestureRe
   const yawSmooth = useRef(0);
   const pitchSmooth = useRef(0);
   const lastHand = useRef<{ x: number; y: number } | null>(null);
+  // Zoom: `zoomHeld` is the level committed from previous pinches; `refPinch`
+  // is the finger separation at the moment the pinch engaged. Live zoom is the
+  // product, so each pinch is measured relative to where it started rather than
+  // accumulating drift frame to frame. `pinching` is the hysteresis latch.
+  const zoomHeld = useRef(1);
+  const refPinch = useRef(0);
+  const pinching = useRef(false);
+  const zoomSmooth = useRef(1);
 
   const uniforms = useMemo(
     () => ({
@@ -468,11 +504,59 @@ export default function Orb({ moodRef, fxRef, position = [0, 0.45, 0], gestureRe
       }
     }
 
+    // ── Pinch zoom ───────────────────────────────────────────────────────
+    // Pinch thumb and index together to grab the orb, then spread them to zoom
+    // in or close them further to zoom out. Latched with hysteresis: engaging
+    // takes a real pinch, releasing takes an open hand — otherwise the first
+    // millimetre of spreading would end the gesture it just began. Measured
+    // against the separation at engage time, so noise can't compound into
+    // drift, and each new pinch resumes from the size you left the orb at.
+    // Zoom scales the orb group only — dais, dust and void stay put.
+    //
+    // Resolved before the drag below, which reads `pinching` — computing it
+    // here keeps that read current instead of a frame behind.
+    const pinchNow = handState?.present ? handState.pinch : 0;
+    const fisted = (handState?.grip ?? 0) > PINCH_FIST_GUARD;
+
+    if (!handState?.present || fisted) {
+      // Hand gone, or closing into a fist (that's squeeze, not zoom).
+      if (pinching.current) {
+        zoomHeld.current = zoomSmooth.current; // bank what we ended on
+        pinching.current = false;
+        refPinch.current = 0;
+      }
+    } else if (!pinching.current) {
+      if (pinchNow > 0 && pinchNow < PINCH_ENGAGE) {
+        pinching.current = true;
+        refPinch.current = pinchNow;
+      }
+    } else if (pinchNow > PINCH_RELEASE) {
+      zoomHeld.current = zoomSmooth.current;
+      pinching.current = false;
+      refPinch.current = 0;
+    }
+
+    let zoomTarget = zoomHeld.current;
+    if (pinching.current && refPinch.current > 1e-4) {
+      let ratio = pinchNow / refPinch.current;
+      if (Math.abs(ratio - 1) < ZOOM_DEADZONE) ratio = 1;
+      // Gain applied in ratio space so 1.0 stays the neutral point.
+      ratio = 1 + (ratio - 1) * PINCH_GAIN;
+      zoomTarget = THREE.MathUtils.clamp(zoomHeld.current * ratio, MIN_ZOOM, MAX_ZOOM);
+    }
+    zoomSmooth.current = THREE.MathUtils.lerp(
+      zoomSmooth.current, zoomTarget, Math.min(1, delta * ZOOM_SMOOTHING)
+    );
+
     // ── Hand drag ────────────────────────────────────────────────────────
     // Frame-to-frame hand movement turns the ORB, not the camera: the void,
     // dais and particle field stay put, so only the globe responds. Reads
     // presence/position only — any hand pose drags, no gesture required.
-    if (handState?.present) {
+    //
+    // Rotation stands down while a pinch is engaged, so grabbing the orb to
+    // resize it doesn't also fling it around — the palm centroid shifts a
+    // little as the fingers move, which would otherwise read as a drag.
+    if (handState?.present && !pinching.current) {
       if (lastHand.current) {
         handYaw.current -= (handState.x - lastHand.current.x) * HAND_TO_YAW;
         handPitch.current = THREE.MathUtils.clamp(
@@ -483,8 +567,8 @@ export default function Orb({ moodRef, fxRef, position = [0, 0.45, 0], gestureRe
       }
       lastHand.current = { x: handState.x, y: handState.y };
     } else {
-      // Hand gone: hold the current angle, and don't diff against a stale
-      // position when it re-enters the frame.
+      // Hand gone or pinching: hold the current angle, and don't diff against
+      // a stale position when dragging resumes.
       lastHand.current = null;
     }
     const hk = Math.min(1, delta * HAND_SMOOTHING);
@@ -499,11 +583,14 @@ export default function Orb({ moodRef, fxRef, position = [0, 0.45, 0], gestureRe
       spin.current += delta * (0.12 + mood.spin * 0.2) * motion;
       group.current.rotation.y = spin.current + yawSmooth.current;
       group.current.rotation.x = Math.sin(timeRef.current * 0.25) * 0.06 + pitchSmooth.current;
+      group.current.scale.setScalar(BASE_SCALE * zoomSmooth.current);
     }
   });
 
   return (
-    <group ref={group} position={position} scale={0.85}>
+    // Scale is written every frame from the zoom gesture (see BASE_SCALE); the
+    // value here is just the first-frame default before useFrame runs.
+    <group ref={group} position={position} scale={BASE_SCALE}>
       <mesh material={solidMat}>
         <icosahedronGeometry args={[0.9, 5]} />
       </mesh>

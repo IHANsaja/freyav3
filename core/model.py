@@ -1,6 +1,7 @@
 from asyncio import selector_events
 import asyncio
 import json
+from concurrent.futures import ThreadPoolExecutor
 from google import genai
 from google.genai import types
 from core.tools import dispatch
@@ -273,6 +274,19 @@ class FreyaModel:
         model_speaking = asyncio.Event()
         loop = asyncio.get_event_loop()
 
+        # Dedicated thread pool for the blocking mic/speaker calls.
+        #
+        # These used to run on the DEFAULT executor — the same pool every sync
+        # tool handler uses (see registry._execute). A slow tool (screen
+        # capture, a file scan, a sub-agent's web fetch) would occupy those
+        # worker threads, and the next mic read or speaker write would sit in
+        # the queue behind it. That is audible: Freya's voice stutters or lags
+        # exactly when something else is working hard.
+        #
+        # Two workers, reserved for audio and nothing else, so no amount of
+        # tool or agent activity can ever delay the voice path.
+        audio_pool = ThreadPoolExecutor(max_workers=2, thread_name_prefix="freya-audio")
+
         # Tracking variables for turn-completion and playback sync
         pending_playback_chunks = 0
         model_turn_complete = True
@@ -332,7 +346,7 @@ class FreyaModel:
             async def send_audio():
                 last_paused = False
                 while True:
-                    data = await loop.run_in_executor(None, mic_stream.read)
+                    data = await loop.run_in_executor(audio_pool, mic_stream.read)
                     # Pause-listening: drain the mic but DON'T forward it, so movie /
                     # ambient audio never reaches Gemini and can't trigger her.
                     paused = runtime.is_paused()
@@ -533,7 +547,7 @@ class FreyaModel:
                 nonlocal pending_playback_chunks
                 while True:
                     data = await audio_queue.get()
-                    await loop.run_in_executor(None, speaker_stream.write, data)
+                    await loop.run_in_executor(audio_pool, speaker_stream.write, data)
                     audio_queue.task_done()
                     pending_playback_chunks = max(0, pending_playback_chunks - 1)
                     if pending_playback_chunks == 0 and model_turn_complete:
