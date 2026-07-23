@@ -579,3 +579,6 @@ class FreyaModel:
                     ambient.stop_all()
                 except Exception:
                     pass
+                # Don't wait on the audio threads: a mic read can sit blocked in
+                # PortAudio for a while, and shutdown shouldn't hang on it.
+                audio_pool.shutdown(wait=False)
