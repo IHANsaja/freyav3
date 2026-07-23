@@ -81,16 +81,35 @@ def guard(tool_name: str, args: dict, config: dict) -> tuple[bool, str]:
         if not ok:
             return ok, msg
 
-    # File-touching tools must stay inside allowed roots
-    if tool_name in ("write_file", "edit_file", "delete_file", "create_tool"):
-        path = args.get("path") or args.get("file_path") or ""
+    # File-touching tools must stay inside allowed roots. Each entry names the
+    # argument(s) that carry a path — file_manager tools use source/destination
+    # rather than `path`, and BOTH ends of a copy/move must be checked (a move
+    # out of an allowed root is just as much an escape as a move into one).
+    for arg_name in _PATH_ARGS.get(tool_name, ()):
+        path = args.get(arg_name) or ""
         if path and not path_is_allowed(str(path), config):
             return False, (
-                f"For safety I can only modify files inside your home folder or the Freya "
+                f"For safety I can only touch files inside your home folder or the Freya "
                 f"project. '{path}' is outside that. Add it to safety.allowed_roots to permit it."
             )
 
     return True, ""
+
+
+# Which argument(s) each dangerous file tool puts its path in.
+_PATH_ARGS: dict[str, tuple[str, ...]] = {
+    "write_file": ("path", "file_path"),
+    "edit_file": ("path", "file_path"),
+    "delete_file": ("path", "file_path"),
+    "create_tool": ("path", "file_path"),
+    # core/file_manager.py
+    "copy_item": ("source", "destination"),
+    "move_item": ("source", "destination"),
+    "delete_item": ("path",),
+    "create_folder": ("path",),
+    "zip_item": ("source", "destination"),
+    "unzip_archive": ("path", "destination"),
+}
 
 
 # ══════════════════════════════════════════════════════════════════════════

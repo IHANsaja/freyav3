@@ -98,19 +98,43 @@ export function useFreyaSocket() {
     const [persona, setPersona] = useState<PersonaPayload | null>(null);
 
     // ── Fetch initial config ──
-    useEffect(() => {
+    // Runs on mount AND on every socket (re)connect, so starting server.py after
+    // the page is already open fills in the config, modes and audio devices on
+    // its own — previously they stayed empty until a manual refresh.
+    const loadBackendConfig = useCallback(() => {
+        // A failure here just means the backend isn't up yet. That's an expected
+        // state with a retry loop behind it, not a bug, so it's logged with
+        // console.warn rather than console.error: the Next.js dev overlay counts
+        // console.error as an issue and would bury real errors under a stack
+        // trace on every reload. Same reasoning as socket.onerror below.
         fetch("http://localhost:8000/config")
             .then((r) => r.json())
             .then((cfg: FreyaConfig) => {
                 setConfig(cfg);
                 if (cfg.active_mode) setActiveMode(cfg.active_mode);
             })
-            .catch(console.error);
+            .catch(() => {
+                console.warn("Freya config unavailable — backend offline, will retry on reconnect.");
+            });
         fetch("http://localhost:8000/audio/devices")
             .then((r) => r.json())
             .then((devices: { input: AudioDevice[]; output: AudioDevice[] }) => setAudioDevices(devices))
-            .catch(console.error);
+            .catch(() => {
+                // Covered by the config warning above — don't log the same
+                // outage twice per reload.
+            });
     }, []);
+
+    // Held in a ref so the socket effect below can call it without taking it as
+    // a dependency — that effect must keep an empty dep array, or a changed
+    // array size tears down and reopens the WebSocket on hot reload. No
+    // reassignment needed: loadBackendConfig is useCallback([]), so the value
+    // captured here stays correct for the component's whole lifetime.
+    const loadConfigRef = useRef(loadBackendConfig);
+
+    useEffect(() => {
+        loadBackendConfig();
+    }, [loadBackendConfig]);
 
     // ── WebSocket connection ──
     useEffect(() => {
@@ -120,6 +144,9 @@ export function useFreyaSocket() {
             socket.onopen = () => {
                 setConnected(true);
                 console.log("Freya WebSocket connected");
+                // The socket coming up is the signal that the REST endpoints are
+                // live too — pull the config that failed while it was down.
+                loadConfigRef.current();
             };
 
             socket.onclose = () => {
@@ -293,6 +320,8 @@ export function useFreyaSocket() {
 
         connect();
         return () => ws.current?.close();
+        // Intentionally empty: the socket must be opened exactly once. Config
+        // reloading goes through loadConfigRef so it never becomes a dependency.
     }, []);
 
     // ── Actions ──

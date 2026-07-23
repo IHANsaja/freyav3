@@ -183,3 +183,5 @@ cython_debug/
 memory/freya_memory.md
 config/freya_horny.json
 .claude
+# career-ops: nested third-party clone + personal CV/profile/application data
+career-ops/

@@ -97,10 +97,10 @@ export default function Home() {
   }, [status.engine]);
 
   // Webcam hand tracking — on by default (requests camera access on load);
-  // the HeaderBar toggle still lets it be switched off. Orbits the orb's
-  // camera (OrbCameraRig, wired through OrbScene's gestureRef prop) and, via
-  // useGestureOrbBridge, dispatches squeeze/touch shader reactions + a
-  // gesture_touch WS message so Freya reacts through the live Gemini session.
+  // the HeaderBar toggle still lets it be switched off. Hand movement turns the
+  // orb itself (Orb.tsx, via OrbScene's gestureRef prop) while the camera stays
+  // locked, and useGestureOrbBridge dispatches squeeze/sign shader reactions +
+  // a gesture_touch WS message so Freya reacts through the live Gemini session.
   const [handTrackingEnabled, setHandTrackingEnabled] = useState(true);
   const videoDevices = useVideoDevices();
   const [selectedVideoDeviceId, setSelectedVideoDeviceId] = useState("");

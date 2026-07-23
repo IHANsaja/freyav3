@@ -11,7 +11,6 @@ import ParticleField from "./ParticleField";
 import VoidBackground from "./VoidBackground";
 import Effects from "./Effects";
 import Orb, { type OrbFx } from "./Orb";
-import OrbCameraRig from "./OrbCameraRig";
 import { useSceneMood } from "./useSceneMood";
 import type { HandGestureState } from "../../hooks/useHandGestures";
 
@@ -24,20 +23,20 @@ interface OrbSceneProps {
    *  dissolve/reform transition. */
   expression?: ExpressionEvent | null;
   fxRef: MutableRefObject<OrbFx>;
-  /** Tracked webcam hand state — drives the camera orbit (OrbCameraRig reads
-   *  only .present/.x/.y here; discrete gesture reactions are dispatched
-   *  elsewhere via useGestureOrbBridge). */
+  /** Tracked webcam hand state — spins the orb itself (see Orb.tsx, which reads
+   *  only .present/.x/.y). Discrete gesture reactions are dispatched elsewhere
+   *  via useGestureOrbBridge. */
   gestureRef: MutableRefObject<HandGestureState>;
 }
 
 // The orb floats at y≈0.45 with the projection dais beneath it, framed so the
 // orb sits in the upper-center of the viewport, clear of the mode tabs /
-// action buttons overlaid below. The camera orbits in response to tracked
-// webcam hand movement (see OrbCameraRig) — there is no mouse-drag control.
+// action buttons overlaid below. The camera is LOCKED — hand movement turns the
+// orb itself, so the void, dais and particle field never shift.
 const ORB_Y = 0.45;
 const PLATFORM_Y = -0.55;
 
-function SceneContents({ state, avatarIntent, persona, expression, fxRef }: OrbSceneProps) {
+function SceneContents({ state, avatarIntent, persona, expression, fxRef, gestureRef }: OrbSceneProps) {
   // The orb has no avatar of its own — its expression accent rides in from
   // the portrait card's FreyaAvatar via the expression prop, same as
   // HoloScene wires expression → mood for the full-body embodiment.
@@ -62,7 +61,7 @@ function SceneContents({ state, avatarIntent, persona, expression, fxRef }: OrbS
       <VoidBackground moodRef={moodRef} />
       <HoloPlatform moodRef={moodRef} yOffset={PLATFORM_Y} />
       <ParticleField moodRef={moodRef} centerY={ORB_Y} />
-      <Orb moodRef={moodRef} fxRef={fxRef} position={[0, ORB_Y, 0]} />
+      <Orb moodRef={moodRef} fxRef={fxRef} position={[0, ORB_Y, 0]} gestureRef={gestureRef} />
 
       <Effects />
     </>
@@ -70,8 +69,8 @@ function SceneContents({ state, avatarIntent, persona, expression, fxRef }: OrbS
 }
 
 /** Full-bleed stage behind the HUD grid: nebula void, ring dais, particle
- *  stream, and the particle-orb AI core. Camera orbits via tracked webcam
- *  hand movement (OrbCameraRig) — no mouse-drag controls. */
+ *  stream, and the particle-orb AI core. Fixed camera; tracked webcam hand
+ *  movement turns the orb itself rather than the view. */
 function OrbScene(props: OrbSceneProps) {
   const [frameloop, setFrameloop] = useState<"always" | "never">("always");
 
@@ -92,7 +91,6 @@ function OrbScene(props: OrbSceneProps) {
         style={{ width: "100%", height: "100%", background: "transparent" }}
       >
         <SceneContents {...props} />
-        <OrbCameraRig gestureRef={props.gestureRef} target={[0, ORB_Y, 0]} />
       </Canvas>
     </div>
   );

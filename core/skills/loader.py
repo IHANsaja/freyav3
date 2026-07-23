@@ -36,6 +36,8 @@ BUILTIN_SKILLS: list[tuple[str, SkillManifest]] = [
      "World and topic headlines, read aloud with dashboard cards")),
     ("core.system_tools", SkillManifest("system", "System Control",
      "Clipboard, files, windows, volume and media control")),
+    ("core.file_manager", SkillManifest("files", "File Manager",
+     "Copy, move, rename, recycle, zip and inspect files and folders")),
     ("core.screen", SkillManifest("screen", "Screen Control",
      "Read and operate on-screen UI elements via Windows accessibility", gate="screen.engine")),
     ("core.agents", SkillManifest("agents", "Sub-Agents",
@@ -60,6 +62,10 @@ BUILTIN_SKILLS: list[tuple[str, SkillManifest]] = [
      "Pause/resume the microphone by voice")),
     ("core.web", SkillManifest("web", "Web Search",
      "Quota-free web search and page fetching")),
+    ("core.md_skills", SkillManifest("md_skills", "Skill Packs",
+     "Claude-style SKILL.md capability packs loaded on demand")),
+    ("core.career_ops", SkillManifest("career", "Career Ops",
+     "Job search: portal scanning, A-G offer evaluation, CV tailoring and tracking")),
 ]
 
 _manifests: dict[str, SkillManifest] = {}
@@ -131,6 +137,13 @@ def catalog(config: dict) -> list[dict]:
             "version": manifest.version,
             "tools": sorted(tools_by_skill.get(manifest.id, [])),
         })
+
+    # Markdown SKILL.md packs (core/md_skills.py) list alongside Python skills.
+    try:
+        from core.md_skills import catalog_entries
+        out.extend(catalog_entries(config))
+    except Exception:
+        pass
 
     # MCP servers appear as synthetic skills.
     try:

@@ -5,6 +5,7 @@ import { useFrame } from "@react-three/fiber";
 import * as THREE from "three";
 import type { MutableRefObject } from "react";
 import type { SceneMood } from "./useSceneMood";
+import type { HandGestureState } from "../../hooks/useHandGestures";
 
 /** UI-driven orb effects, mutated directly by button/tab handlers (no React
  *  state churn) and lerped into shader uniforms every frame. */
@@ -91,13 +92,17 @@ uniform float uTime;       // noise phase — frozen while paused
 uniform float uAmp;        // displacement amplitude (mood "breathing")
 uniform float uNoiseScale; // spatial frequency of the surface crawl
 uniform float uImplode;    // 0→1 collapses radius (STOP implosion)
-uniform float uSqueeze;    // damped-spring pulse: + compresses, oscillates, settles to 0
+uniform float uSqueeze;    // grip force: 0→1 shrinks the orb; negative = rebound overshoot
 
 vec3 displaced(vec3 p, out float disp) {
   disp = snoise(p * uNoiseScale + vec3(0.0, uTime * 0.35, uTime * 0.22));
   float collapse = 1.0 - uImplode * uImplode * 0.85;
-  float squeeze = 1.0 - uSqueeze * 0.3;
-  return p * (1.0 + uAmp * disp) * collapse * squeeze;
+  // Proportional shrink — a full-force fist takes ~38% off the radius, and the
+  // surface stiffens as it compresses (noise amplitude falls with grip) so a
+  // hard squeeze reads as a tight, dense core rather than a wobbly one.
+  float squeeze = 1.0 - uSqueeze * 0.38;
+  float amp = uAmp * (1.0 - clamp(uSqueeze, 0.0, 1.0) * 0.45);
+  return p * (1.0 + amp * disp) * collapse * squeeze;
 }
 `;
 
@@ -205,24 +210,53 @@ void main() {
 }
 `;
 
+// Hand-drag sensitivity: how far a hand crossing the webcam frame turns the orb.
+const HAND_TO_YAW = Math.PI * 2.2;
+const HAND_TO_PITCH = Math.PI * 0.7;
+const MAX_PITCH = 0.7;      // radians — keeps the orb from tumbling end over end
+const HAND_SMOOTHING = 8;   // higher = snappier, lower = smoother against jitter
+
+// Grip below this counts as "not squeezing" — a relaxed open hand never reads a
+// clean zero, and without a deadzone the orb would sit permanently dented.
+const GRIP_DEADZONE = 0.15;
+// Squeeze responsiveness. Fast enough to feel physical, slow enough to absorb
+// the jitter of a 15fps landmark stream.
+const GRIP_ATTACK = 14;
+
 interface OrbProps {
   moodRef: MutableRefObject<SceneMood>;
   fxRef: MutableRefObject<OrbFx>;
   position?: [number, number, number];
+  /** Tracked webcam hand — turns the orb itself. Only .present/.x/.y are read,
+   *  never .gesture, so spinning it stays independent of gesture reactions. */
+  gestureRef?: MutableRefObject<HandGestureState>;
 }
 
 /**
  * The AI core: faceted noise-displaced icosahedron rendered as a hybrid of a
  * dim solid, an additive wireframe shell, and additive vertex point sprites.
  */
-export default function Orb({ moodRef, fxRef, position = [0, 0.45, 0] }: OrbProps) {
+export default function Orb({ moodRef, fxRef, position = [0, 0.45, 0], gestureRef }: OrbProps) {
   const group = useRef<THREE.Group>(null!);
   const timeRef = useRef(0);
   // Elapsed seconds since the last expression burst fired; -1 = idle.
   const burstClock = useRef(-1);
-  // Elapsed seconds since the last squeeze/touch trigger; -1 = idle.
-  const squeezeClock = useRef(-1);
+  // Elapsed seconds since the last touch trigger; -1 = idle.
   const touchClock = useRef(-1);
+  // Squeeze state: live smoothed grip while held, then a rebound clock that
+  // springs back from whatever compression was actually being held.
+  const gripSmooth = useRef(0);
+  const wasGripping = useRef(false);
+  const releaseClock = useRef(-1);
+  const releaseFrom = useRef(0);
+  // Idle spin accumulates separately from the hand-driven offset so the two can
+  // be summed each frame rather than fighting over rotation.y.
+  const spin = useRef(0);
+  const handYaw = useRef(0);
+  const handPitch = useRef(0);
+  const yawSmooth = useRef(0);
+  const pitchSmooth = useRef(0);
+  const lastHand = useRef<{ x: number; y: number } | null>(null);
 
   const uniforms = useMemo(
     () => ({
@@ -333,6 +367,7 @@ export default function Orb({ moodRef, fxRef, position = [0, 0.45, 0] }: OrbProp
   useFrame((_, delta) => {
     const mood = moodRef.current;
     const fx = fxRef.current;
+    const handState = gestureRef?.current;
     const k = Math.min(1, delta * 3);
 
     // Noise time freezes while paused; mood.speed drives the crawl rate.
@@ -350,19 +385,50 @@ export default function Orb({ moodRef, fxRef, position = [0, 0.45, 0] }: OrbProp
     fx.modeFlash *= Math.pow(0.05, delta); // ~95% decay per second-ish, frame-rate independent
     uniforms.uModeFlash.value = fx.modeFlash;
 
-    // Squeeze: one-shot damped-spring compress/rebound, independent of uImplode.
-    if (fx.squeeze > 0) {
-      squeezeClock.current = 0;
-      fx.squeeze = 0;
-    }
-    if (squeezeClock.current >= 0) {
-      const t = (squeezeClock.current += delta);
-      uniforms.uSqueeze.value = Math.exp(-t * 5) * Math.cos(t * 16);
-      if (t > 1.0) {
-        squeezeClock.current = -1;
-        uniforms.uSqueeze.value = 0;
+    // ── Squeeze ──────────────────────────────────────────────────────────
+    // Analog: the orb shrinks in proportion to how hard the hand is actually
+    // closed (hand.grip, 0→1), so a light squeeze dents it and a tight fist
+    // crushes it. Holding the fist holds the compression; letting go fires a
+    // damped-spring rebound that overshoots from wherever it was released,
+    // so a hard squeeze snaps back harder than a gentle one.
+    const rawGrip = handState?.present ? handState.grip ?? 0 : 0;
+    // Deadzone + rescale: a relaxed open hand reads slightly above zero, and
+    // that shouldn't leave the orb permanently dented while merely dragging.
+    const gripTarget =
+      rawGrip > GRIP_DEADZONE ? (rawGrip - GRIP_DEADZONE) / (1 - GRIP_DEADZONE) : 0;
+
+    if (gripTarget > 0.02) {
+      releaseClock.current = -1;
+      gripSmooth.current = THREE.MathUtils.lerp(
+        gripSmooth.current, gripTarget, Math.min(1, delta * GRIP_ATTACK)
+      );
+      uniforms.uSqueeze.value = gripSmooth.current;
+      wasGripping.current = true;
+    } else {
+      if (wasGripping.current) {
+        // Released — rebound outward from the compression actually held.
+        wasGripping.current = false;
+        releaseFrom.current = uniforms.uSqueeze.value;
+        releaseClock.current = 0;
+        gripSmooth.current = 0;
+      }
+      // One-shot trigger (debug hooks, or a fist seen without landmark grip):
+      // rebound from a representative mid-strength squeeze.
+      if (fx.squeeze > 0) {
+        releaseFrom.current = Math.max(releaseFrom.current, 0.6);
+        releaseClock.current = 0;
+      }
+      if (releaseClock.current >= 0) {
+        const t = (releaseClock.current += delta);
+        uniforms.uSqueeze.value = releaseFrom.current * Math.exp(-t * 6) * Math.cos(t * 18);
+        if (t > 1.2) {
+          releaseClock.current = -1;
+          releaseFrom.current = 0;
+          uniforms.uSqueeze.value = 0;
+        }
       }
     }
+    fx.squeeze = 0;
 
     // Generic touch ping: fast additive flash, fires for any recognized gesture.
     if (fx.touchBurst > 0) {
@@ -402,11 +468,37 @@ export default function Orb({ moodRef, fxRef, position = [0, 0.45, 0] }: OrbProp
       }
     }
 
+    // ── Hand drag ────────────────────────────────────────────────────────
+    // Frame-to-frame hand movement turns the ORB, not the camera: the void,
+    // dais and particle field stay put, so only the globe responds. Reads
+    // presence/position only — any hand pose drags, no gesture required.
+    if (handState?.present) {
+      if (lastHand.current) {
+        handYaw.current -= (handState.x - lastHand.current.x) * HAND_TO_YAW;
+        handPitch.current = THREE.MathUtils.clamp(
+          handPitch.current - (handState.y - lastHand.current.y) * HAND_TO_PITCH,
+          -MAX_PITCH,
+          MAX_PITCH
+        );
+      }
+      lastHand.current = { x: handState.x, y: handState.y };
+    } else {
+      // Hand gone: hold the current angle, and don't diff against a stale
+      // position when it re-enters the frame.
+      lastHand.current = null;
+    }
+    const hk = Math.min(1, delta * HAND_SMOOTHING);
+    yawSmooth.current = THREE.MathUtils.lerp(yawSmooth.current, handYaw.current, hk);
+    pitchSmooth.current = THREE.MathUtils.lerp(pitchSmooth.current, handPitch.current, hk);
+
     // Rotation: slow Y spin + subtle X wobble; halts while imploded/paused.
+    // The hand offset is added on top, so dragging steers the idle motion
+    // instead of being overwritten by it.
     const motion = (1 - uniforms.uImplode.value) * pauseScale;
     if (group.current) {
-      group.current.rotation.y += delta * (0.12 + mood.spin * 0.2) * motion;
-      group.current.rotation.x = Math.sin(timeRef.current * 0.25) * 0.06;
+      spin.current += delta * (0.12 + mood.spin * 0.2) * motion;
+      group.current.rotation.y = spin.current + yawSmooth.current;
+      group.current.rotation.x = Math.sin(timeRef.current * 0.25) * 0.06 + pitchSmooth.current;
     }
   });
 

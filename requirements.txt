@@ -20,6 +20,7 @@ uiautomation        # pixel-perfect Windows UI Automation screen control
 pywin32
 pygetwindow         # window management
 pyperclip           # clipboard
+send2trash          # Recycle Bin deletes (core/file_manager.py)
 pycaw               # system volume
 comtypes
 psutil
