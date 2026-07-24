@@ -14,6 +14,7 @@ import type { OrbFx } from "./components/scene/Orb";
 import type { ExpressionEvent } from "./components/avatar/AvatarController";
 import { EXPRESSION_ACCENTS } from "./components/avatar/manifest";
 import HeaderBar from "./components/hud/HeaderBar";
+import ErrorBoundary from "./components/ErrorBoundary";
 import { useHandGestures } from "./hooks/useHandGestures";
 import { useGestureOrbBridge } from "./hooks/useGestureOrbBridge";
 import { useVideoDevices } from "./hooks/useVideoDevices";
@@ -257,16 +258,20 @@ export default function Home() {
     >
       <CustomCursor />
 
-      {/* Full-bleed WebGL stage: void nebula, dais, particle stream, the orb */}
+      {/* Full-bleed WebGL stage: void nebula, dais, particle stream, the orb.
+          Wrapped silent — a shader/context-loss crash here should just leave a
+          blank background, never take the HUD down with it. */}
       <div className="absolute inset-0 z-0" aria-hidden>
-        <OrbScene
-          state={state}
-          avatarIntent={avatarIntent}
-          persona={persona}
-          expression={expression}
-          fxRef={orbFxRef}
-          gestureRef={gestureRef}
-        />
+        <ErrorBoundary label="scene" silent>
+          <OrbScene
+            state={state}
+            avatarIntent={avatarIntent}
+            persona={persona}
+            expression={expression}
+            fxRef={orbFxRef}
+            gestureRef={gestureRef}
+          />
+        </ErrorBoundary>
       </div>
 
       <div className="relative z-40">
@@ -284,7 +289,10 @@ export default function Home() {
         />
       </div>
 
-      {/* Dashboard grid — cards float over the scene */}
+      {/* Dashboard grid — cards float over the scene. Boundaried as a backstop:
+          a card fed bad socket data throws in render, and without this the
+          whole app would unmount. Isolated here, the rest stays usable. */}
+      <ErrorBoundary label="dashboard">
       <div className="relative z-10 flex-1 min-h-0">
         <div className="hud-grid">
           {/* Left column */}
@@ -344,18 +352,21 @@ export default function Home() {
         <MissionPanel mission={activeMission} onCancel={cancelMission} />
         <SuggestionChips suggestions={suggestions} onRespond={respondSuggestion} />
       </div>
+      </ErrorBoundary>
 
-      <SettingsModal
-        isOpen={isSettingsOpen}
-        onClose={() => setIsSettingsOpen(false)}
-        audioDevices={audioDevices}
-        onAudioDeviceChange={setAudioDevice}
-        state={state}
-        config={config}
-        memoryVersion={memoryVersion}
-        onModelChange={setModel}
-        onVoiceChange={setVoice}
-      />
+      <ErrorBoundary label="settings">
+        <SettingsModal
+          isOpen={isSettingsOpen}
+          onClose={() => setIsSettingsOpen(false)}
+          audioDevices={audioDevices}
+          onAudioDeviceChange={setAudioDevice}
+          state={state}
+          config={config}
+          memoryVersion={memoryVersion}
+          onModelChange={setModel}
+          onVoiceChange={setVoice}
+        />
+      </ErrorBoundary>
     </main>
   );
 }

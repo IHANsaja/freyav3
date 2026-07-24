@@ -17,6 +17,7 @@ call, so sub-agents share the exact same tools as Freya herself.
 
 import asyncio
 import itertools
+import threading
 import time
 
 from google import genai
@@ -138,17 +139,49 @@ def quota_hit(e: Exception) -> bool:
     return "429" in text or "resource_exhausted" in text or "quota" in text
 
 
-async def _run_agent(job_id: str, agent_type: str, task: str, config: dict):
-    spec = _spec(agent_type, config)
+def _emit_threadsafe(main_loop: asyncio.AbstractEventLoop, coro):
+    """Marshal an async runtime call from the worker thread back onto the live
+    session's loop. Fire-and-forget — the worker never blocks on the result."""
+    try:
+        asyncio.run_coroutine_threadsafe(coro, main_loop)
+    except Exception as e:
+        print(f"  [agents] cross-loop emit failed: {e}")
+
+
+def _run_agent_thread(job_id: str, agent_type: str, task: str, config: dict,
+                      main_loop: asyncio.AbstractEventLoop):
+    """Run one sub-agent on its OWN thread with its OWN event loop.
+
+    This used to be `asyncio.create_task(...)` on the live voice session's loop,
+    which is why dispatching an agent made Freya's speech lag. Two things went
+    wrong there:
+
+      • Its ReAct loop awaits Gemini calls and dispatches tools on the same loop
+        that schedules the mic/speaker coroutines, so any stall it hit was a
+        stall the audio path shared.
+      • Sync tool handlers run via `run_in_executor(None, ...)` — the default
+        thread pool. A sub-agent doing screen captures or file scans would
+        occupy those workers, and audio I/O queued behind them.
+
+    Model.py now reserves a dedicated pool for audio, and this puts the agent's
+    own work on a separate loop entirely: heavy background jobs and the realtime
+    voice path no longer share a scheduler. Same isolation core/browser_agent.py
+    already uses, and for exactly the same reason.
+    """
     ctx = ToolContext(config, session=None)  # background: no realtime session
 
-    async def on_tool(name, args, result):
-        await runtime.emit("agent", {"id": job_id, "type": agent_type,
-                                     "step": name, "status": "working"})
+    async def _do_run():
+        spec = _spec(agent_type, config)
+
+        async def on_tool(name, args, result):
+            _emit_threadsafe(main_loop, runtime.emit(
+                "agent", {"id": job_id, "type": agent_type, "step": name, "status": "working"}))
+
+        return await react_loop(spec["system"], task, spec.get("tools", []),
+                                spec["model"], config, ctx, on_tool=on_tool)
 
     try:
-        final = await react_loop(spec["system"], task, spec.get("tools", []),
-                                 spec["model"], config, ctx, on_tool=on_tool)
+        final = asyncio.run(_do_run())
     except Exception as e:
         if quota_hit(e):
             final = ("I hit the daily free-tier Gemini quota, so I couldn't finish. Try again "
@@ -157,8 +190,10 @@ async def _run_agent(job_id: str, agent_type: str, task: str, config: dict):
             final = f"My {agent_type} agent hit an error: {e}"
 
     _jobs[job_id].update(status="done", result=final)
-    await runtime.emit("agent", {"id": job_id, "type": agent_type, "status": "done"})
-    await runtime.inject(f"Your {agent_type} agent finished the task '{task}'. Here's the result: {final}")
+    _emit_threadsafe(main_loop, runtime.emit(
+        "agent", {"id": job_id, "type": agent_type, "status": "done"}))
+    _emit_threadsafe(main_loop, runtime.inject(
+        f"Your {agent_type} agent finished the task '{task}'. Here's the result: {final}"))
 
 
 # ══════════════════════════════════════════════
@@ -184,7 +219,12 @@ async def dispatch_agent(args, ctx) -> str:
     job_id = f"{agent_type[:3]}-{next(_counter)}"
     _jobs[job_id] = {"type": agent_type, "task": task, "status": "working",
                      "result": None, "started": time.time()}
-    asyncio.create_task(_run_agent(job_id, agent_type, task, ctx.config))
+    main_loop = asyncio.get_running_loop()
+    threading.Thread(
+        target=_run_agent_thread,
+        args=(job_id, agent_type, task, ctx.config, main_loop),
+        daemon=True, name=f"sub-agent-{job_id}",
+    ).start()
     await ctx.emit("agent", {"id": job_id, "type": agent_type, "status": "started", "task": task})
     return (f"Dispatched the {agent_type} agent (job {job_id}) on: {task}. "
             "It's working in the background — I'll tell you when it's done.")

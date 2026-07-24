@@ -179,7 +179,20 @@ export function useFreyaSocket() {
             };
 
             socket.onmessage = (event) => {
-                const msg = JSON.parse(event.data);
+                // A malformed frame used to throw straight out of onmessage
+                // (uncaught, and it aborted processing that message). Guard the
+                // parse so a bad frame is logged and skipped; the socket lives on.
+                // Kept as `any` to match the rest of this handler, which reads
+                // many dynamically-shaped fields off the parsed message.
+                // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                let msg: any;
+                try {
+                    msg = JSON.parse(event.data);
+                } catch {
+                    console.warn("Freya: dropped an unparseable WebSocket frame.");
+                    return;
+                }
+                if (!msg || typeof msg !== "object") return;
 
                 if (msg.type === "state") {
                     setState(msg.value as FreyaState);

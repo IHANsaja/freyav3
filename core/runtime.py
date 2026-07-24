@@ -56,11 +56,16 @@ def is_live() -> bool:
 
 async def inject(text: str):
     """Make Freya speak `text` out loud now (no-op if no session is live)."""
-    if _inject_fn is not None:
-        try:
-            await _inject_fn(text)
-        except Exception as e:
-            print(f"  [runtime] inject failed: {e}")
+    if _inject_fn is None:
+        # Worth saying out loud: this is the reason a webcam gesture touch or a
+        # finished sub-agent can appear to do nothing at all. Freya only speaks
+        # while a voice session is running — press START on the dashboard.
+        print(f"  [runtime] no live session — dropped proactive line: {text[:80]}")
+        return
+    try:
+        await _inject_fn(text)
+    except Exception as e:
+        print(f"  [runtime] inject failed: {e}")
 
 
 async def emit(event_type: str, payload: dict):

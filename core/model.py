@@ -187,6 +187,17 @@ class FreyaModel:
         self.config = config
         self.transcript = transcript
         self.session = None
+        # Serializes proactive speech. Injects arrive from many independent
+        # background powers — scheduler, ambient watcher, missions, approvals,
+        # finished sub-agents, webcam gesture touches — none of which know about
+        # each other. Without a lock two can be pushed into the session at once
+        # and their turns interleave; without an idle check one can land while
+        # Freya is mid-sentence, which surfaces later as her apparently
+        # answering a question nobody asked.
+        self._inject_lock = asyncio.Lock()
+        # Bound in run() to the session's `model_speaking` event — set while
+        # Freya is actually talking, cleared when she stops.
+        self._model_speaking = None
 
     def get_config(self):
         # ── Native VAD tuning: tighter, more human turn-taking ──
@@ -250,28 +261,57 @@ class FreyaModel:
 
     async def _inject_text(self, text: str):
         """Proactive speech: feed a turn into the live session so Freya speaks it.
-        Used by the scheduler, ambient watcher and finished sub-agents."""
+        Used by the scheduler, ambient watcher, missions, gesture touches and
+        finished sub-agents.
+
+        Serialized and turn-gated. Every one of those callers fires
+        independently and none of them know what the others are doing, so
+        previously two could push turns in simultaneously (interleaved speech),
+        or one could land while Freya was mid-sentence — the model would finish
+        her current turn and then answer the injected one, which reads as her
+        replying to a question that was never asked.
+
+        Now injects queue behind one another and wait for her to stop talking,
+        so each proactive line lands in a natural gap. The wait is capped: after
+        WAIT_LIMIT seconds we send anyway rather than silently dropping the
+        message, since a late reaction beats none at all.
+        """
         if not self.session:
             return
-        try:
-            await self.session.send_client_content(
-                turns=types.Content(
-                    role="user",
-                    parts=[types.Part(text=(
-                        "[PROACTIVE — say this to Ihan out loud now, naturally, in your own "
-                        f"voice and style]: {text}"
-                    ))],
-                ),
-                turn_complete=True,
-            )
-        except Exception as e:
-            print(f"  inject failed: {e}")
+
+        WAIT_LIMIT = 20.0
+        POLL = 0.1
+
+        async with self._inject_lock:
+            speaking = self._model_speaking
+            if speaking is not None:
+                waited = 0.0
+                while speaking.is_set() and waited < WAIT_LIMIT:
+                    await asyncio.sleep(POLL)
+                    waited += POLL
+            if not self.session:  # session may have closed while we waited
+                return
+            try:
+                await self.session.send_client_content(
+                    turns=types.Content(
+                        role="user",
+                        parts=[types.Part(text=(
+                            "[PROACTIVE — say this to Ihan out loud now, naturally, in your own "
+                            f"voice and style]: {text}"
+                        ))],
+                    ),
+                    turn_complete=True,
+                )
+            except Exception as e:
+                print(f"  inject failed: {e}")
 
     async def run(self, mic_stream, speaker_stream):
         print(f"\nConnecting to {self.model_id}...")
 
         audio_queue = asyncio.Queue()
         model_speaking = asyncio.Event()
+        # Publish it so _inject_text can hold proactive lines until she's quiet.
+        self._model_speaking = model_speaking
         loop = asyncio.get_event_loop()
 
         # Dedicated thread pool for the blocking mic/speaker calls.

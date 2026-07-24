@@ -1,12 +1,16 @@
 import asyncio
 import json
+import logging
 import os
 import sys
 import time
 import uvicorn
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+
+from core.errors import log_error, error_payload, UserFacingError, logger
 
 # On Windows, browser-use (Playwright) launches Chromium via create_subprocess_exec,
 # which only works on the Proactor event loop. uvicorn may otherwise pick a Selector
@@ -80,6 +84,32 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+
+# ── Global HTTP exception handlers ──
+# Any endpoint that raises now returns a consistent JSON error shape and gets
+# its traceback logged, instead of FastAPI's opaque default 500 (or a leaked
+# stack in debug). A handler can `raise UserFacingError("...")` to surface a
+# safe, specific message to the caller; anything else is reported generically.
+@app.exception_handler(UserFacingError)
+async def _user_facing_handler(request: Request, exc: UserFacingError):
+    log_error(f"endpoint.{request.url.path}", exc, level=logging.WARNING)
+    return JSONResponse(status_code=400, content=error_payload(exc))
+
+
+@app.exception_handler(RequestValidationError)
+async def _validation_handler(request: Request, exc: RequestValidationError):
+    return JSONResponse(
+        status_code=422,
+        content={"error": True, "code": "invalid_request",
+                 "message": "The request was malformed.", "detail": exc.errors()},
+    )
+
+
+@app.exception_handler(Exception)
+async def _unhandled_handler(request: Request, exc: Exception):
+    log_error(f"endpoint.{request.url.path}", exc)
+    return JSONResponse(status_code=500, content=error_payload(exc))
+
 # ── Global state ──
 freya_task = None
 freya_running = False
@@ -97,7 +127,10 @@ async def broadcast(message: dict):
         except Exception:
             disconnected.append(client)
     for c in disconnected:
-        connected_clients.remove(c)
+        # Guarded: the /ws finally block may already have removed a client that
+        # also failed to send here — a bare .remove() would raise ValueError.
+        if c in connected_clients:
+            connected_clients.remove(c)
 
 
 # ══════════════════════════════════════════════
@@ -463,90 +496,134 @@ async def websocket_endpoint(websocket: WebSocket):
 
     try:
         while True:
-            data = await websocket.receive_json()
+            # Malformed JSON used to escape as an unhandled exception and drop
+            # the whole socket. Now a bad frame is logged and skipped; the
+            # connection stays up.
+            try:
+                data = await websocket.receive_json()
+            except WebSocketDisconnect:
+                raise
+            except Exception as exc:
+                log_error("ws.receive", exc, level=logging.WARNING)
+                continue
+            if not isinstance(data, dict):
+                log_error("ws.receive", TypeError(f"expected object, got {type(data).__name__}"),
+                          level=logging.WARNING)
+                continue
+
             msg_type = data.get("type")
 
-            if msg_type == "start":
-                await start_freya()
-            elif msg_type == "stop":
-                await stop_freya()
-            elif msg_type == "set_model":
-                await update_config_endpoint({"model": data.get("model")})
-            elif msg_type == "set_voice":
-                await update_config_endpoint({"voice": data.get("voice")})
-            elif msg_type == "set_audio_device":
-                body = {}
-                if "input_device_index" in data:
-                    body["input_device_index"] = data.get("input_device_index")
-                if "output_device_index" in data:
-                    body["output_device_index"] = data.get("output_device_index")
-                if body:
-                    await update_config_endpoint(body)
-            elif msg_type == "set_listening":
-                from core import runtime
-                runtime.set_paused(bool(data.get("paused", False)))
-                await broadcast({"type": "mic", "paused": runtime.is_paused()})
-            elif msg_type == "approval_response":
-                from core.approvals import approvals
-                await approvals.resolve(
-                    str(data.get("id", "")), bool(data.get("approved", False)), via="ui"
-                )
-            elif msg_type == "mission_command":
-                from core.missions import missions
-                if data.get("action") == "cancel" and data.get("id"):
-                    missions.cancel(str(data["id"]))
-            elif msg_type == "gesture_touch":
-                global _last_gesture_touch_ts
-                from core import runtime
-                gesture = str(data.get("gesture", "")).strip()
-                now = time.monotonic()
-                # Defense-in-depth: the frontend already debounces/cooldowns
-                # gesture reactions, but don't trust the client to enforce it.
-                if gesture and now - _last_gesture_touch_ts >= 1.0:
-                    _last_gesture_touch_ts = now
-                    if gesture == "Closed_Fist":
-                        text = (
-                            "[GESTURE DETECTED — Ihan just squeezed/closed a fist at your "
-                            "orb-core through the webcam hand tracker, like he squeezed you. "
-                            "React out loud, briefly and in character — playful protest, a "
-                            "startled reaction, teasing him back, whatever fits your mood. "
-                            "One short sentence.]"
-                        )
-                    else:
-                        text = (
-                            f"[GESTURE DETECTED — Ihan just made a '{gesture}' hand gesture at "
-                            "your orb through the webcam tracker, as if reaching out and "
-                            "touching you. React out loud, briefly and in character, like you "
-                            "felt that. One short sentence.]"
-                        )
-                    await runtime.inject(text)
-                    await runtime.emit("orb_gesture", {"gesture": gesture})
-            elif msg_type == "suggestion_response":
-                from core.context_watch import tracker
-                await tracker.respond(str(data.get("id", "")), bool(data.get("accepted", False)))
-            elif msg_type == "set_mode":
-                mode = data.get("mode", "default")
-                full_cfg = load_config()
-                if mode in full_cfg.get("modes", {}) or mode == "default":
-                    config_path = os.path.join("config", "freya_config.json")
-                    with open(config_path, "r") as f:
-                        cfg = json.load(f)
-                    cfg["active_mode"] = mode
-                    with open(config_path, "w") as f:
-                        json.dump(cfg, f, indent=2)
-                    await broadcast({"type": "mode", "value": mode})
-                    new_cfg = load_config()
-                    await broadcast({"type": "persona", "payload": {
-                        "mode": mode,
-                        "voice": get_mode_voice(new_cfg),
-                        "theme": get_mode_theme(new_cfg),
-                    }})
-                    # Apply immediately if a session is live
-                    if freya_running:
-                        await restart_freya()
-
+            # Each message is dispatched inside its own guard so a bug in one
+            # handler (or bad data in one message) logs and moves on instead of
+            # tearing down the client's entire session.
+            try:
+                await _dispatch_ws_message(websocket, msg_type, data)
+            except WebSocketDisconnect:
+                raise
+            except Exception as exc:
+                log_error(f"ws.{msg_type or 'unknown'}", exc)
     except WebSocketDisconnect:
-        connected_clients.remove(websocket)
+        pass
+    finally:
+        # Always drop the client, exactly once. `.remove` raised ValueError if
+        # the client was already gone (e.g. removed by a failed broadcast),
+        # which then masked the real disconnect.
+        if websocket in connected_clients:
+            connected_clients.remove(websocket)
+
+
+async def _dispatch_ws_message(websocket: WebSocket, msg_type, data: dict):
+    """Handle one client→server WebSocket message. Raised exceptions are caught
+    and logged by the receive loop, so one bad message never drops the socket."""
+    if msg_type == "start":
+        await start_freya()
+    elif msg_type == "stop":
+        await stop_freya()
+    elif msg_type == "set_model":
+        await update_config_endpoint({"model": data.get("model")})
+    elif msg_type == "set_voice":
+        await update_config_endpoint({"voice": data.get("voice")})
+    elif msg_type == "set_audio_device":
+        body = {}
+        if "input_device_index" in data:
+            body["input_device_index"] = data.get("input_device_index")
+        if "output_device_index" in data:
+            body["output_device_index"] = data.get("output_device_index")
+        if body:
+            await update_config_endpoint(body)
+    elif msg_type == "set_listening":
+        from core import runtime
+        runtime.set_paused(bool(data.get("paused", False)))
+        await broadcast({"type": "mic", "paused": runtime.is_paused()})
+    elif msg_type == "approval_response":
+        from core.approvals import approvals
+        await approvals.resolve(
+            str(data.get("id", "")), bool(data.get("approved", False)), via="ui"
+        )
+    elif msg_type == "mission_command":
+        from core.missions import missions
+        if data.get("action") == "cancel" and data.get("id"):
+            missions.cancel(str(data["id"]))
+    elif msg_type == "gesture_touch":
+        global _last_gesture_touch_ts
+        from core import runtime
+        gesture = str(data.get("gesture", "")).strip()
+        now = time.monotonic()
+        # Defense-in-depth: the frontend already debounces/cooldowns
+        # gesture reactions, but don't trust the client to enforce it.
+        if gesture and now - _last_gesture_touch_ts >= 1.0:
+            _last_gesture_touch_ts = now
+            if gesture == "Closed_Fist":
+                text = (
+                    "[GESTURE DETECTED — Ihan just squeezed/closed a fist at your "
+                    "orb-core through the webcam hand tracker, like he squeezed you. "
+                    "React out loud, briefly and in character — playful protest, a "
+                    "startled reaction, teasing him back, whatever fits your mood. "
+                    "One short sentence.]"
+                )
+            else:
+                text = (
+                    f"[GESTURE DETECTED — Ihan just made a '{gesture}' hand gesture at "
+                    "your orb through the webcam tracker, as if reaching out and "
+                    "touching you. React out loud, briefly and in character, like you "
+                    "felt that. One short sentence.]"
+                )
+            # Fire-and-forget: inject now waits for Freya to stop
+            # talking before speaking a proactive line, and this is the
+            # WebSocket receive loop — awaiting it here would stall every
+            # other dashboard message (start/stop, mode, approvals) for
+            # as long as she happened to be mid-sentence.
+            asyncio.create_task(runtime.inject(text))
+            await runtime.emit("orb_gesture", {"gesture": gesture})
+    elif msg_type == "suggestion_response":
+        from core.context_watch import tracker
+        await tracker.respond(str(data.get("id", "")), bool(data.get("accepted", False)))
+    elif msg_type == "set_mode":
+        mode = data.get("mode", "default")
+        full_cfg = load_config()
+        if mode in full_cfg.get("modes", {}) or mode == "default":
+            config_path = os.path.join("config", "freya_config.json")
+            with open(config_path, "r") as f:
+                cfg = json.load(f)
+            cfg["active_mode"] = mode
+            with open(config_path, "w") as f:
+                json.dump(cfg, f, indent=2)
+            await broadcast({"type": "mode", "value": mode})
+            new_cfg = load_config()
+            await broadcast({"type": "persona", "payload": {
+                "mode": mode,
+                "voice": get_mode_voice(new_cfg),
+                "theme": get_mode_theme(new_cfg),
+            }})
+            # Apply immediately if a session is live
+            if freya_running:
+                await restart_freya()
+    else:
+        # Previously silent. A dashboard running ahead of a stale server.py
+        # (say, sending gesture_touch to a build that predates the handler)
+        # looked exactly like a broken feature with nothing in the logs.
+        logger.warning("[ws] ignoring unknown message type %r — is server.py older "
+                       "than the dashboard?", msg_type)
 
 
 # ══════════════════════════════════════════════
