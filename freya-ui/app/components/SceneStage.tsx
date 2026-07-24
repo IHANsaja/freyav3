@@ -151,7 +151,7 @@ export default function SceneStage({
           <defs>
             <linearGradient id="beamgrad" x1="0%" y1="0%" x2="100%" y2="0%">
               <stop offset="0%" stopColor="#ffb3ac" stopOpacity="0.0" />
-              <stop offset="40%" stopColor="#d32f2f" stopOpacity="0.9" />
+              <stop offset="40%" stopColor="#0f9c6e" stopOpacity="0.9" />
               <stop offset="100%" stopColor="#ffb3ac" stopOpacity="0.9" />
             </linearGradient>
           </defs>
@@ -161,7 +161,7 @@ export default function SceneStage({
             return (
               <g key={`beam-${p.key}`}>
                 <line x1={cx} y1={cy} x2={ax} y2={ay}
-                      stroke="#d32f2f" strokeWidth={4} opacity={0.10} />
+                      stroke="#0f9c6e" strokeWidth={4} opacity={0.10} />
                 <line x1={cx} y1={cy} x2={ax} y2={ay}
                       stroke="url(#beamgrad)" strokeWidth={1.4}
                       strokeDasharray="3 7" className="beam-flow" opacity={0.8} />
@@ -192,7 +192,7 @@ export default function SceneStage({
 
 const SHELL =
   "rounded-xl border border-primary/25 bg-surface-container-lowest/80 backdrop-blur-md " +
-  "shadow-[0_8px_40px_rgba(0,0,0,0.55),0_0_24px_rgba(211,47,47,0.12)] overflow-hidden";
+  "shadow-[0_8px_40px_rgba(0,0,0,0.55),0_0_24px_rgba(15,156,110,0.12)] overflow-hidden";
 
 function NewsCard({ item }: { item: NewsItem }) {
   return (

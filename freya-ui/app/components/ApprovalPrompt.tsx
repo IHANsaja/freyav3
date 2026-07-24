@@ -41,9 +41,9 @@ function ApprovalCard({
                     "linear-gradient(135deg, rgba(20,8,8,0.85) 0%, rgba(40,10,10,0.8) 100%)",
                 backdropFilter: "blur(18px) saturate(140%)",
                 WebkitBackdropFilter: "blur(18px) saturate(140%)",
-                border: "1px solid rgba(211,47,47,0.45)",
+                border: "1px solid rgba(15,156,110,0.45)",
                 boxShadow:
-                    "0 8px 40px rgba(0,0,0,0.7), 0 0 40px rgba(211,47,47,0.15)",
+                    "0 8px 40px rgba(0,0,0,0.7), 0 0 40px rgba(15,156,110,0.15)",
             }}
         >
             <div className="flex items-center gap-2 mb-2">
@@ -68,7 +68,7 @@ function ApprovalCard({
             <div className="flex items-center gap-3">
                 <button
                     onClick={() => onRespond(action.id, true)}
-                    className="px-6 py-2 rounded-full text-[11px] font-bold tracking-widest uppercase bg-primary-container text-parchment hover:bg-primary-container/90 hover:shadow-[0_0_20px_rgba(211,47,47,0.5)] transition-all duration-300"
+                    className="px-6 py-2 rounded-full text-[11px] font-bold tracking-widest uppercase bg-primary-container text-parchment hover:bg-primary-container/90 hover:shadow-[0_0_20px_rgba(15,156,110,0.5)] transition-all duration-300"
                 >
                     Approve
                 </button>

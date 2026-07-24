@@ -64,7 +64,7 @@ export default function HoloPlatform({ moodRef, yOffset, radius = 2.1 }: HoloPla
       new THREE.ShaderMaterial({
         uniforms: {
           uTime: { value: 0 },
-          uColor: { value: new THREE.Color("#d32f2f") },
+          uColor: { value: new THREE.Color("#0f9c6e") },
           uPulse: { value: 0.3 },
           uRadius: { value: radius },
         },
@@ -100,11 +100,11 @@ export default function HoloPlatform({ moodRef, yOffset, radius = 2.1 }: HoloPla
       </mesh>
       <mesh ref={hoopA} rotation={[-Math.PI / 2, 0, 0]} position={[0, 0.015, 0]}>
         <ringGeometry args={[radius * 0.62, radius * 0.626, 96]} />
-        <meshBasicMaterial color="#ff4d4d" toneMapped={false} transparent opacity={0.85} side={THREE.DoubleSide} />
+        <meshBasicMaterial color="#3dedb4" toneMapped={false} transparent opacity={0.85} side={THREE.DoubleSide} />
       </mesh>
       <mesh ref={hoopB} rotation={[-Math.PI / 2, 0, 0]} position={[0, 0.02, 0]}>
         <ringGeometry args={[radius * 0.82, radius * 0.828, 128]} />
-        <meshBasicMaterial color="#ff4d4d" toneMapped={false} transparent opacity={0.55} side={THREE.DoubleSide} />
+        <meshBasicMaterial color="#3dedb4" toneMapped={false} transparent opacity={0.55} side={THREE.DoubleSide} />
       </mesh>
     </group>
   );

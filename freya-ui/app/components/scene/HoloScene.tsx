@@ -27,7 +27,7 @@ function SceneContents({ state, avatarIntent, persona, modelKey }: HoloSceneProp
 
   const moodRef = useSceneMood(state, avatarIntent, persona, expression?.accent ?? null, expression?.intensity ?? 0.7);
 
-  const accentColor = expression ? expression.accent.accent : persona?.theme?.accent ?? "#d32f2f";
+  const accentColor = expression ? expression.accent.accent : persona?.theme?.accent ?? "#0f9c6e";
   const glowBoost = expression ? expression.accent.glowBoost * expression.intensity : 0;
 
   const manifest = AVATAR_MODELS[modelKey ?? DEFAULT_AVATAR];

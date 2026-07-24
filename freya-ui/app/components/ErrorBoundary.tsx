@@ -68,7 +68,7 @@ export default class ErrorBoundary extends Component<Props, State> {
       >
         <div
           className="tracking-[0.15em] uppercase mb-2"
-          style={{ color: "var(--accent-red, #ff2b3a)" }}
+          style={{ color: "var(--accent-red, #22e0a0)" }}
         >
           {this.props.label ? `${this.props.label} error` : "Something went wrong"}
         </div>

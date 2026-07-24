@@ -94,7 +94,7 @@ function Model({
 useGLTF.preload(AVATAR_MODELS[DEFAULT_AVATAR].url);
 
 export default function FreyaModel({ state, avatarIntent, modelKey }: FreyaModelProps) {
-    const [accent, setAccent] = useState<string>("#d32f2f");
+    const [accent, setAccent] = useState<string>("#0f9c6e");
     const [glow, setGlow] = useState(0);
 
     // Camera framing is per-model (each GLB has different real-world proportions
@@ -105,7 +105,7 @@ export default function FreyaModel({ state, avatarIntent, modelKey }: FreyaModel
     const cam = manifest.camera;
 
     const handleExpression = (e: ExpressionEvent | null) => {
-        setAccent(e ? e.accent.accent : "#d32f2f");
+        setAccent(e ? e.accent.accent : "#0f9c6e");
         setGlow(e ? e.accent.glowBoost * e.intensity : 0);
     };
 

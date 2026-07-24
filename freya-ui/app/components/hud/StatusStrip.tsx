@@ -19,7 +19,7 @@ export default function StatusStrip({ text }: { text: string }) {
         className="text-[11px] font-mono tracking-[0.2em] uppercase text-center"
         style={{
           color: "var(--text-primary)",
-          textShadow: "0 0 10px rgba(255,85,99,0.35)",
+          textShadow: "0 0 10px rgba(61,237,180,0.35)",
           animation: "strip-swap 0.4s ease-out",
         }}
       >

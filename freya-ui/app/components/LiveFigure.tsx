@@ -34,7 +34,7 @@ export default function LiveFigure({
     : n.toFixed(1);
 
   return (
-    <span className="text-primary font-bold tabular-nums drop-shadow-[0_0_6px_rgba(211,47,47,0.6)]">
+    <span className="text-primary font-bold tabular-nums drop-shadow-[0_0_6px_rgba(15,156,110,0.6)]">
       {display}
       {suffix}
     </span>

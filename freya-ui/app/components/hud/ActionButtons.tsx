@@ -78,7 +78,7 @@ export default function ActionButtons({ isRunning, micPaused, connected, onToggl
           fontFamily: "var(--font-ui)",
           background: "linear-gradient(180deg, var(--accent-red) 0%, #c81828 100%)",
           color: "#fff",
-          boxShadow: "0 0 24px rgba(255,43,58,0.4), inset 0 1px 0 rgba(255,255,255,0.25)",
+          boxShadow: "0 0 24px rgba(34,224,160,0.4), inset 0 1px 0 rgba(255,255,255,0.25)",
         }}
       >
         <span className="flex items-center gap-2">

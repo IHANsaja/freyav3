@@ -78,7 +78,7 @@ export default function HeaderBar({
             style={{
               fontFamily: "var(--font-display)",
               color: "var(--accent-red)",
-              textShadow: "0 0 12px rgba(255,43,58,0.55)",
+              textShadow: "0 0 12px rgba(34,224,160,0.55)",
             }}
           >
             F.R.E.Y.A V3.0

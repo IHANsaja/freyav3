@@ -23,8 +23,8 @@ import CustomCursor from "./components/hud/CustomCursor";
 import PortraitCard from "./components/hud/PortraitCard";
 import SystemStatusCard from "./components/hud/SystemStatusCard";
 import SessionCard from "./components/hud/SessionCard";
-import CoreDirectivesCard from "./components/hud/CoreDirectivesCard";
-import VoiceWidgetCard from "./components/hud/VoiceWidgetCard";
+import AgentsCard from "./components/hud/AgentsCard";
+import ChatCard from "./components/hud/ChatCard";
 import MissionStatusCard from "./components/hud/MissionStatusCard";
 import type { CalloutEvent } from "./components/hud/TelemetryCallouts";
 
@@ -44,6 +44,9 @@ export default function Home() {
     state,
     connected,
     liveText,
+    transcript,
+    agents,
+    session,
     toolLog,
     images,
     newsItems,
@@ -303,8 +306,14 @@ export default function Home() {
               engine={status.engine}
               onExpressionChange={handleExpression}
             />
-            <SystemStatusCard />
-            <SessionCard />
+            <SystemStatusCard
+              session={session}
+              status={status}
+              connected={connected}
+              micPaused={micPaused}
+              handTracking={handTrackingStatus}
+            />
+            <SessionCard session={session} />
           </div>
 
           {/* Center stage */}
@@ -339,10 +348,11 @@ export default function Home() {
             <CenterCaption state={state} liveText={liveText} />
           </CenterStage>
 
-          {/* Right column */}
+          {/* Right column — live work: who's running what, the conversation
+              record, and mission progress. */}
           <div className="flex flex-col gap-4 min-h-0 pointer-events-auto">
-            <CoreDirectivesCard />
-            <VoiceWidgetCard engine={status.engine} />
+            <AgentsCard agents={agents} />
+            <ChatCard transcript={transcript} liveText={liveText} className="flex-1 min-h-[140px]" />
             <MissionStatusCard mission={activeMission} />
           </div>
         </div>

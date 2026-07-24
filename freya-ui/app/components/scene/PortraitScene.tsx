@@ -95,7 +95,7 @@ export default function PortraitScene({
         style={{ width: "100%", height: "100%", background: "transparent" }}
       >
         {/* Key rim: hot red from behind-left so her edges glow */}
-        <directionalLight position={[-1.5, 0.8, -1]} intensity={2.5} color="#ff2b3a" />
+        <directionalLight position={[-1.5, 0.8, -1]} intensity={2.5} color="#22e0a0" />
         {/* Low cool fill from the front so the face reads */}
         <directionalLight position={[1, 1.5, 2]} intensity={0.5} color="#aab4cc" />
         <ambientLight intensity={0.25} />

@@ -51,8 +51,8 @@ export default function VoiceWidgetCard({ engine }: { engine: EngineState }) {
           className="relative w-[6.5rem] h-[6.5rem] rounded-full border flex flex-col items-center justify-center gap-1 transition-shadow duration-300 group-hover/voice:shadow-[0_0_28px_var(--accent-red-dim)]"
           style={{
             borderColor: active ? "var(--accent-red)" : "var(--panel-border)",
-            background: "radial-gradient(circle, rgba(122,15,22,0.25) 0%, transparent 70%)",
-            boxShadow: active ? "0 0 18px rgba(122,15,22,0.5)" : undefined,
+            background: "radial-gradient(circle, rgba(10,77,58,0.25) 0%, transparent 70%)",
+            boxShadow: active ? "0 0 18px rgba(10,77,58,0.5)" : undefined,
           }}
         >
           <Waveform active={active} bars={5} />

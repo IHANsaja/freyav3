@@ -21,6 +21,7 @@ import asyncio
 import itertools
 import os
 import threading
+import time
 
 from config import get_agent_api_key
 from core import runtime
@@ -127,7 +128,10 @@ async def browser_task(args, ctx) -> str:
     if not task:
         return "Give me a web task to do."
     job_id = f"web-{next(_counter)}"
-    _jobs[job_id] = {"task": task, "status": "running", "result": None}
+    # `started` feeds the dashboard's live job list (GET /agents), which sorts
+    # by start time and shows how long each worker has been going.
+    _jobs[job_id] = {"task": task, "status": "running", "result": None,
+                     "started": time.time()}
     main_loop = asyncio.get_running_loop()
     threading.Thread(
         target=_run_browser_thread, args=(job_id, task, ctx.config, main_loop),

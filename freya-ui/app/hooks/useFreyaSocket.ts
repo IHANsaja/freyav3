@@ -55,6 +55,31 @@ export interface AudioDevice {
     name: string;
 }
 
+/** A background worker Freya has running: a sub-agent (researcher / coder /
+ *  operator) or the browser operator. Mirrors GET /agents. */
+export interface AgentJob {
+    id: string;
+    kind: string;            // researcher | coder | operator | browser
+    task: string;
+    status: string;          // started | working | running | done
+    step?: string | null;    // the tool it is executing right now
+    startedAt?: number | null; // unix seconds
+    result?: string | null;
+}
+
+/** Real session telemetry (GET /status + the `session` broadcast). Replaces the
+ *  HUD's former hardcoded session id and fabricated status rows. */
+export interface SessionInfo {
+    running: boolean;
+    startedAt: number | null;
+    model: string;
+    voice: string;
+    mode: string;
+    tools: number;
+    micPaused: boolean;
+    clients: number;
+}
+
 export interface FreyaConfig {
     active_model: string;
     active_voice: string;
@@ -83,6 +108,8 @@ export function useFreyaSocket() {
         input: [],
         output: [],
     });
+    const [agents, setAgents] = useState<AgentJob[]>([]);
+    const [session, setSession] = useState<SessionInfo | null>(null);
     const [activeMode, setActiveMode] = useState<string>("default");
     const [micPaused, setMicPaused] = useState(false);
     const [memoryVersion, setMemoryVersion] = useState(0);
@@ -123,6 +150,26 @@ export function useFreyaSocket() {
                 // Covered by the config warning above — don't log the same
                 // outage twice per reload.
             });
+        // Jobs already running before this tab opened: the WS events only
+        // describe jobs that START while connected, so without this a reload
+        // mid-task shows an empty agent list.
+        fetch("http://localhost:8000/agents")
+            .then((r) => r.json())
+            .then((d: { agents: AgentJob[] }) =>
+                // Merge, don't replace: the socket connects in parallel and
+                // replays recent agent events, so a plain overwrite could drop
+                // a job that arrived while this request was still in flight.
+                // Live socket state wins per id; the fetch fills in the rest.
+                setAgents((prev) => {
+                    const seen = new Set(prev.map((a) => a.id));
+                    return [...prev, ...(d.agents ?? []).filter((a) => !seen.has(a.id))];
+                })
+            )
+            .catch(() => {});
+        fetch("http://localhost:8000/status")
+            .then((r) => r.json())
+            .then((s: SessionInfo) => setSession(s))
+            .catch(() => {});
     }, []);
 
     // Held in a ref so the socket effect below can call it without taking it as
@@ -312,9 +359,38 @@ export function useFreyaSocket() {
                     } else {
                         setApprovals((prev) => prev.filter((a) => a.id !== p.id));
                     }
+                } else if (msg.type === "session") {
+                    setSession(msg.payload as SessionInfo);
                 } else if (["agent", "browser", "schedule", "ambient", "mcp"].includes(msg.type)) {
-                    // Superpower status events → surface them in the tool feed.
                     const { type, ...rest } = msg;
+
+                    // Sub-agents and the browser operator get real, structured
+                    // tracking (id → task → current step → done) so the
+                    // dashboard can show what's actually running, rather than
+                    // only scrolling past as opaque feed lines.
+                    if ((type === "agent" || type === "browser") && rest.id) {
+                        setAgents((prev) => {
+                            const idx = prev.findIndex((a) => a.id === rest.id);
+                            const incoming: AgentJob = {
+                                id: String(rest.id),
+                                // `agent` (not `type`) — the event family owns
+                                // `type` on the wire, so the sub-agent's kind
+                                // travels under its own key.
+                                kind: String(type === "browser" ? "browser" : rest.agent || "agent"),
+                                task: String(rest.task ?? (idx >= 0 ? prev[idx].task : "")),
+                                status: String(rest.status ?? "working"),
+                                step: rest.step ?? (idx >= 0 ? prev[idx].step : null),
+                                startedAt: idx >= 0 ? prev[idx].startedAt : Date.now() / 1000,
+                                result: rest.result ?? (idx >= 0 ? prev[idx].result : null),
+                            };
+                            if (idx < 0) return [incoming, ...prev].slice(0, 12);
+                            const next = [...prev];
+                            next[idx] = incoming;
+                            return next;
+                        });
+                    }
+
+                    // Everything still shows in the tool feed for the scene log.
                     setToolLog((prev) => [
                         ...prev,
                         {
@@ -420,6 +496,8 @@ export function useFreyaSocket() {
         newsItems,
         config,
         audioDevices,
+        agents,
+        session,
         activeMode,
         micPaused,
         memoryVersion,

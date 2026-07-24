@@ -50,7 +50,7 @@ export function useSceneMood(
     spin: 0.06,
     time: 0,
     dancing: false,
-    color: new THREE.Color("#d32f2f"),
+    color: new THREE.Color("#0f9c6e"),
   });
 
   const [dancing, setDancing] = useState(false);
@@ -111,7 +111,7 @@ export function useSceneMood(
     const pulse = dancing ? 1 + Math.sin(mood.time * 6.0) * 0.25 : 1;
     mood.glow = THREE.MathUtils.lerp(mood.glow, target.glow * pulse, k);
 
-    const restColor = persona?.theme?.accent ?? "#d32f2f";
+    const restColor = persona?.theme?.accent ?? "#0f9c6e";
     const targetColor = expressionAccent ? new THREE.Color(expressionAccent.accent) : new THREE.Color(restColor);
     mood.color.lerp(targetColor, k * 0.6);
   });

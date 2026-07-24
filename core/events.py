@@ -41,10 +41,18 @@ class Event:
     ts: float = field(default_factory=time.time)
 
     def serialize(self) -> dict:
-        """Wire format — see module docstring for the legacy/new split."""
+        """Wire format — see module docstring for the legacy/new split.
+
+        The envelope's own `type` is written LAST so it always wins. Spreading
+        the payload over it (the previous order) let a payload key named "type"
+        silently overwrite the event family: sub-agent events carry
+        `{"type": "researcher", ...}`, so they went over the wire labelled
+        "researcher" instead of "agent" and no frontend handler ever matched
+        them. Any legacy family is now immune to that class of collision.
+        """
         if self.type in NEW_TYPES:
             return {"type": self.type, "payload": self.payload}
-        return {"type": self.type, **(self.payload or {})}
+        return {**(self.payload or {}), "type": self.type}
 
 
 class EventBus:

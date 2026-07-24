@@ -128,7 +128,7 @@ void main() {
 
 const ORB_FRAGMENT = `
 uniform vec3 uColor;        // hot accent (mood color)
-uniform vec3 uColorDim;     // deep core red
+uniform vec3 uColorDim;     // deep core jade
 uniform float uGlow;        // rim intensity (mood glow)
 uniform float uFresnelPower;// rim falloff sharpness
 uniform float uPaused;      // 0→1 desaturation while paused
@@ -216,9 +216,19 @@ const HAND_TO_PITCH = Math.PI * 0.7;
 const MAX_PITCH = 0.7;      // radians — keeps the orb from tumbling end over end
 const HAND_SMOOTHING = 8;   // higher = snappier, lower = smoother against jitter
 
-// Grip below this counts as "not squeezing" — a relaxed open hand never reads a
-// clean zero, and without a deadzone the orb would sit permanently dented.
-const GRIP_DEADZONE = 0.15;
+// Squeeze engage/release, latched with hysteresis.
+//
+// A plain deadzone was not enough: a relaxed hand, a hand mid-drag, and a hand
+// mid-pinch all read well above a low threshold, so the orb sat visibly dented
+// the whole time it was merely being TRACKED. Simply having your hand on camera
+// must never change the orb's size.
+//
+// So squeezing has to be *engaged* by a genuinely closed hand (ENGAGE), after
+// which the compression follows grip analogously down to RELEASE. The gap
+// between the two stops a jittering landmark stream from strobing in and out of
+// the squeeze right at the boundary.
+const SQUEEZE_ENGAGE = 0.55;
+const SQUEEZE_RELEASE = 0.32;
 // Squeeze responsiveness. Fast enough to feel physical, slow enough to absorb
 // the jitter of a 15fps landmark stream.
 const GRIP_ATTACK = 14;
@@ -274,6 +284,9 @@ export default function Orb({ moodRef, fxRef, position = [0, 0.45, 0], gestureRe
   // Squeeze state: live smoothed grip while held, then a rebound clock that
   // springs back from whatever compression was actually being held.
   const gripSmooth = useRef(0);
+  // Latched by SQUEEZE_ENGAGE/SQUEEZE_RELEASE — true only during a real squeeze,
+  // never while the hand is just being tracked.
+  const squeezing = useRef(false);
   const wasGripping = useRef(false);
   const releaseClock = useRef(-1);
   const releaseFrom = useRef(0);
@@ -302,8 +315,8 @@ export default function Orb({ moodRef, fxRef, position = [0, 0.45, 0], gestureRe
       uImplode: { value: 0 },
       uSqueeze: { value: 0 },
       uTouch: { value: 0 },
-      uColor: { value: new THREE.Color("#ff2b3a") },
-      uColorDim: { value: new THREE.Color("#7a0f16") },
+      uColor: { value: new THREE.Color("#22e0a0") },
+      uColorDim: { value: new THREE.Color("#0a4d3a") },
       uGlow: { value: 0.3 },
       uFresnelPower: { value: 2.5 },
       uPaused: { value: 0 },
@@ -428,10 +441,23 @@ export default function Orb({ moodRef, fxRef, position = [0, 0.45, 0], gestureRe
     // damped-spring rebound that overshoots from wherever it was released,
     // so a hard squeeze snaps back harder than a gentle one.
     const rawGrip = handState?.present ? handState.grip ?? 0 : 0;
-    // Deadzone + rescale: a relaxed open hand reads slightly above zero, and
-    // that shouldn't leave the orb permanently dented while merely dragging.
-    const gripTarget =
-      rawGrip > GRIP_DEADZONE ? (rawGrip - GRIP_DEADZONE) / (1 - GRIP_DEADZONE) : 0;
+
+    // Latch: only a genuinely closed hand starts a squeeze, and a pinch (which
+    // is a zoom gesture) can never become one. Merely tracking, moving or
+    // pinching leaves the orb at its full size.
+    if (!handState?.present || pinching.current) {
+      squeezing.current = false;
+    } else if (squeezing.current) {
+      if (rawGrip < SQUEEZE_RELEASE) squeezing.current = false;
+    } else if (rawGrip >= SQUEEZE_ENGAGE) {
+      squeezing.current = true;
+    }
+
+    // Rescaled from the release point so compression starts at 0 the instant
+    // the squeeze engages — no jump from the engage threshold.
+    const gripTarget = squeezing.current
+      ? Math.min(1, Math.max(0, (rawGrip - SQUEEZE_RELEASE) / (1 - SQUEEZE_RELEASE)))
+      : 0;
 
     if (gripTarget > 0.02) {
       releaseClock.current = -1;

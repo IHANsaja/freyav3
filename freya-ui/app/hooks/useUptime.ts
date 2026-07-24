@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useSyncExternalStore } from "react";
 
 function format(totalSeconds: number): string {
   const h = Math.floor(totalSeconds / 3600) % 100;
@@ -9,15 +9,42 @@ function format(totalSeconds: number): string {
   return [h, m, s].map((n) => String(n).padStart(2, "0")).join(":");
 }
 
-/** Live HH:MM:SS session uptime, ticking every second from mount.
- *  Seeded so the console reads like it's been running a while. */
-export function useUptime(seedSeconds = 2 * 3600 + 17 * 60 + 42): string {
-  const [elapsed, setElapsed] = useState(seedSeconds);
+// ── The wall clock, as an external store ─────────────────────────────────
+// The current second is genuinely external mutable state, so it is consumed
+// through useSyncExternalStore rather than a setState-on-an-interval. That
+// keeps render pure (no Date.now() while rendering) without needing to seed
+// state synchronously inside an effect.
+//
+// The snapshot is cached per second: getSnapshot must return a stable value
+// between ticks or React re-renders in a loop.
+let cachedSecond = 0;
 
-  useEffect(() => {
-    const id = setInterval(() => setElapsed((e) => e + 1), 1000);
-    return () => clearInterval(id);
-  }, []);
+function subscribe(onChange: () => void): () => void {
+  const id = setInterval(onChange, 1000);
+  return () => clearInterval(id);
+}
 
-  return format(elapsed);
+function getSnapshot(): number {
+  const now = Math.floor(Date.now() / 1000);
+  if (now !== cachedSecond) cachedSecond = now;
+  return cachedSecond;
+}
+
+// Server render has no clock; uptime resolves on hydration.
+const getServerSnapshot = (): number => 0;
+
+/**
+ * Live HH:MM:SS uptime for the *real* voice session.
+ *
+ * This used to seed itself with a couple of fabricated hours so the console
+ * "read like it had been running a while", and counted from page load — so it
+ * reported the browser tab's age rather than the session's. It now derives
+ * from the backend's actual session start (`/status` → `startedAt`, unix
+ * seconds) and returns null when nothing is running, so the UI can say so
+ * honestly instead of inventing a number.
+ */
+export function useUptime(startedAt: number | null | undefined): string | null {
+  const nowSeconds = useSyncExternalStore(subscribe, getSnapshot, getServerSnapshot);
+  if (!startedAt || !nowSeconds) return null;
+  return format(Math.max(0, nowSeconds - startedAt));
 }

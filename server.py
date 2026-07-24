@@ -113,6 +113,10 @@ async def _unhandled_handler(request: Request, exc: Exception):
 # ── Global state ──
 freya_task = None
 freya_running = False
+# Unix seconds when the current voice session started; None while stopped. The
+# dashboard's uptime readout is derived from this rather than from page-load
+# time, so it reports the SESSION's real age instead of the browser tab's.
+freya_started_at: float | None = None
 connected_clients: list[WebSocket] = []
 
 
@@ -266,22 +270,26 @@ async def restart_freya():
 # ══════════════════════════════════════════════
 @app.post("/start")
 async def start_freya():
-    global freya_task, freya_running
+    global freya_task, freya_running, freya_started_at
     if freya_running:
         return JSONResponse({"status": "already running"})
     freya_running = True
+    freya_started_at = time.time()
     freya_task = asyncio.create_task(run_freya())
+    await broadcast({"type": "session", "payload": _session_payload()})
     return JSONResponse({"status": "started"})
 
 
 @app.post("/stop")
 async def stop_freya():
-    global freya_task, freya_running
+    global freya_task, freya_running, freya_started_at
     if freya_task:
         freya_task.cancel()
         freya_task = None
     freya_running = False
+    freya_started_at = None
     await broadcast({"type": "state", "value": "idle"})
+    await broadcast({"type": "session", "payload": _session_payload()})
     return JSONResponse({"status": "stopped"})
 
 
@@ -407,9 +415,143 @@ async def delete_memory_item(item_id: int):
     return JSONResponse({"deactivated": ok})
 
 
+def _session_payload() -> dict:
+    """Real session telemetry for the dashboard — replaces the HUD's old
+    hardcoded session id / fabricated uptime / invented status rows."""
+    config = load_config()
+    try:
+        # build_declarations() forces the lazy skill import first — calling
+        # registered_names() alone reports only the handful of tools that
+        # happen to have been imported so far.
+        from core.registry import build_declarations, registered_names
+        build_declarations(config)
+        tools = len(registered_names())
+    except Exception:
+        tools = 0
+    from core import runtime
+    return {
+        "running": freya_running,
+        "startedAt": freya_started_at,          # unix seconds, or null
+        "model": get_mode_model(config),
+        "voice": get_mode_voice(config),
+        "mode": config.get("active_mode", "default"),
+        "tools": tools,
+        "micPaused": runtime.is_paused(),
+        "clients": len(connected_clients),
+    }
+
+
 @app.get("/status")
 async def get_status():
-    return JSONResponse({"running": freya_running})
+    return JSONResponse(_session_payload())
+
+
+def _collect_jobs() -> list[dict]:
+    """Every background worker Freya has going, normalized into one shape.
+
+    Sub-agents and the browser operator keep separate job tables in their own
+    modules; the dashboard wants a single list, and wants it on page load too
+    (the WS events alone only describe jobs that started while the tab was
+    open).
+    """
+    jobs: list[dict] = []
+    try:
+        from core.agents import _jobs as agent_jobs
+        for job_id, j in agent_jobs.items():
+            jobs.append({
+                "id": job_id,
+                "kind": j.get("type") or "agent",
+                "task": j.get("task") or "",
+                "status": j.get("status") or "working",
+                "step": j.get("step"),
+                "startedAt": j.get("started"),
+                "result": (str(j["result"])[:400] if j.get("result") else None),
+            })
+    except Exception as exc:
+        log_error("endpoint.agents.sub", exc, level=logging.WARNING)
+    try:
+        from core.browser_agent import _jobs as browser_jobs
+        for job_id, j in browser_jobs.items():
+            jobs.append({
+                "id": job_id,
+                "kind": "browser",
+                "task": j.get("task") or "",
+                "status": j.get("status") or "running",
+                "step": j.get("step"),
+                "startedAt": j.get("started"),
+                "result": (str(j["result"])[:400] if j.get("result") else None),
+            })
+    except Exception as exc:
+        log_error("endpoint.agents.browser", exc, level=logging.WARNING)
+    jobs.sort(key=lambda j: j.get("startedAt") or 0, reverse=True)
+    return jobs
+
+
+@app.get("/agents")
+async def get_agents():
+    """Live sub-agent / browser jobs — what's running and what it's doing."""
+    return JSONResponse({"agents": _collect_jobs()})
+
+
+# ── Access control (safety.allowed_roots and friends) ──
+@app.get("/safety")
+async def get_safety():
+    cfg = load_config().get("safety", {}) or {}
+    return JSONResponse({
+        "allowed_roots": cfg.get("allowed_roots") or [],
+        "approval_mode": cfg.get("approval_mode", "confirm"),
+        "unrestricted": bool(cfg.get("unrestricted", False)),
+        "approval_timeout_s": cfg.get("approval_timeout_s", 120),
+        # Surfaced so the UI can show what the effective defaults are when the
+        # allow-list is empty (home folder + the Freya project).
+        "defaults": _default_roots(),
+    })
+
+
+def _default_roots() -> list[str]:
+    try:
+        from core.safety import _allowed_roots
+        return _allowed_roots({})
+    except Exception:
+        return []
+
+
+@app.post("/safety")
+async def update_safety(body: dict):
+    config_path = os.path.join("config", "freya_config.json")
+    with open(config_path, "r", encoding="utf-8") as f:
+        config = json.load(f)
+    safety = config.setdefault("safety", {})
+
+    if "allowed_roots" in body:
+        roots = body.get("allowed_roots") or []
+        if not isinstance(roots, list):
+            raise UserFacingError("allowed_roots must be a list of folder paths.")
+        cleaned = []
+        for r in roots:
+            r = str(r).strip()
+            if not r:
+                continue
+            if not os.path.isdir(os.path.expanduser(r)):
+                raise UserFacingError(f"'{r}' is not a folder that exists on this machine.")
+            cleaned.append(r)
+        safety["allowed_roots"] = cleaned
+    if "approval_mode" in body:
+        mode = str(body.get("approval_mode"))
+        if mode not in ("confirm", "off"):
+            raise UserFacingError("approval_mode must be 'confirm' or 'off'.")
+        safety["approval_mode"] = mode
+    if "unrestricted" in body:
+        safety["unrestricted"] = bool(body.get("unrestricted"))
+    if "approval_timeout_s" in body:
+        try:
+            safety["approval_timeout_s"] = max(10, int(body.get("approval_timeout_s")))
+        except (TypeError, ValueError):
+            raise UserFacingError("approval_timeout_s must be a number of seconds.")
+
+    with open(config_path, "w", encoding="utf-8") as f:
+        json.dump(config, f, indent=2)
+    return JSONResponse({"status": "updated", "safety": safety})
 
 
 # ── Skill catalog ──

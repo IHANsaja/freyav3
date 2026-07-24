@@ -10,26 +10,92 @@
 
 ---
 
-Freya 3.5 is a local, real-time voice assistant establishing a low-latency bi-directional audio stream with Google Gemini Live API. Running on your Windows desktop, she acts as a conversational **agent**, dynamically executing automation on command and providing visual feedback through a browser-based dashboard.
+Freya is a local, real-time voice assistant built on a low-latency bi-directional audio stream with the Google Gemini Live API. Running on your Windows desktop, she acts as a conversational **agent** — executing automation on command and showing her work through a browser-based 3D dashboard you can steer with your hands.
 
 > [!NOTE]
-> For a detailed dive into the modular design, internal subsystems, and operational patterns, see the [Architecture Documentation](./ARCHITECTURE.md).
+> For the modular design, internal subsystems, and operational patterns, see the [Architecture Documentation](./ARCHITECTURE.md).
 
-Armed with **60+ tools**, a **mission orchestrator**, **approval-gated autopilot**, **structured long-term memory**, an **intent-driven 3D avatar**, and **always-on context awareness**, Freya doesn't just run tools; she plans, acts, verifies, remembers, and animates herself.
+Armed with **75+ tools**, a **mission orchestrator**, **approval-gated autopilot**, **structured long-term memory**, **webcam hand-gesture control**, an **intent-driven 3D avatar**, and **always-on context awareness**, Freya doesn't just run tools; she plans, acts, verifies, remembers, and animates herself.
+
+---
+
+## ⚡ Install (one command)
+
+Open **PowerShell** and run:
+
+```powershell
+irm https://raw.githubusercontent.com/IHANsaja/freyav3/main/install.ps1 | iex
+```
+
+The installer checks prerequisites, clones the repo, builds the Python venv and the dashboard, installs Chromium for browser automation, prompts for your Gemini API key, and writes a `start-freya.ps1` launcher.
+
+**Then:**
+
+```powershell
+.\start-freya.ps1
+```
+
+Both servers start and `http://localhost:3000` opens automatically.
+
+<details>
+<summary>Installer options &amp; manual setup</summary>
+
+```powershell
+.\install.ps1 -SkipBrowser        # skip the ~150 MB Chromium download
+.\install.ps1 -SkipFrontend       # headless / CLI-only, no npm install
+.\install.ps1 -InstallPath D:\ai\freya
+```
+
+**Prerequisites:** Python 3.10+, Node.js 18+, git, and C++ Build Tools (for `pyaudio`).
+
+Manual equivalent:
+
+```powershell
+git clone https://github.com/IHANsaja/freyav3.git
+cd freyav3
+python -m venv venv
+.\venv\Scripts\activate
+pip install -r requirements.txt
+playwright install chromium
+cd freya-ui; npm install; cd ..
+# create .env with GEMINI_API_KEY=...
+```
+
+</details>
 
 ---
 
 ## 🌟 Key Capabilities
 
-*   🔊 **Zero-Latency Live Conversation**: Optimized 16kHz audio input and 24kHz output create a fluid, hands-free conversational loop.
-*   🎯 **Mission Mode**: Give a high-level goal — Freya plans concrete steps, executes them with background agents, verifies each result, and reports back out loud (`start_mission`).
-*   🛡️ **Approval Checkpoints**: Sensitive actions (shutdowns, deletions, sending/submitting things) pause for your explicit yes — by voice or a dashboard button.
-*   🧠 **Structured Memory**: Typed, searchable, editable memory items (preferences, people, projects, deadlines, follow-ups) in SQLite+FTS5, mirrored into semantic vector recall. Due items get spoken reminders.
-*   👁️ **Context Awareness**: Opt-in metadata-only tracking of your active window with rate-limited proactive suggestion chips ("you've been stuck on this — want help?"). Zero screenshots unless you accept.
-*   💃 **Living 3D Avatar**: Freya animates her own body through tools (`set_expression`, `set_gesture`, `trigger_thinking`, ...) — clip crossfades, procedural breathing/look-at, and shader accents. Never frozen.
-*   🖥️ **Live Reasoning Panel**: The dashboard shows the active mission's plan, step progress, verification results, and awaiting-approval state in real time.
-*   🎭 **Personas**: Modes now switch voice, speaking style, UI theme colors, and avatar posture (e.g. Night Guardian: soft voice, dim crimson, seated pose).
-*   ⌬ **Skill Modules**: Every capability is a discoverable skill with a manifest, tool list, and enable toggle (`GET /skills` + dashboard catalog).
+*   🔊 **Zero-Latency Live Conversation**: 16 kHz input / 24 kHz output on a dedicated audio thread pool, so background agents can never stutter her voice.
+*   🖐️ **Hand-Gesture Control**: Steer the 3D orb with your webcam — move to rotate, pinch to zoom, squeeze to compress. She reacts out loud to deliberate hand signs.
+*   🎯 **Mission Mode**: Give a high-level goal — Freya plans steps, executes them with background agents, verifies each result, and reports back out loud.
+*   🛡️ **Approval Checkpoints**: Sensitive actions pause for your explicit yes — by voice or a dashboard button — with an editable folder sandbox.
+*   🧠 **Structured Memory**: Typed, searchable, editable memory items in SQLite+FTS5, mirrored into semantic vector recall. Due items get spoken reminders.
+*   👁️ **Context Awareness**: Opt-in, metadata-only tracking of your active window with rate-limited proactive suggestions. Zero screenshots unless you accept.
+*   💃 **Living 3D Avatar**: Freya animates her own body through tools — clip crossfades, procedural breathing/look-at, shader accents. Never frozen.
+*   📊 **Live Dashboard**: Real sub-agent tracking, the running conversation, mission progress, and genuine system telemetry — no placeholder data.
+*   ⌬ **Two Skill Systems**: Python skills (`@tool`) *and* Claude-style markdown `SKILL.md` packs loaded on demand with progressive disclosure.
+*   🎭 **Personas**: Modes switch voice, speaking style, UI theme colors, and avatar posture.
+
+---
+
+## 🖐️ Hand-Gesture Control
+
+Enable it with the hand icon in the header (it asks for camera permission). Powered by MediaPipe's gesture recognizer, bundled locally in `freya-ui/public/mediapipe/` — no CDN calls.
+
+| Gesture | Effect |
+| :--- | :--- |
+| **Move an open hand** | Rotates the orb itself (the scene and camera stay put) |
+| **Pinch** thumb + index, then spread/close | Zooms the orb in / out |
+| **Squeeze** (closed fist) | Compresses the orb proportionally to grip strength, with a spring rebound on release |
+| **Victory / 👍 / 👎 / ☝️ / 🤟** | Freya reacts out loud, in character, through the live session |
+
+Design notes:
+- Merely *tracking* a hand never changes the orb's size or state — squeezing requires a genuinely closed hand (hysteresis-latched), so drags and pinches can't dent it.
+- Rotation stands down while pinching, so resizing doesn't also fling the orb.
+- Grip is measured from middle/ring/pinky and pinch from thumb+index — **disjoint fingers**, so zoom and squeeze stay independent.
+- Camera selection is available in the header when more than one webcam is present.
 
 ---
 
@@ -39,21 +105,40 @@ Armed with **60+ tools**, a **mission orchestrator**, **approval-gated autopilot
 | :--- | :--- | :--- |
 | 🎯 **Missions** | Plan → execute → verify → report for big goals, with approval pauses. | `start_mission`, `mission_status`, `cancel_mission` |
 | 🛡️ **Approvals** | Human-in-the-loop gate for sensitive/irreversible actions. | `approve_action`, `reject_action` |
-| 💃 **Avatar** | Emotional expressions, gestures, poses on her 3D body. | `set_expression`, `set_gesture`, `set_idle_state`, … |
+| 🤖 **Sub-Agents** | Delegates multi-step research, coding, or UI tasks to background workers on their own threads. | `dispatch_agent`, `check_agents` |
+| 🌐 **Browser Use** | Autonomously drives a Chromium browser for interactive web tasks. | `browser_task` |
+| 🔎 **Web & News** | Quota-free search/fetch plus live headlines projected into the scene. | `web_search`, `web_fetch`, `get_world_news` |
+| 📁 **File Manager** | Copy, move/rename, recycle, zip/unzip, inspect, reveal in Explorer, find large/recent files. | `copy_item`, `move_item`, `delete_item`, `zip_item`, `find_files_by`, … |
+| 🎬 **Watch Video** | Actually watches a YouTube link or local file and answers questions about it. | `use_skill("watch")` |
+| 💼 **Career Ops** | Bridged [career-ops](https://github.com/santifer/career-ops): scan portals, A–G offer evaluation, CV tailoring, tracking. | `use_career_mode`, `run_career_script` |
+| 💃 **Avatar** | Emotional expressions, gestures, poses on her 3D body. | `set_expression`, `set_gesture`, `set_idle_state` |
 | 🧠 **Memory** | Save/search/edit/forget typed memories mid-conversation. | `remember`, `list_memories`, `forget`, `whats_coming_up` |
 | 👁️ **Context** | Always-on window awareness with proactive suggestions. | `enable_context_awareness`, `watch_screen` |
-| 📰 **Top News** | Fetches and reads the latest global / topic headlines aloud. | `get_world_news`, `get_news` |
-| 🤖 **Sub-Agents** | Delegates multi-step research, coding, or UI tasks to background agents. | `dispatch_agent`, `check_agents` |
-| 🌐 **Browser Use** | Autonomously drives a Chromium browser to browse or complete web tasks. | `browser_task` |
-| 🎯 **System Automation** | Full control: clipboard, standard files, window management, volume/media, shut/sleep. | `clipboard_*`, `read_file`, `set_volume`, … |
-| 🧩 **Modes & Persona** | Hot-swap personality, voice, theme, and avatar posture. | `switch_mode` |
+| 🎯 **System Automation** | Clipboard, windows, volume/media, lock/sleep, screen control via UI-Automation. | `clipboard_*`, `focus_window`, `control_element`, … |
 | 🧬 **Self-Extension** | Autonomously writes, loads, and uses new Python tools. | `create_tool`, `run_code` |
 
-### Requirements for advanced powers
-```bash
-pip install -r requirements.txt
-playwright install chromium          # for browser-use
+---
+
+## ⌬ Skills
+
+Freya has **two** complementary skill systems.
+
+**1. Python skills** — modules that register callable tools via `@tool`, listed in `core/skills/loader.py` with a manifest, tool list, and enable gate. Browse them in ⚙ Settings → SKILL_MODULES or `GET /skills`.
+
+**2. Markdown skill packs** — Claude-style `SKILL.md` folders under `skills/`, using the open Agent Skill Standard, with **progressive disclosure**:
+
 ```
+skills/
+  watch/
+    SKILL.md          <- frontmatter: name + description; body: instructions
+    scripts/watch.py  <- bundled executable, run on demand
+```
+
+- Every skill's **name + description** is always visible to the model.
+- The **full instructions** load only when she calls `use_skill(name)`.
+- Bundled **scripts** run via `run_skill_script` without ever occupying context.
+
+This means third-party agent-standard skills can be dropped into `skills/` and used essentially unmodified.
 
 ---
 
@@ -64,123 +149,103 @@ freyav3/
 ├── config/                 # Config loading, mode/persona profiles, feature gates
 ├── core/
 │   ├── events.py           # Typed event bus (+ replay buffer for reconnects)
+│   ├── errors.py           # Shared logger + safe client error payloads
+│   ├── safety.py           # Folder sandbox + approval rules
 │   ├── approvals.py        # Human-in-the-loop approval gate
-│   ├── missions.py         # Plan → execute → verify → report orchestrator
-│   ├── avatar.py           # Avatar animation intent tools
+│   ├── missions.py         # Plan -> execute -> verify -> report orchestrator
+│   ├── agents.py           # Sub-agents (own thread + event loop each)
+│   ├── file_manager.py     # Copy/move/recycle/zip/inspect file operations
+│   ├── md_skills.py        # SKILL.md packs w/ progressive disclosure
+│   ├── career_ops.py       # career-ops bridge
 │   ├── memory_store.py     # Structured memory (SQLite + FTS5)
-│   ├── memory_tools.py     # remember / forget / list_memories / whats_coming_up
 │   ├── context_watch.py    # Always-on metadata context tracker (opt-in)
-│   ├── skills/loader.py    # Skill manifests + catalog
-│   ├── agents.py           # Shared ReAct executor + quick sub-agents
-│   └── …                   # audio, model loop, registry, screen, browser, scheduler, …
+│   └── ...                 # audio, model loop, registry, screen, browser, scheduler
 ├── freya-ui/
-│   └── app/components/
-│       ├── MissionPanel.tsx     # Live reasoning display
-│       ├── ApprovalPrompt.tsx   # Approve/Deny cards
-│       ├── SuggestionChips.tsx  # Proactive nudges
-│       ├── MemoryPanel.tsx      # Structured memory editor
-│       ├── SkillsPanel.tsx      # Skill catalog + toggles
-│       └── avatar/              # AvatarController + model manifest
+│   └── app/
+│       ├── components/hud/     # AgentsCard, ChatCard, SystemStatusCard, ...
+│       ├── components/scene/   # Orb + shaders, hand-driven rotation/zoom/squeeze
+│       ├── hooks/useHandGestures.ts     # MediaPipe webcam tracking
+│       └── hooks/useGestureOrbBridge.ts # Gesture -> reaction dispatch
+├── skills/watch/           # Markdown skill pack: video watching
 ├── memory/                 # freya_memory.db (SQLite), rag_db (Chroma), schedule.json
-├── test_scripts/           # Diagnostic tools for audio, memory, and devices
-├── .env                    # API Keys (GEMINI_API_KEY) - Git ignored
+├── install.ps1             # One-command installer
 ├── main.py                 # CLI entrypoint
-├── server.py               # Web UI backend (FastAPI + WebSocket server)
-└── requirements.txt        # Backend dependencies
+├── server.py               # FastAPI + WebSocket backend
+└── requirements.txt
 ```
 
 ---
 
-## ⚡ Quick Start
+## 🚀 Running
 
-### 1️⃣ Clone and Prepare Environment
-
-Requires **Python 3.10+**, **Node.js 18+**, and a C/C++ compiler for `pyaudio`.
-
-```bash
-# Clone the repository
-git clone https://github.com/your-username/freyav3.git
-cd freyav3
-
-# Create and activate virtual environment
-python -m venv venv
-venv\Scripts\activate
-
-# Install Python dependencies
-pip install -r requirements.txt
+```powershell
+.\start-freya.ps1            # both halves + opens the dashboard
 ```
 
-### 2️⃣ Configure API Keys
+Or manually:
 
-Create a `.env` file in the root directory:
+```powershell
+# Terminal 1 - backend
+.\venv\Scripts\python.exe server.py
 
-```env
-GEMINI_API_KEY=YourGeminiApiKeyHere
+# Terminal 2 - dashboard
+cd freya-ui; npm run dev
 ```
 
-### 3️⃣ Initialize Personal Memory
+Open `http://localhost:3000` and press **START FREYA**.
 
-```bash
-copy memory\freya_memory.example.md memory\freya_memory.md
-```
+**Headless CLI:** `.\venv\Scripts\python.exe main.py` (`Ctrl+C` stops and persists memory).
 
 ---
 
-## 🚀 Execution
+## 🔐 Access Control
 
-Freya supports two operation modes:
+Freya can write files, run code, and drive your desktop, so file-touching tools pass through a sandbox first (`core/safety.py`).
 
-### Mode 1: Web Dashboard (Recommended)
+Edit it in **⚙ Settings → ACCESS_CONTROL**:
 
-Start the Python backend and Next.js frontend separately.
-
-```bash
-# Terminal 1 — Backend (fastapi)
-python server.py
-
-# Terminal 2 — Frontend (Next.js)
-cd freya-ui
-npm run dev
-```
-
-Open `http://localhost:3000`.
-
-### Mode 2: Headless CLI
-
-```bash
-python main.py
-```
-Use `Ctrl + C` in the terminal to stop and trigger memory persistence.
+- **Allowed folders** — add/remove the roots she may modify. Empty means the safe default: your home folder and the Freya project. Paths are validated server-side.
+- **Confirm sensitive actions** — the approval gate for deletions, sends, submissions, and out-of-project writes.
+- **Unrestricted mode** — disables the folder sandbox entirely. Off by default; only enable if you understand the consequences.
 
 ---
 
-## 🧪 Testing the New Features
+## 🔌 HTTP API
 
-Start both servers (Mode 1), open `http://localhost:3000`, press **⚡ START FREYA**, then:
+| Endpoint | Purpose |
+| :--- | :--- |
+| `GET /status` | Session telemetry: running, startedAt, model, voice, mode, tool count |
+| `GET /agents` | Live sub-agent + browser jobs with their tasks and current step |
+| `GET`/`POST` `/safety` | Read/update the access-control sandbox |
+| `GET`/`POST` `/config` | Model, voice, mode, audio devices |
+| `GET /skills` | Skill catalog with tools + gate state |
+| `GET /audio/devices` | Input/output device enumeration |
+| `POST /debug/emit` | Push any event to the dashboard without a voice session |
 
-| Feature | Say / do | Expect |
-| :--- | :--- | :--- |
-| **Approval gate** | *"Shut down my computer"* | Freya asks for confirmation + a card appears above the dock. Say *"yes"* (or click Approve/Deny). `git status` runs freely; `del …` gets gated. |
-| **Mission mode** | *"Start a mission: research the three best open-source screen recorders and write a comparison to my desktop"* | Plan appears in the right-side panel, steps tick through with verification, the out-of-project file write pauses for approval, and she reports the result aloud. |
-| **Live reasoning panel** | (during any mission) | Goal, step glyphs, AWAITING APPROVAL pulse, progress bar, final report. Collapse it with **—**; cancel with the pill button or *"cancel the mission"*. |
-| **Avatar intents** | *"Dance for me"*, *"look excited"*, *"show me your thinking pose"* | The 3D figure (toggle **CORE/FIGURE** in the header) crossfades gestures and always returns to a breathing idle — never a frozen T-pose. |
-| **New 3D model** | Header **CORE → FIGURE** | The full-resolution Blender model (`FreyaV2.glb`) with contract clips; the shader core reacts to the same intents in CORE view. |
-| **Structured memory** | *"Remember my dentist appointment is Friday at 3pm"* → open ⚙ Settings | A `deadline` item appears in LONG_TERM_MEMORY_CORE (filter, search, edit inline, forget). When it comes due, Freya says it out loud. Also try *"what's coming up?"* |
-| **Context awareness** | *"Enable context awareness"*, then work in one window ~10 min | A `CTX:` line appears in the header; a single suggestion chip appears ("You've been on this a while…"). **Do it** makes her act; **✕** teaches her to nudge that kind less. Off by default — configurable under `ambient.context_tracker`. |
-| **Personas** | Click **Night Guardian** mode (or say *"switch to night guardian mode"*) | Voice changes to Kore after reconnect, UI recolors to dim crimson, the core slows, and the avatar sits. Coding mode gets its own accent + terse delivery. |
-| **Skills** | ⚙ Settings → SKILL_MODULES | Every capability with its tool count; toggle gated ones (applies next session). Also `curl http://localhost:8000/skills`. |
-
-**Without a voice session** (no mic/quota needed): `POST /debug/emit` pushes any event to the dashboard, e.g.
+Exercise the UI with no mic or quota:
 
 ```bash
 curl -X POST http://localhost:8000/debug/emit -H "Content-Type: application/json" \
-  -d '{"type":"avatar","payload":{"intent":"gesture","name":"celebrate"}}'
+  -d '{"type":"agent","payload":{"id":"res-1","agent":"researcher","task":"Compare GPUs","status":"working","step":"web_search"}}'
 ```
 
-**Memory migration note:** on first run your old `memory/freya_memory.md` is imported into `memory/freya_memory.db` automatically and kept as `freya_memory.imported.md`.
+---
+
+## 🧪 Trying it out
+
+| Feature | Say / do | Expect |
+| :--- | :--- | :--- |
+| **Hand control** | Enable the hand icon, move your hand | Orb rotates; pinch zooms; a fist compresses it |
+| **Gesture reaction** | Make a 👍 or ✌️ at the camera | Freya reacts out loud, in character |
+| **Sub-agents** | *"Research the best budget GPUs in the background"* | The SUB-AGENTS card shows the worker, its task and current tool |
+| **Approval gate** | *"Shut down my computer"* | Confirmation card appears; `git status` runs freely, `del ...` is gated |
+| **Mission mode** | *"Start a mission: research screen recorders and write a comparison to my desktop"* | Plan appears, steps tick with verification, she reports aloud |
+| **Watch a video** | *"Watch this video and tell me what happens at 2:30"* + a YouTube link | She actually analyses the frames and audio |
+| **Memory** | *"Remember my dentist appointment is Friday at 3pm"* | A `deadline` item appears in Settings; she reminds you when due |
+| **Personas** | Click **Night Guardian** | Voice, theme, core speed and avatar posture all change |
 
 ---
 
 ## 🪐 License
 
-This project is licensed under the MIT License.
+MIT.

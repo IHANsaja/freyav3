@@ -109,7 +109,7 @@ export default function VoidBackground({ moodRef }: VoidBackgroundProps) {
       new THREE.ShaderMaterial({
         uniforms: {
           uTime: { value: 0 },
-          uColor: { value: new THREE.Color("#d32f2f") },
+          uColor: { value: new THREE.Color("#0f9c6e") },
         },
         vertexShader: VOID_VERTEX,
         fragmentShader: VOID_FRAGMENT,

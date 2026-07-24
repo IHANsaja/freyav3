@@ -2,6 +2,7 @@
 
 import { useState, useEffect } from "react";
 import { AudioDevice, FreyaConfig, FreyaState } from "../hooks/useFreyaSocket";
+import AccessControlPanel from "./AccessControlPanel";
 import MemoryPanel from "./MemoryPanel";
 import SkillsPanel from "./SkillsPanel";
 
@@ -66,27 +67,31 @@ export default function SettingsModal({
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-surface-container-lowest/80 backdrop-blur-sm p-4">
-      {/* Modal Container */}
-      <div 
-        className="w-full max-w-[620px] bg-surface-container-low border border-primary-container/80 flex flex-col"
+      {/* Modal Container — wide on desktop, full-width on small screens, and
+          never taller than the viewport (the body scrolls instead, which the
+          old fixed-height single column could not do). */}
+      <div
+        className="w-full max-w-[1100px] max-h-[92vh] bg-surface-container-low border border-primary-container/80 flex flex-col"
         style={{ borderRadius: "0px" }}
       >
         {/* Header */}
-        <div className="flex items-center justify-between px-6 py-4 border-b border-outline-variant/30">
+        <div className="shrink-0 flex items-center justify-between px-6 py-4 border-b border-outline-variant/30">
           <div className="flex items-center gap-2 text-primary font-bold text-xs tracking-wider uppercase">
             <span className="text-sm">⚙</span>
             <span>SYSTEM CONFIGURATION</span>
           </div>
           <button
             onClick={onClose}
+            aria-label="Close settings"
             className="text-on-surface-variant hover:text-parchment text-lg font-light transition-colors"
           >
             ✕
           </button>
         </div>
 
-        {/* Content Body */}
-        <div className="p-6 flex flex-col gap-6">
+        {/* Content Body — two columns of settings on wide screens, stacked on
+            narrow ones; scrolls independently of the header/footer. */}
+        <div className="flex-1 min-h-0 overflow-y-auto p-6 grid grid-cols-1 lg:grid-cols-2 gap-x-8 gap-y-6 items-start">
           {/* PRIMARY_LLM_ARCHITECTURE */}
           <div className="flex flex-col gap-2">
             <div className="flex items-center gap-2 text-[11px] font-bold text-outline uppercase tracking-wider">
@@ -135,7 +140,7 @@ export default function SettingsModal({
                     className={`px-6 py-2 rounded-full text-xs font-semibold tracking-wider transition-all duration-200
                       ${
                         isActive
-                          ? "bg-primary-container text-parchment border border-primary-container shadow-[0_0_12px_rgba(211,47,47,0.3)]"
+                          ? "bg-primary-container text-parchment border border-primary-container shadow-[0_0_12px_rgba(15,156,110,0.3)]"
                           : "bg-transparent text-on-surface-variant border border-outline-variant/40 hover:bg-surface-container-high hover:text-on-surface"
                       }
                       disabled:opacity-40 disabled:cursor-not-allowed`}
@@ -182,6 +187,16 @@ export default function SettingsModal({
             )}
           </div>
 
+          {/* ACCESS_CONTROL — which folders Freya may read/write/delete in.
+              Editable here so it doesn't require hand-editing the JSON config. */}
+          <div className="flex flex-col gap-2">
+            <div className="flex items-center gap-2 text-[11px] font-bold text-outline uppercase tracking-wider">
+              <span>🔐</span>
+              <span>ACCESS_CONTROL</span>
+            </div>
+            <AccessControlPanel />
+          </div>
+
           {/* LONG_TERM_MEMORY_CORE — structured, searchable, editable */}
           <div className="flex flex-col gap-2">
             <div className="flex items-center gap-2 text-[11px] font-bold text-outline uppercase tracking-wider">
@@ -191,8 +206,9 @@ export default function SettingsModal({
             <MemoryPanel refreshKey={memoryVersion} />
           </div>
 
-          {/* SKILL_MODULES — capability catalog with gates */}
-          <div className="flex flex-col gap-2">
+          {/* SKILL_MODULES — capability catalog with gates. Full width: the
+              catalog is long and reads better across the modal. */}
+          <div className="flex flex-col gap-2 lg:col-span-2">
             <div className="flex items-center gap-2 text-[11px] font-bold text-outline uppercase tracking-wider">
               <span>⌬</span>
               <span>SKILL_MODULES</span>
@@ -202,7 +218,7 @@ export default function SettingsModal({
         </div>
 
         {/* Footer */}
-        <div className="flex items-center justify-end gap-6 px-6 py-4 border-t border-outline-variant/30">
+        <div className="shrink-0 flex items-center justify-end gap-6 px-6 py-4 border-t border-outline-variant/30">
           <button
             onClick={onClose}
             className="text-xs font-semibold text-on-surface-variant hover:text-parchment uppercase tracking-widest transition-colors"
@@ -213,7 +229,7 @@ export default function SettingsModal({
             onClick={handleCommit}
             disabled={saving}
             className="px-6 py-2.5 rounded-full text-xs font-semibold text-parchment bg-primary-container hover:bg-primary-container/90
-                       transition-all tracking-widest uppercase shadow-[0_0_15px_rgba(211,47,47,0.35)]"
+                       transition-all tracking-widest uppercase shadow-[0_0_15px_rgba(15,156,110,0.35)]"
           >
             {saving ? "SAVING..." : "COMMIT & SAVE"}
           </button>

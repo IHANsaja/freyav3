@@ -174,8 +174,15 @@ def _run_agent_thread(job_id: str, agent_type: str, task: str, config: dict,
         spec = _spec(agent_type, config)
 
         async def on_tool(name, args, result):
+            # Record the step on the job too, not just in the event — the
+            # dashboard's /agents fetch (on load / reconnect) reads the table,
+            # and without this a reconnecting client loses all step detail.
+            job = _jobs.get(job_id)
+            if job is not None:
+                job["step"] = name
             _emit_threadsafe(main_loop, runtime.emit(
-                "agent", {"id": job_id, "type": agent_type, "step": name, "status": "working"}))
+                "agent", {"id": job_id, "agent": agent_type, "task": task,
+                          "step": name, "status": "working"}))
 
         return await react_loop(spec["system"], task, spec.get("tools", []),
                                 spec["model"], config, ctx, on_tool=on_tool)
@@ -189,9 +196,10 @@ def _run_agent_thread(job_id: str, agent_type: str, task: str, config: dict,
         else:
             final = f"My {agent_type} agent hit an error: {e}"
 
-    _jobs[job_id].update(status="done", result=final)
+    _jobs[job_id].update(status="done", result=final, step=None)
     _emit_threadsafe(main_loop, runtime.emit(
-        "agent", {"id": job_id, "type": agent_type, "status": "done"}))
+        "agent", {"id": job_id, "agent": agent_type, "task": task,
+                  "status": "done", "result": str(final)[:400]}))
     _emit_threadsafe(main_loop, runtime.inject(
         f"Your {agent_type} agent finished the task '{task}'. Here's the result: {final}"))
 
@@ -225,7 +233,7 @@ async def dispatch_agent(args, ctx) -> str:
         args=(job_id, agent_type, task, ctx.config, main_loop),
         daemon=True, name=f"sub-agent-{job_id}",
     ).start()
-    await ctx.emit("agent", {"id": job_id, "type": agent_type, "status": "started", "task": task})
+    await ctx.emit("agent", {"id": job_id, "agent": agent_type, "status": "started", "task": task})
     return (f"Dispatched the {agent_type} agent (job {job_id}) on: {task}. "
             "It's working in the background — I'll tell you when it's done.")
 

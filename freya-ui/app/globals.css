@@ -1,28 +1,30 @@
 @import "tailwindcss";
 
 @theme {
+  /* Dark theme — near-black surfaces, unchanged. Only the accent hue moves. */
   --color-surface: #050507;
   --color-surface-dim: #030304;
-  --color-surface-bright: #2a1416;
+  --color-surface-bright: #0f2019; /* faintest jade lift (was red-tinted) */
   --color-surface-container-lowest: #030304;
   --color-surface-container-low: #0a0709;
   --color-surface-container: #0e0a0c;
   --color-surface-container-high: #150d10;
   --color-surface-container-highest: #1c1216;
 
-  --color-primary: #ff4d4d; /* Hot crimson HUD accent */
-  --color-primary-container: #d32f2f; /* Deep brand crimson — persona anchor */
-  --color-secondary: #ff8a75;
-  --color-secondary-container: #920703; /* Muted blood red */
+  /* ── Accent: emerald jade (was crimson) ── */
+  --color-primary: #3dedb4; /* Bright emerald HUD accent */
+  --color-primary-container: #0f9c6e; /* Deep jade — persona anchor */
+  --color-secondary: #8affd8;
+  --color-secondary-container: #0a5a44; /* Muted deep jade */
 
   --color-on-surface: #ece6e4;
-  --color-on-surface-variant: #e4beba;
+  --color-on-surface-variant: #bae4d6; /* jade-tinted ink */
 
-  --color-outline: #9a6f6b;
-  --color-outline-variant: #4a2c2a;
+  --color-outline: #6b9a86;
+  --color-outline-variant: #243a32;
 
   --color-parchment: #f2ece4; /* HUD ink */
-  --color-muted-blood: #8b0000;
+  --color-muted-blood: #0a6b4e; /* deep jade (legacy name) */
   --color-deep-charcoal: #0e0a0c;
 
   --font-sans: var(--font-sans), sans-serif;
@@ -46,17 +48,21 @@
 
   /* ── Archival System (V3.0 HUD) design tokens ── */
   --bg-base: #07050a;
-  --panel-bg: rgba(18, 10, 11, 0.55);
-  --panel-border: rgba(255, 60, 60, 0.22);
-  --panel-border-hover: rgba(255, 90, 90, 0.55);
-  --accent-red: #ff2b3a;
-  --accent-red-dim: #7a0f16;
-  --accent-red-glow: #ff5563;
-  --accent-green: #34e9a0;
+  --panel-bg: rgba(9, 20, 16, 0.55);
+  --panel-border: rgba(34, 224, 160, 0.22);
+  --panel-border-hover: rgba(61, 237, 180, 0.55);
+  /* Var names kept as --accent-red for compatibility; the hue is now emerald
+     jade. Every component that reads these recolors automatically. */
+  --accent-red: #22e0a0;
+  --accent-red-dim: #0a4d3a;
+  --accent-red-glow: #5cf0c6;
+  /* Online/success indicator — a cyan, deliberately distinct from the jade
+     brand so CONNECTED doesn't blend into the accent green. */
+  --accent-green: #38d9f0;
   --text-primary: #f3efec;
   --text-secondary: #97929a;
   --text-tertiary: #5b565e;
-  --danger: #ff2b3a;
+  --danger: #ff2b3a; /* genuine danger stays red, distinct from the jade brand */
   --radius: 10px;
   --blur: 14px;
 }
@@ -319,7 +325,7 @@ body {
 .hud-ripple {
   position: absolute;
   border-radius: 9999px;
-  background: radial-gradient(circle, rgba(255, 85, 99, 0.6) 0%, transparent 70%);
+  background: radial-gradient(circle, rgba(61, 237, 180, 0.6) 0%, transparent 70%);
   pointer-events: none;
   animation: hud-ripple 0.55s ease-out forwards;
 }

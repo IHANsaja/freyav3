@@ -189,7 +189,7 @@ function CoreEntity({
           uFreq: { value: 2.1 },
           uSpeed: { value: 0.35 },
           uGlow: { value: 0.25 },
-          uColor: { value: new THREE.Color("#d32f2f") },
+          uColor: { value: new THREE.Color("#0f9c6e") },
           uInk: { value: new THREE.Color("#f5f5dc") },
         },
         vertexShader: CORE_VERTEX,
@@ -202,7 +202,7 @@ function CoreEntity({
     () =>
       new THREE.ShaderMaterial({
         uniforms: {
-          uColor: { value: new THREE.Color("#d32f2f") },
+          uColor: { value: new THREE.Color("#0f9c6e") },
           uGlow: { value: 0.25 },
         },
         vertexShader: HALO_VERTEX,
@@ -268,7 +268,7 @@ function CoreEntity({
     haloMat.uniforms.uGlow.value = coreMat.uniforms.uGlow.value;
 
     // Drift the core color toward the expression accent, else the persona accent.
-    const restColor = persona?.theme?.accent ?? "#d32f2f";
+    const restColor = persona?.theme?.accent ?? "#0f9c6e";
     const targetColor = accent ? new THREE.Color(accent.accent) : new THREE.Color(restColor);
     (coreMat.uniforms.uColor.value as THREE.Color).lerp(targetColor, k * 0.6);
     (haloMat.uniforms.uColor.value as THREE.Color).lerp(targetColor, k * 0.6);

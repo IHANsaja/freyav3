@@ -49,12 +49,12 @@ function SceneContents({ state, avatarIntent, persona, expression, fxRef, gestur
   );
 
   const glowBoost = expression ? expression.accent.glowBoost * expression.intensity : 0;
-  const coreColor = expression?.accent.accent ?? persona?.theme?.accent ?? "#ff2b3a";
+  const coreColor = expression?.accent.accent ?? persona?.theme?.accent ?? "#22e0a0";
 
   return (
     <>
       <ambientLight intensity={0.4} />
-      {/* Crimson core-light so platform dust picks up the orb's glow —
+      {/* Jade core-light so platform dust picks up the orb's glow —
           recolors to the active expression's accent, same as the orb itself. */}
       <pointLight position={[0, ORB_Y, 0]} intensity={1.4 + glowBoost * 2} distance={5} color={coreColor} />
 

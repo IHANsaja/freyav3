@@ -123,12 +123,12 @@ export interface ExpressionAccent {
 }
 
 export const EXPRESSION_ACCENTS: Record<string, ExpressionAccent> = {
-    joyful:  { glowBoost: 0.35, speedBoost: 0.3,  ampBoost: 0.08,  breathScale: 1.3, accent: "#ff8a75" },
+    joyful:  { glowBoost: 0.35, speedBoost: 0.3,  ampBoost: 0.08,  breathScale: 1.3, accent: "#8affd8" },
     warm:    { glowBoost: 0.2,  speedBoost: 0.0,  ampBoost: 0.02,  breathScale: 1.1, accent: "#ffb3ac" },
     playful: { glowBoost: 0.3,  speedBoost: 0.45, ampBoost: 0.1,   breathScale: 1.35, accent: "#ff6f61" },
-    focused: { glowBoost: 0.05, speedBoost: 0.25, ampBoost: -0.02, breathScale: 0.85, accent: "#e4beba" },
-    stern:   { glowBoost: -0.1, speedBoost: 0.3,  ampBoost: -0.04, breathScale: 0.8,  accent: "#920703" },
+    focused: { glowBoost: 0.05, speedBoost: 0.25, ampBoost: -0.02, breathScale: 0.85, accent: "#bae4d6" },
+    stern:   { glowBoost: -0.1, speedBoost: 0.3,  ampBoost: -0.04, breathScale: 0.8,  accent: "#0a5a44" },
     curious: { glowBoost: 0.15, speedBoost: 0.15, ampBoost: 0.05,  breathScale: 1.15, accent: "#ffdad6" },
     calm:    { glowBoost: -0.08, speedBoost: -0.15, ampBoost: -0.05, breathScale: 0.7, accent: "#c8c8b0" },
-    alert:   { glowBoost: 0.4,  speedBoost: 0.6,  ampBoost: 0.06,  breathScale: 1.5, accent: "#d32f2f" },
+    alert:   { glowBoost: 0.4,  speedBoost: 0.6,  ampBoost: 0.06,  breathScale: 1.5, accent: "#0f9c6e" },
 };

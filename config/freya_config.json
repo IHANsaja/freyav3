@@ -43,7 +43,7 @@
       "model_override": null,
       "personality_override": null,
       "theme": {
-        "accent": "#d32f2f",
+        "accent": "#0f9c6e",
         "glow": 1.0
       }
     },
@@ -53,7 +53,7 @@
       "voice_override": "Kore",
       "speech_style": "It's late. Speak slowly, softly and briefly \u00e2\u20ac\u201d a calm, low-energy presence. No exclamation, minimal chatter, longer pauses.",
       "theme": {
-        "accent": "#7a1f2b",
+        "accent": "#123a2c",
         "glow": 0.35,
         "coreParams": {
           "amp": 0.06,
@@ -145,7 +145,7 @@
     "engine": "uia_ocr"
   },
   "safety": {
-    "unrestricted": false,
+    "unrestricted": true,
     "allowed_roots": [],
     "approval_mode": "confirm",
     "approval_timeout_s": 120,
