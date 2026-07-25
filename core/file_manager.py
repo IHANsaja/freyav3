@@ -27,12 +27,13 @@ import time
 import zipfile
 
 from core.registry import tool, OBJ, P, STR, BOOL, INT
+from core.user_paths import resolve_user_path
 
 MAX_LIST = 40  # entries returned to a voice model before truncating
 
 
 def _x(path: str) -> str:
-    return os.path.abspath(os.path.expanduser((path or "").strip()))
+    return resolve_user_path(path or "")
 
 
 def _human(n: float) -> str:
@@ -184,6 +185,20 @@ def create_folder(args, ctx) -> str:
 # ══════════════════════════════════════════════
 #  INSPECT
 # ══════════════════════════════════════════════
+@tool(
+    "get_user_folders",
+    "Look up the REAL paths of Ihan's standard folders (desktop, documents, downloads, "
+    "pictures, music, videos, home). Use this whenever he refers to one by name and you "
+    "need a concrete path — never guess his username or build the path yourself, because "
+    "the account folder is often not what you'd expect from his first name.",
+    OBJ(),
+)
+def get_user_folders(args, ctx) -> str:
+    from core.user_paths import all_user_folders
+    folders = all_user_folders()
+    return "Ihan's folders: " + "; ".join(f"{k} = {v}" for k, v in folders.items())
+
+
 @tool(
     "file_info",
     "Get details about a file or folder: size, when it was created and last modified, and "

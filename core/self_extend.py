@@ -22,6 +22,7 @@ _CUSTOM_DIR = os.path.join(os.path.dirname(__file__), "skills", "custom")
 
 _TEMPLATE = '''# Auto-generated Freya skill — created by Freya herself.
 from core.registry import tool, OBJ, P, STR, INT, BOOL
+from core.user_paths import resolve_user_path
 
 
 @tool({name!r}, {description!r}, OBJ({{"input": P(STR, "optional free-form input")}}))
@@ -141,7 +142,7 @@ def run_code(args, ctx) -> str:
     dangerous=True,
 )
 def edit_file(args, ctx) -> str:
-    path = os.path.expanduser(args.get("path", ""))
+    path = resolve_user_path(args.get("path", ""))
     old, new = args.get("old_string", ""), args.get("new_string", "")
     try:
         with open(path, "r", encoding="utf-8") as f:

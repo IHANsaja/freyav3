@@ -17,6 +17,7 @@ import hashlib
 
 from config import get_agent_api_key
 from core.registry import tool, OBJ, P, STR
+from core.user_paths import resolve_user_path
 
 _DB_DIR = os.path.join(os.path.dirname(__file__), "..", "memory", "rag_db")
 _EMBED_MODEL = "gemini-embedding-001"
@@ -137,7 +138,7 @@ def recall(args, ctx) -> str:
     gate="rag.enabled",
 )
 def index_folder(args, ctx) -> str:
-    path = os.path.expanduser(args.get("path", ""))
+    path = resolve_user_path(args.get("path", ""))
     if not os.path.isdir(path):
         return f"'{path}' isn't a folder I can read."
     total, files = 0, 0

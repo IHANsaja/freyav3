@@ -14,6 +14,7 @@ import glob as _glob
 import subprocess
 
 from core.registry import register, tool, OBJ, P, STR, INT, BOOL
+from core.user_paths import resolve_user_path
 
 MAX_READ = 20_000  # chars — keep file reads digestible for a voice model
 
@@ -54,7 +55,7 @@ def clipboard_write(args, ctx) -> str:
     OBJ({"path": P(STR, "Absolute path to the file")}, ["path"]),
 )
 def read_file(args, ctx) -> str:
-    path = os.path.expanduser(args.get("path", ""))
+    path = resolve_user_path(args.get("path", ""))
     try:
         with open(path, "r", encoding="utf-8", errors="replace") as f:
             data = f.read()
@@ -73,7 +74,7 @@ def read_file(args, ctx) -> str:
     dangerous=True,
 )
 def write_file(args, ctx) -> str:
-    path = os.path.expanduser(args.get("path", ""))
+    path = resolve_user_path(args.get("path", ""))
     try:
         os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
         with open(path, "w", encoding="utf-8") as f:
@@ -89,7 +90,7 @@ def write_file(args, ctx) -> str:
     OBJ({"path": P(STR, "Directory path (defaults to home)")}),
 )
 def list_dir(args, ctx) -> str:
-    path = os.path.expanduser(args.get("path") or "~")
+    path = resolve_user_path(args.get("path") or "~")
     try:
         entries = sorted(os.listdir(path))
         if not entries:
@@ -109,7 +110,7 @@ def list_dir(args, ctx) -> str:
          "pattern": P(STR, "Glob pattern, e.g. *.png")}, ["directory", "pattern"]),
 )
 def search_files(args, ctx) -> str:
-    directory = os.path.expanduser(args.get("directory", "~"))
+    directory = resolve_user_path(args.get("directory", "~"))
     pattern = args.get("pattern", "*")
     try:
         hits = _glob.glob(os.path.join(directory, "**", pattern), recursive=True)[:40]

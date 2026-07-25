@@ -7,7 +7,7 @@ load_dotenv()
 CONFIG_PATH = os.path.join(os.path.dirname(__file__), "freya_config.json")
 
 def load_config():
-    with open(CONFIG_PATH, "r") as f:
+    with open(CONFIG_PATH, "r", encoding="utf-8") as f:
         config = json.load(f)
     
     if "modes" not in config:

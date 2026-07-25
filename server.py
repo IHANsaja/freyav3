@@ -323,7 +323,7 @@ async def get_audio_devices_endpoint():
 @app.post("/config")
 async def update_config_endpoint(body: dict):
     config_path = os.path.join("config", "freya_config.json")
-    with open(config_path, "r") as f:
+    with open(config_path, "r", encoding="utf-8") as f:
         config = json.load(f)
     if "model" in body:
         config["active_model"] = body["model"]
@@ -333,7 +333,7 @@ async def update_config_endpoint(body: dict):
         config.setdefault("audio", {})["input_device_index"] = body["input_device_index"]
     if "output_device_index" in body:
         config.setdefault("audio", {})["output_device_index"] = body["output_device_index"]
-    with open(config_path, "w") as f:
+    with open(config_path, "w", encoding="utf-8") as f:
         json.dump(config, f, indent=2)
     return JSONResponse({"status": "updated"})
 
@@ -578,14 +578,14 @@ async def toggle_skill(skill_id: str):
         return JSONResponse({"error": "this skill has no enable/disable gate"}, status_code=400)
 
     config_path = os.path.join("config", "freya_config.json")
-    with open(config_path, "r") as f:
+    with open(config_path, "r", encoding="utf-8") as f:
         cfg = json.load(f)
     node = cfg
     parts = gate.split(".")
     for part in parts[:-1]:
         node = node.setdefault(part, {})
     node[parts[-1]] = not bool(node.get(parts[-1], True))
-    with open(config_path, "w") as f:
+    with open(config_path, "w", encoding="utf-8") as f:
         json.dump(cfg, f, indent=2)
     return JSONResponse({"id": skill_id, "enabled": bool(node[parts[-1]]),
                          "note": "applies on next session start"})
@@ -745,10 +745,10 @@ async def _dispatch_ws_message(websocket: WebSocket, msg_type, data: dict):
         full_cfg = load_config()
         if mode in full_cfg.get("modes", {}) or mode == "default":
             config_path = os.path.join("config", "freya_config.json")
-            with open(config_path, "r") as f:
+            with open(config_path, "r", encoding="utf-8") as f:
                 cfg = json.load(f)
             cfg["active_mode"] = mode
-            with open(config_path, "w") as f:
+            with open(config_path, "w", encoding="utf-8") as f:
                 json.dump(cfg, f, indent=2)
             await broadcast({"type": "mode", "value": mode})
             new_cfg = load_config()

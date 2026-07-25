@@ -13,6 +13,7 @@ Returns (allowed: bool, message: str). When blocked, `message` is what Freya tel
 
 import os
 import re
+from core.user_paths import resolve_user_path
 
 # Patterns that are never allowed in a shell command, regardless of config.
 _HARD_BLOCK = [
@@ -21,7 +22,37 @@ _HARD_BLOCK = [
 ]
 
 
+_safety_cache: tuple[float, dict] | None = None
+
+
+def _live_safety() -> dict | None:
+    """Read the `safety` block straight from disk, cached on file mtime.
+
+    A live voice session snapshots the config once at start (`run_freya`), so
+    changing access control from the dashboard used to have no effect until the
+    session was restarted — you'd flip "unrestricted" on, watch nothing change,
+    and reasonably conclude the setting was broken. Re-reading here makes
+    access-control edits apply to the very next tool call.
+    """
+    global _safety_cache
+    path = os.path.join(os.path.dirname(__file__), "..", "config", "freya_config.json")
+    try:
+        mtime = os.path.getmtime(path)
+        if _safety_cache and _safety_cache[0] == mtime:
+            return _safety_cache[1]
+        import json
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f).get("safety", {}) or {}
+        _safety_cache = (mtime, data)
+        return data
+    except Exception:
+        return None  # fall back to the caller's snapshot
+
+
 def _cfg(config: dict) -> dict:
+    live = _live_safety()
+    if live is not None:
+        return live
     return (config or {}).get("safety", {}) or {}
 
 
@@ -48,7 +79,7 @@ def path_is_allowed(path: str, config: dict) -> bool:
     that may even be explicitly listed in safety.allowed_roots.
     """
     try:
-        target = os.path.normcase(os.path.abspath(os.path.expanduser(path)))
+        target = os.path.normcase(resolve_user_path(path))
     except Exception:
         return False
     for root in _allowed_roots(config):
@@ -144,7 +175,7 @@ _PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 
 def _inside_project(path: str) -> bool:
     try:
-        target = os.path.abspath(os.path.expanduser(path))
+        target = resolve_user_path(path)
         return os.path.commonpath([target, _PROJECT_ROOT]) == _PROJECT_ROOT
     except Exception:
         return False
