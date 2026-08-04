@@ -1,31 +1,34 @@
 """
-browser-use agent — Freya autonomously drives a real Chromium browser.
+Browser tools — Freya's hands on a real Chromium window.
 
-Wraps the browser-use library (github.com/browser-use/browser-use): an LLM-driven agent that
-navigates real web pages with Playwright — clicking, typing, reading, multi-step. Freya hands
-it a natural-language task ("find the cheapest flight to Tokyo next month and the price"); it
-runs in the background and reports the answer out loud via the proactive channel.
+Runs on `core/browser` (ours, from scratch) instead of the browser-use library.
+What changed for callers: nothing in the tool contract. `browser_task` still
+takes a plain-language task, still runs in the background, still reports back
+out loud through the proactive channel.
 
-The browser agent uses its own Gemini model (ChatGoogle) so it can read page screenshots/DOM
-independently of the live voice model. Heavy + slow, so it always runs as a background task —
-AND on its own OS thread with its own asyncio event loop (see `_run_browser_thread`). This
-isolation matters: browser-use's CDP screenshot/DOM extraction can stall for 10+ seconds under
-load (observed directly in logs — ScreenshotWatchdog handler timeouts), and if that work ran on
-the SAME event loop as the live voice session (as it did before), those stalls starved the
-mic/speaker scheduling and Gemini Live's receive loop, causing audible lag or dead air. Running
-it on a dedicated loop means it can stall all it wants without ever blocking audio; the only
-cross-thread traffic is two small status callbacks marshaled back via run_coroutine_threadsafe.
+What changed underneath:
+  • The whole agent loop is ours — see core/browser/agent.py.
+  • DuckDuckGo, not the library's search of choice.
+  • The mouse arcs, the typing has rhythm, the scrolling has momentum
+    (core/browser/human.py).
+  • One persistent profile and one browser thread, shared by every caller,
+    so logins survive and Chromium is never opened twice.
+
+Two extra tools sit alongside it:
+  • `browser_research` — the researcher sub-agent's entry point. Blocking and
+    returning its findings, because a sub-agent is already in the background and
+    needs the answer in hand to write its briefing.
+  • `browser_open` — a direct "open this page and read it to me", no LLM loop
+    and no quota, for when Freya just wants to look at a page.
 """
 
 import asyncio
 import itertools
-import os
 import threading
 import time
 
-from config import get_agent_api_key
 from core import runtime
-from core.registry import tool, OBJ, P, STR
+from core.registry import tool, OBJ, P, STR, INT
 
 _counter = itertools.count(1)
 _jobs: dict[str, dict] = {}
@@ -39,88 +42,77 @@ def _is_quota(text) -> bool:
 
 
 def _emit_threadsafe(main_loop: asyncio.AbstractEventLoop, coro):
-    """Fire an async runtime call from the worker thread onto the main loop.
-    Fire-and-forget: we don't block the worker thread waiting for the result."""
+    """Fire an async runtime call from a worker thread onto the live session's
+    loop. Fire-and-forget — the worker never blocks on the result."""
     try:
         asyncio.run_coroutine_threadsafe(coro, main_loop)
     except Exception as e:
-        print(f"  [browser_agent] cross-loop emit failed: {e}")
+        print(f"  [browser] cross-loop emit failed: {e}")
 
 
-def _run_browser_thread(job_id: str, task: str, config: dict, main_loop: asyncio.AbstractEventLoop):
-    """Entry point for the dedicated worker thread. Creates its OWN event loop
-    (Proactor, per server.py's process-wide policy) so Playwright/CDP can do
-    whatever blocking-ish async work it needs without ever touching the loop
-    that owns the live voice session."""
-    bcfg = (config or {}).get("browser", {})
-    model = bcfg.get("llm_model", "gemini-2.5-flash")
-    fallback_model = bcfg.get("fallback_model", "gemini-2.5-flash-lite")
-    max_steps = int(bcfg.get("max_steps", 25))
-    result = "(no result)"
+async def _run_task(task: str, config: dict, on_step=None) -> str:
+    """One browsing task on the browser loop. Returns the agent's answer."""
+    from core.browser.agent import BrowserAgent
+    agent = BrowserAgent(task, config, on_step=on_step)
+    return await agent.run()
 
-    async def _do_run():
-        from browser_use import Agent, ChatGoogle
-        key = get_agent_api_key()  # secondary key — spares the voice quota
-        os.environ.setdefault("GOOGLE_API_KEY", key)
 
-        def _mk(m):
-            try:
-                return ChatGoogle(model=m, api_key=key)
-            except TypeError:
-                return ChatGoogle(model=m)  # older signature reads env
+def _run_job(job_id: str, task: str, config: dict, main_loop: asyncio.AbstractEventLoop):
+    """Background job wrapper: submit to the browser thread, wait, report.
 
-        llm = _mk(model)
-        # A fallback on a DIFFERENT model = a separate daily quota pool, so a 429 on the
-        # primary doesn't kill the task.
-        try:
-            agent = Agent(task=task, llm=llm, fallback_llm=_mk(fallback_model))
-        except TypeError:
-            agent = Agent(task=task, llm=llm)
+    This runs on its own throwaway thread purely so `browser_task` can return
+    immediately; the actual browsing happens on the single shared browser loop.
+    """
+    from core.browser.driver import BrowserLoop
 
-        _emit_threadsafe(main_loop, runtime.emit("browser", {"id": job_id, "status": "running", "task": task}))
-        history = await agent.run(max_steps=max_steps)
-        return history
+    async def on_step(step: int, action: str, detail: str):
+        job = _jobs.get(job_id)
+        if job is not None:
+            job["step"] = f"{action} ({step})"
+        _emit_threadsafe(main_loop, runtime.emit("browser", {
+            "id": job_id, "status": "running", "task": task,
+            "step": action, "detail": detail,
+        }))
+
+    _emit_threadsafe(main_loop, runtime.emit(
+        "browser", {"id": job_id, "status": "running", "task": task}))
 
     try:
-        history = asyncio.run(_do_run())
-        try:
-            final = history.final_result()
-        except Exception:
-            final = None
-        if final:
-            result = final
-        elif _is_quota(history):
-            result = _QUOTA
-        else:
-            result = str(history)
+        future = BrowserLoop.get().submit(_run_task(task, config, on_step))
+        result = future.result()
     except Exception as e:
-        result = _QUOTA if _is_quota(e) else f"The browser agent hit an error: {e}"
+        result = _QUOTA if _is_quota(e) else f"The browser hit an error: {e}"
 
-    _jobs[job_id].update(status="done", result=result)
+    _jobs[job_id].update(status="done", result=result, step=None)
     _emit_threadsafe(main_loop, runtime.emit("browser", {"id": job_id, "status": "done"}))
+
     if result == _QUOTA:
         _emit_threadsafe(main_loop, runtime.inject(
             "I couldn't finish browsing — I've hit the free-tier quota on the Gemini API "
-            "for web tasks. Tell Ihan: try again later, or add billing / a second API key to lift "
-            "the limit. For quick facts I can still read the news instead."
+            "for web tasks. Tell Ihan: try again later, or add billing / a second API key to "
+            "lift the limit. For quick facts I can still search the web instead."
         ))
     else:
         _emit_threadsafe(main_loop, runtime.inject(
-            f"The browser finished your task '{task}'. Result: {str(result)[:1200]}"
+            f"The browser finished your task '{task}'. Result: {str(result)[:1500]}"
         ))
 
 
+# ══════════════════════════════════════════════
+#  TOOLS
+# ══════════════════════════════════════════════
 @tool(
     "browser_task",
-    "Drive a real Chromium browser for INTERACTIVE, multi-step web tasks: log in, fill a form, "
-    "click through a site, add to cart, navigate a web app, or anything that needs real clicking. "
-    "It runs in the background and reports back out loud. "
-    "For simple information lookups ('search the web', 'look something up', 'what's the latest on "
-    "X', check a fact) use web_search instead — it's faster and quota-free. "
-    "For news use get_world_news / get_news. Only use this browser for tasks that truly need "
-    "interacting with a page.",
-    OBJ({"task": P(STR, "The web task or search in plain language, e.g. 'search the latest Python "
-                        "version' or 'find the top 3 GPUs under $500 with prices'")}, ["task"]),
+    "Drive a real Chromium browser like a person: search, click through pages, fill forms, log "
+    "in, navigate a web app, add to cart, work through a multi-step site. It searches with "
+    "DuckDuckGo, reads the pages it opens, and runs in the background — reporting back out loud "
+    "when done. "
+    "For a quick fact or a one-line lookup use web_search instead: it's faster and quota-free. "
+    "For headlines use get_world_news / get_news. Use the browser when the task genuinely needs "
+    "reading real pages or interacting with them.",
+    OBJ({"task": P(STR, "The web task in plain language, e.g. 'find the top 3 GPUs under $500 "
+                        "with current prices' or 'log into my account and check the order status'")},
+        ["task"]),
     gate="browser.enabled",
 )
 async def browser_task(args, ctx) -> str:
@@ -134,8 +126,101 @@ async def browser_task(args, ctx) -> str:
                      "started": time.time()}
     main_loop = asyncio.get_running_loop()
     threading.Thread(
-        target=_run_browser_thread, args=(job_id, task, ctx.config, main_loop),
-        daemon=True, name=f"browser-agent-{job_id}",
+        target=_run_job, args=(job_id, task, ctx.config, main_loop),
+        daemon=True, name=f"browser-job-{job_id}",
     ).start()
-    return (f"On it — I've opened a browser and started working on: {task}. "
+    return (f"On it — I've opened the browser and started working on: {task}. "
             "I'll tell you what I find when it's done.")
+
+
+@tool(
+    "browser_research",
+    "Research something on the live web with the real browser and WAIT for the findings. "
+    "Searches DuckDuckGo, opens the actual pages, reads them, and returns what it found. "
+    "Slower than web_search but far deeper — it reads full articles instead of snippets and "
+    "follows links. Use this when you need real substance: comparing sources, current details, "
+    "anything where a search snippet isn't enough.",
+    OBJ({"topic": P(STR, "What to research, as a full question or instruction"),
+         "depth": P(INT, "Roughly how many actions to spend on it (default 12, max 30). Each "
+                         "search, click, scroll and read costs one.")},
+        ["topic"]),
+    gate="browser.enabled",
+)
+async def browser_research(args, ctx) -> str:
+    topic = (args.get("topic") or "").strip()
+    if not topic:
+        return "What should I research?"
+
+    from core.browser.driver import BrowserLoop
+
+    config = dict(ctx.config or {})
+    bcfg = dict(config.get("browser", {}))
+    # Floor of 6: search, open, read, open, read, finish is the shortest run
+    # that can honour "read two sources" — below that it always runs out.
+    bcfg["max_steps"] = max(6, min(30, int(args.get("depth") or 12)))
+    config["browser"] = bcfg
+
+    task = (f"Research this thoroughly and report the findings with sources: {topic}. "
+            "Open and read at least two different pages before answering.")
+
+    await ctx.emit("browser", {"id": "research", "status": "running", "task": topic})
+    try:
+        future = BrowserLoop.get().submit(_run_task(task, config))
+        # Don't block the calling event loop while the browser thread works.
+        result = await asyncio.wrap_future(future)
+    except Exception as e:
+        if _is_quota(e):
+            return ("I hit the Gemini free-tier quota while browsing. Try web_search instead, "
+                    "or come back to this later.")
+        return f"The browser research failed: {e}"
+    finally:
+        await ctx.emit("browser", {"id": "research", "status": "done"})
+
+    return f"Research findings on '{topic}':\n{result}"
+
+
+@tool(
+    "browser_open",
+    "Open a page in the real browser and read it out — no LLM loop, no quota. Use when you "
+    "already know the URL and just want to see what's on it, or when web_fetch was blocked by a "
+    "site that needs real JavaScript to render.",
+    OBJ({"url": P(STR, "The URL to open")}, ["url"]),
+    gate="browser.enabled",
+)
+async def browser_open(args, ctx) -> str:
+    url = (args.get("url") or "").strip()
+    if not url:
+        return "Give me a URL to open."
+
+    from core.browser.driver import BrowserLoop, get_browser
+
+    async def _open():
+        browser = await get_browser(ctx.config)
+        opened = await browser.goto(url)
+        text = await browser.read_page(max_chars=6000)
+        return f"{opened}\n\n{text}"
+
+    try:
+        return await asyncio.wrap_future(BrowserLoop.get().submit(_open()))
+    except Exception as e:
+        return f"Couldn't open that page: {e}"
+
+
+@tool(
+    "browser_status",
+    "Check what the background browser jobs are doing.",
+    OBJ(),
+    gate="browser.enabled",
+)
+def browser_status(args, ctx) -> str:
+    if not _jobs:
+        return "The browser hasn't been given any jobs yet."
+    lines = []
+    for jid, j in _jobs.items():
+        age = int(time.time() - j["started"])
+        if j["status"] == "done":
+            lines.append(f"{jid}: done — {str(j['result'])[:200]}")
+        else:
+            step = f", currently: {j['step']}" if j.get("step") else ""
+            lines.append(f"{jid}: still working ({age}s) on '{j['task'][:60]}'{step}")
+    return "\n".join(lines)

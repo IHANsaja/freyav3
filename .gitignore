@@ -185,3 +185,12 @@ config/freya_horny.json
 .claude
 # career-ops: nested third-party clone + personal CV/profile/application data
 career-ops/
+
+# Freya's map of this specific machine — paths to personal files. Rebuilt on
+# first run of any install, so there is nothing to share and plenty not to.
+memory/machine_index.db
+
+# Freya's Chromium profile — cookies, logins, history and session state.
+# Persistent by design (core/browser/driver.py) so she stays logged in; must
+# never be committed.
+memory/browser_profile/

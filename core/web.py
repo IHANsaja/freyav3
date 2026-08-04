@@ -1,10 +1,11 @@
 """
 Web search & fetch — Freya navigates the live web herself and grows her knowledge base.
 
-Unlike `browser_task` (heavy: drives Chromium via an LLM, one API call per step → burns quota),
-these tools are QUOTA-FREE: they just do plain HTTP and hand the raw results to the live voice
-model, which reads them. Perfect for "look something up", "what's the latest on X", checking a
-current fact/date, etc.
+Unlike the real browser (core/browser — drives Chromium via an LLM, one API call per step →
+burns quota), these tools are QUOTA-FREE: they just do plain HTTP and hand the raw results to
+the live voice model, which reads them. Perfect for "look something up", "what's the latest on
+X", checking a current fact/date, etc. Search itself is shared with the browser stack, so both
+paths use DuckDuckGo with the same filtering settings.
 
   • web_search(query)  — DuckDuckGo results (title + snippet + source), no API key.
   • web_fetch(url)     — open a page and return its readable text.
@@ -37,37 +38,17 @@ def _clean(s: str) -> str:
     return _html.unescape(re.sub(r"<[^>]+>", "", s)).strip()
 
 
-def _decode_ddg(href: str) -> str:
-    """DuckDuckGo wraps result links in a /l/?uddg=<real-url> redirect — unwrap it."""
-    if not href.startswith("http"):
-        href = "https:" + href
-    if "uddg=" in href:
-        params = urllib.parse.parse_qs(urllib.parse.urlparse(href).query)
-        if params.get("uddg"):
-            return params["uddg"][0]
-    return href
+def _ddg_search(query: str, n: int = 5, config: dict | None = None) -> list[dict]:
+    """DuckDuckGo results — now delegated to core/browser/search.py.
 
-
-def _ddg_search(query: str, n: int = 5) -> list[dict]:
-    data = urllib.parse.urlencode({"q": query}).encode()
-    req = urllib.request.Request("https://html.duckduckgo.com/html/", data=data, headers=_UA)
-    with urllib.request.urlopen(req, timeout=10) as r:
-        page = r.read().decode("utf-8", "replace")
-    results = []
-    for block in re.split(r'<div class="result\b', page)[1:]:
-        a = re.search(r'class="result__a"[^>]*href="([^"]+)"[^>]*>(.*?)</a>', block, re.S)
-        if not a:
-            continue
-        sn = re.search(r'class="result__snippet"[^>]*>(.*?)</a>', block, re.S)
-        url = _decode_ddg(a.group(1))
-        results.append({
-            "title": _clean(a.group(2)),
-            "url": url,
-            "snippet": _clean(sn.group(1)) if sn else "",
-        })
-        if len(results) >= n:
-            break
-    return results
+    That module is the single place search behaviour lives, so the quota-free
+    HTTP path here and the real-browser path the agent drives return the same
+    results with the same filtering settings (SafeSearch off unless
+    `browser.safe_search` is turned on). This wrapper stays because
+    core/news.py and _find_image_url call it by name.
+    """
+    from core.browser.search import ddg_search
+    return ddg_search(query, n, config)
 
 
 def _extract_text(url: str, max_chars: int = 4000) -> str:
@@ -156,7 +137,7 @@ def web_search(args, ctx) -> str:
     if not query:
         return "What should I search the web for?"
     try:
-        results = _ddg_search(query, 5)
+        results = _ddg_search(query, 5, ctx.config)
     except Exception as e:
         return f"Web search failed: {e}"
     if not results:

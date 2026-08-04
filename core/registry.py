@@ -6,7 +6,7 @@ Why this exists
 Originally Freya's tools were hardcoded in two places: a `TOOL_DECLARATIONS` list in
 `core/model.py` and a giant `if/elif` chain in `core/tools.py:dispatch`. That made it
 impossible to (a) add tools at runtime (MCP servers, self-written skills) and (b) run
-long tasks (sub-agents, browser-use) without freezing the audio loop, because dispatch
+long tasks (sub-agents, browsing) without freezing the audio loop, because dispatch
 was synchronous.
 
 This registry fixes both:

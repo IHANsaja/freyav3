@@ -21,6 +21,24 @@ GESTURES = ["emphasize", "wave_off", "show_off", "celebrate", "conjure", "admire
 IDLE_STATES = ["standing", "seated", "attentive"]
 TRANSITIONS = ["walk", "run", "flourish"]
 
+# Marker prefix on every avatar tool result.
+#
+# These results are fed back into the live session as function responses, and a
+# response that reads like a finished English sentence ("Expression set to
+# calm.") is one the voice model will sometimes just say out loud — which is
+# exactly the bug Ihan hit mid-conversation. Body language is not something a
+# person announces; the response has to look like machinery, not dialogue.
+SILENT = "[SILENT — body language only. Do not say this, do not acknowledge it, just keep talking.]"
+
+
+def _silent(detail: str) -> str:
+    return f"{SILENT} {detail}"
+
+
+# Appended to every avatar tool's description so the instruction is present at
+# decision time too, not only in the response after the fact.
+_NO_NARRATE = " This is silent: never say it out loud or mention that you did it."
+
 
 async def _emit(ctx, payload: dict) -> None:
     await ctx.emit("avatar", payload)
@@ -29,7 +47,7 @@ async def _emit(ctx, payload: dict) -> None:
 @tool(
     "set_expression",
     "Set your avatar's emotional expression so your body language matches your words. "
-    "Use sparingly at genuine emotional beats, not every sentence.",
+    "Use sparingly at genuine emotional beats, not every sentence." + _NO_NARRATE,
     OBJ({"expression": P(STR, "Your avatar's expression", enum=EXPRESSIONS),
          "intensity": P(NUM, "0.0-1.0, default 0.7")},
         ["expression"]),
@@ -37,72 +55,72 @@ async def _emit(ctx, payload: dict) -> None:
 async def set_expression(args, ctx) -> str:
     name = str(args.get("expression", "")).lower().strip()
     if name not in EXPRESSIONS:
-        return f"Unknown expression '{name}'. Use one of: {', '.join(EXPRESSIONS)}."
+        return _silent(f"Unknown expression '{name}'. Valid: {', '.join(EXPRESSIONS)}.")
     intensity = max(0.0, min(1.0, float(args.get("intensity", 0.7))))
     await _emit(ctx, {"intent": "expression", "name": name, "intensity": intensity})
-    return f"Expression set to {name}."
+    return _silent(f"expression={name}")
 
 
 @tool(
     "set_gesture",
     "Play a one-shot body gesture on your avatar to punctuate what you're saying. "
-    "It plays once and returns to your current pose.",
+    "It plays once and returns to your current pose." + _NO_NARRATE,
     OBJ({"gesture": P(STR, "The gesture to play", enum=GESTURES)}, ["gesture"]),
 )
 async def set_gesture(args, ctx) -> str:
     name = str(args.get("gesture", "")).lower().strip()
     if name not in GESTURES:
-        return f"Unknown gesture '{name}'. Use one of: {', '.join(GESTURES)}."
+        return _silent(f"Unknown gesture '{name}'. Valid: {', '.join(GESTURES)}.")
     await _emit(ctx, {"intent": "gesture", "name": name})
-    return f"Playing the {name} gesture."
+    return _silent(f"gesture={name}")
 
 
 @tool(
     "set_idle_state",
     "Change your avatar's resting posture. States: standing (default), seated "
-    "(relaxed night-time presence), attentive (leaning in, focused on Ihan).",
+    "(relaxed night-time presence), attentive (leaning in, focused on Ihan)." + _NO_NARRATE,
     OBJ({"state": P(STR, "The idle posture", enum=IDLE_STATES)}, ["state"]),
 )
 async def set_idle_state(args, ctx) -> str:
     name = str(args.get("state", "")).lower().strip()
     if name not in IDLE_STATES:
-        return f"Unknown idle state '{name}'. Use one of: {', '.join(IDLE_STATES)}."
+        return _silent(f"Unknown idle state '{name}'. Valid: {', '.join(IDLE_STATES)}.")
     await _emit(ctx, {"intent": "idle", "name": name})
-    return f"Idle posture set to {name}."
+    return _silent(f"idle={name}")
 
 
 @tool(
     "trigger_emphasis",
     "Quick emphasis beat: your avatar raises a hand and the core flares briefly. "
-    "Use when making an important point.",
+    "Use when making an important point." + _NO_NARRATE,
 )
 async def trigger_emphasis(args, ctx) -> str:
     await _emit(ctx, {"intent": "emphasis", "name": "emphasize"})
-    return "Emphasis triggered."
+    return _silent("emphasis")
 
 
 @tool(
     "trigger_thinking",
     "Show that you're pondering: thoughtful pose, tilted head, dimmed core. "
-    "Auto-clears when you next speak.",
+    "Auto-clears when you next speak." + _NO_NARRATE,
 )
 async def trigger_thinking(args, ctx) -> str:
     await _emit(ctx, {"intent": "state", "name": "thinking"})
-    return "Thinking pose on."
+    return _silent("pose=thinking")
 
 
 @tool(
     "trigger_listening",
-    "Snap back to an attentive listening pose focused on Ihan.",
+    "Snap back to an attentive listening pose focused on Ihan." + _NO_NARRATE,
 )
 async def trigger_listening(args, ctx) -> str:
     await _emit(ctx, {"intent": "state", "name": "listening"})
-    return "Listening pose on."
+    return _silent("pose=listening")
 
 
 @tool(
     "animate_transition",
-    "Play a dramatic transition animation (persona/mode changes, big reveals).",
+    "Play a dramatic transition animation (persona/mode changes, big reveals)." + _NO_NARRATE,
     OBJ({"style": P(STR, "Transition style (default flourish)", enum=TRANSITIONS)}),
 )
 async def animate_transition(args, ctx) -> str:
@@ -110,7 +128,7 @@ async def animate_transition(args, ctx) -> str:
     if style not in TRANSITIONS:
         style = "flourish"
     await _emit(ctx, {"intent": "gesture", "name": f"transition_{style}"})
-    return f"Transition ({style}) playing."
+    return _silent(f"transition={style}")
 
 
 # ── dance_for_user override ────────────────────────────────────────────────

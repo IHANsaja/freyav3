@@ -12,10 +12,11 @@ from fastapi.responses import JSONResponse
 
 from core.errors import log_error, error_payload, UserFacingError, logger
 
-# On Windows, browser-use (Playwright) launches Chromium via create_subprocess_exec,
-# which only works on the Proactor event loop. uvicorn may otherwise pick a Selector
-# loop, causing browser_task to hang until its 30s launch watchdog fires. Force Proactor
-# so subprocess spawning works the same way it does in main.py's asyncio.run path.
+# On Windows, Playwright launches Chromium via create_subprocess_exec, which only works
+# on the Proactor event loop. uvicorn may otherwise pick a Selector loop, and Chromium
+# then never starts. Force Proactor so subprocess spawning works the same way it does in
+# main.py's asyncio.run path. Note core/browser runs its own loop on its own thread —
+# this policy is process-wide, so that loop inherits Proactor from here.
 if sys.platform == "win32":
     asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
 
@@ -48,7 +49,7 @@ from config import get_mode_personality, get_mode_model, get_mode_voice, get_mod
 from core.audio import MicStream, SpeakerStream
 from core.events import bus
 from core.memory import load_memory, build_system_prompt, update_memory, TranscriptCollector
-from core.model import FreyaModel
+from core.model import FreyaModel, is_rotation
 
 
 @asynccontextmanager
@@ -160,6 +161,14 @@ async def run_freya():
     mic.start()
     speaker.start()
 
+    # Learn the machine on first run (or refresh a stale index). Background
+    # thread, so the dashboard comes up straight away.
+    try:
+        from core.machine_index import ensure_index
+        ensure_index(config)
+    except Exception as e:
+        print(f"  Machine index unavailable: {e}")
+
     await broadcast({"type": "state", "value": "listening"})
     await broadcast({"type": "mode", "value": config.get("active_mode", "default")})
     await broadcast({"type": "persona", "payload": {
@@ -196,6 +205,7 @@ async def run_freya():
 
     consecutive_failures = 0
     max_reconnect_attempts = 5
+    resume_handle = None
 
     try:
         while freya_running:
@@ -205,7 +215,8 @@ async def run_freya():
                 voice=voice,
                 personality=personality,
                 config=config,
-                transcript=transcript
+                transcript=transcript,
+                resume_handle=resume_handle,
             )
             try:
                 await freya.run(mic, speaker)
@@ -214,24 +225,33 @@ async def run_freya():
             except asyncio.CancelledError:
                 raise
             except Exception as e:
-                consecutive_failures += 1
-                print(f"Freya session error (attempt {consecutive_failures}/{max_reconnect_attempts}): {e}")
-                if consecutive_failures >= max_reconnect_attempts:
+                # Keep the server-side conversation state across the reconnect.
+                resume_handle = freya.resume_handle
+
+                if is_rotation(e):
+                    # Routine session rotation — reconnect silently and fast.
+                    # No UI noise: from Ihan's side nothing happened.
+                    print("Rotating Freya session (context preserved).")
+                    await asyncio.sleep(0.5)
+                else:
+                    consecutive_failures += 1
+                    print(f"Freya session error (attempt {consecutive_failures}/{max_reconnect_attempts}): {e}")
+                    if consecutive_failures >= max_reconnect_attempts:
+                        await broadcast({
+                            "type": "transcript",
+                            "speaker": "Freya",
+                            "text": f"[SESSION ERROR] Max reconnect attempts reached. Connection stopped."
+                        })
+                        break
+
                     await broadcast({
                         "type": "transcript",
                         "speaker": "Freya",
-                        "text": f"[SESSION ERROR] Max reconnect attempts reached. Connection stopped."
+                        "text": f"[Connection lost. Reconnecting to Gemini... Attempt {consecutive_failures}/{max_reconnect_attempts}]"
                     })
-                    break
-                
-                await broadcast({
-                    "type": "transcript",
-                    "speaker": "Freya",
-                    "text": f"[Connection lost. Reconnecting to Gemini... Attempt {consecutive_failures}/{max_reconnect_attempts}]"
-                })
-                
-                await asyncio.sleep(2 * consecutive_failures)
-                
+
+                    await asyncio.sleep(2 * consecutive_failures)
+
                 # Reload config and keys in case they were updated
                 config = load_config()
                 api_key = get_api_key()
@@ -246,6 +266,11 @@ async def run_freya():
         try:
             from core.mcp_client import mcp_manager
             await mcp_manager.stop()
+        except Exception:
+            pass
+        try:
+            from core.browser.driver import shutdown_browser
+            shutdown_browser()
         except Exception:
             pass
         await broadcast({"type": "state", "value": "idle"})

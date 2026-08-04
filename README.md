@@ -106,7 +106,7 @@ Design notes:
 | 🎯 **Missions** | Plan → execute → verify → report for big goals, with approval pauses. | `start_mission`, `mission_status`, `cancel_mission` |
 | 🛡️ **Approvals** | Human-in-the-loop gate for sensitive/irreversible actions. | `approve_action`, `reject_action` |
 | 🤖 **Sub-Agents** | Delegates multi-step research, coding, or UI tasks to background workers on their own threads. | `dispatch_agent`, `check_agents` |
-| 🌐 **Browser Use** | Autonomously drives a Chromium browser for interactive web tasks. | `browser_task` |
+| 🌐 **Browser** | Drives a real Chromium window the way a person does — DuckDuckGo search, curved mouse moves, typed keystrokes, scrolling and reading. Built from scratch in `core/browser`. | `browser_task`, `browser_research`, `browser_open`, `browser_status` |
 | 🔎 **Web & News** | Quota-free search/fetch plus live headlines projected into the scene. | `web_search`, `web_fetch`, `get_world_news` |
 | 📁 **File Manager** | Copy, move/rename, recycle, zip/unzip, inspect, reveal in Explorer, find large/recent files. | `copy_item`, `move_item`, `delete_item`, `zip_item`, `find_files_by`, … |
 | 🎬 **Watch Video** | Actually watches a YouTube link or local file and answers questions about it. | `use_skill("watch")` |

@@ -178,14 +178,57 @@ TOOL_DECLARATIONS = [
 ]
 
 
+class SessionRotation(Exception):
+    """Not an error — the Live API asked us to move to a fresh connection.
+
+    Gemini caps how long one websocket may live. Shortly before that cap it
+    sends a GoAway; if the client keeps talking on the old socket the server
+    kills it with `1008 ... failed to close the connection after receiving a
+    GoAway signal once the session duration expired`, which is what used to
+    surface as Freya randomly stopping mid-conversation.
+
+    We now close voluntarily when GoAway arrives and reconnect with the
+    session-resumption handle, so the rotation is invisible to Ihan and must
+    NOT be counted against the reconnect-failure budget.
+    """
+
+
+_ROTATION_MARKERS = (
+    "goaway",
+    "go away",
+    "session duration",
+    "1008",
+    "deadline exceeded",
+    "keepalive ping timeout",
+)
+
+
+def is_rotation(exc: Exception) -> bool:
+    """True when a dropped session is a routine lifecycle event, not a fault.
+
+    Rotations must not burn the reconnect-failure budget: the old loop counted
+    every session-duration expiry as a failure, so five normal rotations were
+    enough to shut Freya down for the rest of the evening.
+    """
+    if isinstance(exc, SessionRotation):
+        return True
+    text = str(exc).lower()
+    return any(marker in text for marker in _ROTATION_MARKERS)
+
+
 class FreyaModel:
-    def __init__(self, api_key, model_id, voice, personality, config, transcript=None):
+    def __init__(self, api_key, model_id, voice, personality, config, transcript=None,
+                 resume_handle=None):
         self.client = genai.Client(api_key=api_key)
         self.model_id = model_id
         self.voice = voice
         self.personality = personality
         self.config = config
         self.transcript = transcript
+        # Server-side conversation state token. Carried across reconnects so a
+        # new socket picks up the SAME conversation instead of a blank one —
+        # this is what stops Freya forgetting what we were working on.
+        self.resume_handle = resume_handle
         self.session = None
         # Serializes proactive speech. Injects arrive from many independent
         # background powers — scheduler, ambient watcher, missions, approvals,
@@ -244,6 +287,26 @@ class FreyaModel:
             tools=[types.Tool(
                 function_declarations=TOOL_DECLARATIONS + build_declarations(self.config)
             )],
+            # ── Session continuity ──────────────────────────────────────────
+            # Ask the server to keep a resumable snapshot of the conversation
+            # and hand us back a token for it. Passing that token on the next
+            # connect restores the whole context (what we were studying, what
+            # she just said, the screenshots she's seen), instead of waking up
+            # blank and asking "what were we talking about?".
+            session_resumption=types.SessionResumptionConfig(
+                handle=self.resume_handle
+            ),
+            # Sliding-window compression lifts the hard session-duration limit:
+            # once the context passes trigger_tokens the server compresses the
+            # oldest turns rather than terminating the session. Without this the
+            # connection is force-closed after ~10-15 minutes, which is exactly
+            # the 1008 GoAway abort Freya kept dying on.
+            context_window_compression=types.ContextWindowCompressionConfig(
+                trigger_tokens=int(
+                    (self.config or {}).get("freya", {}).get("compression_trigger_tokens", 16000)
+                ),
+                sliding_window=types.SlidingWindow(),
+            ),
         )
 
     # Add these to FreyaModel class — override in subclass for UI broadcasting
@@ -305,6 +368,42 @@ class FreyaModel:
             except Exception as e:
                 print(f"  inject failed: {e}")
 
+    async def _send_recap(self):
+        """Re-seed a fresh session with what we were just doing.
+
+        Session resumption normally carries the context for us, but a handle can
+        be missing (first failure of a run) or rejected by the server (expired,
+        or taken mid-generation when `resumable` was false). In that case the new
+        socket starts blank — which is what made Freya reconnect and say she had
+        no idea what we were talking about. So when we reconnect WITHOUT a handle
+        and there is a transcript, we replay its tail as context. turn_complete
+        =False means this only loads context; it does not make her start talking.
+        """
+        if self.resume_handle or not self.transcript:
+            return
+        lines = self.transcript.get()
+        if not lines:
+            return
+        tail = lines[-40:]
+        try:
+            await self.session.send_client_content(
+                turns=types.Content(
+                    role="user",
+                    parts=[types.Part(text=(
+                        "[SESSION RECONNECTED — the previous connection dropped. This is the "
+                        "transcript of the conversation you and Ihan were having moments ago. "
+                        "Treat it as your own memory of the last few minutes and simply carry "
+                        "on from where you left off. Do NOT announce the reconnection, do NOT "
+                        "ask him to repeat himself or re-share his screen, and do NOT greet him "
+                        "again — just continue naturally.]\n\n" + "\n".join(tail)
+                    ))],
+                ),
+                turn_complete=False,
+            )
+            print(f"  Context restored from transcript ({len(tail)} lines).")
+        except Exception as e:
+            print(f"  Recap failed: {e}")
+
     async def run(self, mic_stream, speaker_stream):
         print(f"\nConnecting to {self.model_id}...")
 
@@ -364,6 +463,10 @@ class FreyaModel:
                 start_pause_hotkey(self.config)
             except Exception:
                 pass
+            if self.resume_handle:
+                print("  Resuming previous conversation state.")
+            else:
+                await self._send_recap()
             print("Freya is live! Start talking. (Ctrl+C to stop)\n")
 
             freya_cfg = (self.config or {}).get("freya", {})
@@ -438,6 +541,28 @@ class FreyaModel:
 
                 while True:
                     async for response in session.receive():
+                        # ── Keep the resumption token fresh ──
+                        # The server emits a new handle throughout the session.
+                        # Stashing the latest one means a reconnect (planned or
+                        # not) resumes the real conversation rather than
+                        # starting from nothing.
+                        sru = getattr(response, "session_resumption_update", None)
+                        if sru is not None:
+                            if getattr(sru, "resumable", False) and getattr(sru, "new_handle", None):
+                                self.resume_handle = sru.new_handle
+                            continue
+
+                        # ── GoAway: the socket is about to be closed by Google ──
+                        # Leave voluntarily and immediately. Staying is what
+                        # earned the 1008 abort mid-sentence.
+                        goaway = getattr(response, "go_away", None)
+                        if goaway is not None:
+                            left = getattr(goaway, "time_left", None)
+                            print(f"  ↻ Session rotating (time left: {left}). Reconnecting seamlessly...")
+                            await flush_user()
+                            await flush_freya(cut=True)
+                            raise SessionRotation(str(left))
+
                         if response.server_content is None:
                             if response.tool_call is not None:
                                 for fc in response.tool_call.function_calls:

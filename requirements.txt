@@ -1,5 +1,4 @@
 # ── Core (Gemini Live voice assistant) ──
-# NOTE: browser-use pins google-genai<2, so this stack runs on google-genai 1.65.x.
 google-genai
 python-dotenv
 pyaudio
@@ -14,8 +13,9 @@ pytesseract
 
 # ── Superpowers ──
 mcp                 # Model Context Protocol client (any MCP server)
-browser-use         # autonomous Chromium agent (needs: playwright install chromium)
-playwright
+playwright          # drives Chromium for Freya's own browser (core/browser).
+                    # needs: playwright install chromium
+beautifulsoup4      # readable-text extraction for web_fetch
 uiautomation        # pixel-perfect Windows UI Automation screen control
 pywin32
 pygetwindow         # window management

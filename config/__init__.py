@@ -124,7 +124,7 @@ def get_memory_api_key():
 
 
 def get_agent_api_key():
-    """Key for the call-heavy text agents — browser-use, sub-agents, ambient, RAG.
+    """Key for the call-heavy text agents — the browser, sub-agents, ambient, RAG.
 
     Prefers GEMINI_AGENT_API_KEY, then GEMINI_MEMORY_API_KEY, then the main key. Using a
     secondary key keeps these from eating the live-voice key's quota, and if it belongs to a

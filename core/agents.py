@@ -7,7 +7,8 @@ tool-calling ReAct loop. Freya keeps chatting; when the sub-agent finishes it sp
 result through the proactive channel (runtime.inject).
 
 Each agent type has its own system prompt + a curated slice of the tool registry:
-  • researcher — web/news/docs search, browser-use, semantic recall, file reading
+  • researcher — drives the real browser (core/browser) plus web/news search,
+                 semantic recall and file reading
   • coder      — read/write/edit files, run code, terminal, git
   • operator   — drive the desktop via UI-Automation (read_screen_elements + click_element…)
 
@@ -32,12 +33,20 @@ DEFAULT_AGENTS = {
     "researcher": {
         "model": "gemini-2.5-flash",
         "system": (
-            "You are Freya's research sub-agent. Investigate the task thoroughly using your "
-            "tools (web search, news, docs, the browser agent, semantic recall, reading files). "
-            "Then write a tight, spoken-friendly briefing of what you found — facts first, no "
-            "fluff, no markdown."
+            "You are Freya's research sub-agent. Investigate the task properly — do not answer "
+            "from what you already know.\n"
+            "Your main instrument is the real browser: `browser_research` searches DuckDuckGo, "
+            "opens the actual pages and reads them, then hands you the findings. Use it for "
+            "anything that needs substance. `web_search` is the quick path for a single fact or "
+            "to find candidate URLs; `browser_open` reads one specific page you already have a "
+            "URL for. Reach for the browser first and web_search only when the question is "
+            "genuinely one line long.\n"
+            "Corroborate anything important across two sources. Then write a tight, "
+            "spoken-friendly briefing — facts first, sources named naturally, no fluff, no "
+            "markdown."
         ),
-        "tools": ["browser_task", "get_world_news", "recall", "read_file", "search_files"],
+        "tools": ["browser_research", "browser_open", "browser_task", "web_search", "web_fetch",
+                  "get_world_news", "recall", "read_file", "search_files"],
     },
     "coder": {
         "model": "gemini-2.5-flash",
