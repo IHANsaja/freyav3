@@ -5,7 +5,7 @@ Every primitive here exists because the naive Playwright equivalent is a tell.
 `page.click(sel)` teleports the cursor and fires instantly; `page.fill()` sets a
 value with no keystrokes at all; `mouse.wheel(0, 2000)` jumps the viewport a
 screenful in one frame. Sites fingerprint exactly that. More importantly for
-Freya, it's not what Ihan asked for: he wants her to *use* the browser, not
+Freya, it's not what the user asked for: he wants her to *use* the browser, not
 puppeteer it.
 
 So: the cursor travels a curved path at a varying speed, keys land with

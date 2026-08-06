@@ -9,6 +9,9 @@ paths use DuckDuckGo with the same filtering settings.
 
   • web_search(query)  — DuckDuckGo results (title + snippet + source), no API key.
   • web_fetch(url)     — open a page and return its readable text.
+  • show_image(...)    — put a picture on the dashboard canvas and/or a desktop popup.
+  • show_info(...)     — put retrieved TEXT (with an optional picture) on those same two
+                         surfaces, so findings are readable while the user is in another app.
 
 Both can save what they find into Freya's semantic knowledge base (core/rag_memory), so she can
 `recall` it in future sessions — i.e. she updates her own knowledge.
@@ -22,7 +25,7 @@ import urllib.parse
 import urllib.request
 from io import BytesIO
 
-from core.registry import tool, OBJ, P, STR, BOOL
+from core.registry import tool, OBJ, P, STR, BOOL, NUM
 
 _UA = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) FreyaAI/3.0"}
 
@@ -149,17 +152,33 @@ def web_search(args, ctx) -> str:
         if _save_to_kb(query, [f"{r['title']}. {r['snippet']} (source: {r['url']})" for r in results]):
             saved = " I've saved this to my knowledge base."
     return (f"Top web results for '{query}':\n" + "\n".join(lines) +
-            f"\nSummarize these for Ihan and cite sources naturally.{saved}")
+            f"\nSummarize these for the user and cite sources naturally.{saved}")
+
+
+def _surfaces(where: str | None) -> tuple[bool, bool]:
+    """Parse the `where` argument into (dashboard, desktop).
+
+    Default is BOTH: the point of these tools is that the user sees the result
+    even when the dashboard isn't the window in front of him.
+    """
+    w = (where or "both").strip().lower()
+    if w in ("desktop", "popup", "screen"):
+        return False, True
+    if w in ("dashboard", "canvas", "ui"):
+        return True, False
+    return True, True
 
 
 @tool(
     "show_image",
-    "Download an image and display it on the dashboard canvas. Provide a direct image URL, or a "
-    "search query to find a relevant image (e.g. for a news story, place, person, or topic). "
-    "Use it to illustrate what you're talking about — especially alongside news.",
+    "Download an image and display it — on the dashboard canvas and as a popup card on the "
+    "user's desktop, so he sees it even while working in another window. Provide a direct image "
+    "URL, or a search query to find a relevant image (e.g. for a news story, place, person, or "
+    "topic). Use it to illustrate what you're talking about — especially alongside news.",
     OBJ({"query": P(STR, "What to show, e.g. 'Eiffel Tower at night' or a news subject"),
          "url": P(STR, "A direct image URL (optional; use instead of query)"),
-         "label": P(STR, "Short caption shown on the card")}),
+         "label": P(STR, "Short caption shown on the card"),
+         "where": P(STR, "'both' (default), 'dashboard', or 'desktop'")}),
 )
 async def show_image(args, ctx) -> str:
     loop = asyncio.get_running_loop()
@@ -175,8 +194,63 @@ async def show_image(args, ctx) -> str:
     raw = await loop.run_in_executor(None, lambda: download_image_raw(url, url))
     if not raw:
         return "I found an image but couldn't download it."
-    await ctx.emit("image", {"data": raw, "label": label})
-    return f"There — I've put an image of {label} on the canvas."
+    dash, desk = _surfaces(args.get("where"))
+    # ONE event carrying both surface flags — emitting twice would render the
+    # card twice on the dashboard, since the WS broadcaster forwards everything
+    # and only the consumers decide what to draw.
+    await ctx.emit("image", {"data": raw, "label": label, "source": _domain(url),
+                             "dashboard": dash, "popup": desk})
+    return f"There — I've put an image of {label} on screen."
+
+
+@tool(
+    "show_info",
+    "SHOW the user something you found — text, a snippet, a definition, a summary, a price, a "
+    "quote — as a card with an optional picture. It appears on the dashboard canvas AND as a "
+    "popup on the right of his desktop, so he reads it even while working in another window. "
+    "Use this whenever information is easier to read than to hear (numbers, names, addresses, "
+    "code, lists, anything he might want to look at), and after web_search / web_fetch / "
+    "browser_task when the answer is worth putting on screen. Keep the body short — a few "
+    "sentences at most — and still say the gist out loud.",
+    OBJ({"title": P(STR, "Short headline for the card"),
+         "text": P(STR, "The information to display — a few sentences, plain text"),
+         "source": P(STR, "Where it came from, e.g. a domain or publication"),
+         "image_url": P(STR, "Direct image URL to illustrate the card (optional)"),
+         "image_query": P(STR, "Search for a fitting image instead of giving a URL (optional)"),
+         "where": P(STR, "'both' (default), 'dashboard', or 'desktop'"),
+         "seconds": P(NUM, "How long the desktop popup stays up (default 14)")},
+        ["title"]),
+)
+async def show_info(args, ctx) -> str:
+    loop = asyncio.get_running_loop()
+    title = (args.get("title") or "").strip()
+    if not title:
+        return "Give me a title for the card."
+    text = (args.get("text") or "").strip()
+    source = (args.get("source") or "").strip()
+
+    img_url = (args.get("image_url") or "").strip()
+    if not img_url and (args.get("image_query") or "").strip():
+        img_url = await loop.run_in_executor(None, _find_image_url, args["image_query"].strip())
+    raw = None
+    if img_url:
+        raw = await loop.run_in_executor(None, lambda: download_image_raw(img_url, img_url))
+
+    try:
+        duration_ms = int(float(args.get("seconds") or 14) * 1000)
+    except (TypeError, ValueError):
+        duration_ms = 14000
+
+    dash, desk = _surfaces(args.get("where"))
+    await ctx.emit("card", {
+        "title": title, "body": text, "source": source or _domain(img_url),
+        "image": raw, "url": img_url or None, "durationMs": duration_ms,
+        "dashboard": dash, "popup": desk,
+    })
+
+    surface = "on your screen" if desk else "on the dashboard"
+    return (f"[SILENT] Card '{title}' is {surface} now. Say the gist naturally — "
+            f"don't read the card out or mention that you displayed it.")
 
 
 @tool(

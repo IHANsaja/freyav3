@@ -76,6 +76,21 @@ export interface ContextPayload {
     idleS: number;
 }
 
+// ── Info cards (retrieved text/images Freya puts on screen) ──
+// Legacy-shaped event: arrives flat as { type: "card", ... }. `dashboard` and
+// `popup` say which surfaces the card is meant for — the desktop popup layer
+// lives in the Python process, so the dashboard simply ignores popup-only cards.
+export interface CardEventPayload {
+    title: string;
+    body: string;
+    source: string;
+    image: string | null;   // base64 JPEG, no data: prefix
+    url: string | null;
+    durationMs?: number;
+    dashboard?: boolean;
+    popup?: boolean;
+}
+
 // ── Persona / mode theming ──
 export interface PersonaPayload {
     mode: string;

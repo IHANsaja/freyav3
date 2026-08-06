@@ -120,11 +120,11 @@ class Scheduler:
         if action == "morning_briefing":
             await runtime.inject(await self._briefing())
         else:
-            await runtime.inject(f"Scheduled reminder for Ihan: {action}")
+            await runtime.inject(f"Scheduled reminder for the user: {action}")
         await runtime.emit("schedule", {"id": job.get("id"), "status": "fired", "action": action})
 
     async def _briefing(self) -> str:
-        parts = ["Good morning Ihan, here's your briefing."]
+        parts = ["Good morning, here's your briefing."]
         loop = asyncio.get_running_loop()
         try:
             from core.news import _fetch_headlines, _TOP
@@ -154,7 +154,7 @@ scheduler = Scheduler()
     "Schedule something for the future that Freya will SAY out loud when due. Use for reminders "
     "and recurring briefings. Provide either minutes_from_now (one-shot) or daily_time HH:MM "
     "(every day).",
-    OBJ({"action": P(STR, "What to remind/do, e.g. 'tell Ihan to join the standup' or "
+    OBJ({"action": P(STR, "What to remind/do, e.g. 'tell the user to join the standup' or "
                           "'morning_briefing'"),
          "minutes_from_now": P(INT, "Fire once after this many minutes"),
          "daily_time": P(STR, "Fire every day at this 24h time, e.g. 08:30")}, ["action"]),

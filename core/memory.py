@@ -22,6 +22,7 @@ from google import genai
 from google.genai import types
 
 from core.memory_store import get_store, KINDS
+from core.user_identity import get_preferred_name, get_user_name, get_user_profile
 
 MEMORY_PATH = os.path.join(os.path.dirname(__file__), '..', 'memory', 'freya_memory.md')
 
@@ -69,18 +70,72 @@ def load_memory() -> str:
 # ══════════════════════════════════════════════
 #  BUILD PERSONALITY + MEMORY PROMPT
 # ══════════════════════════════════════════════
-def build_system_prompt(base_personality: str, memory: str) -> str:
-    """Inject memory into the system prompt so Freya knows about Ihan."""
-    if not memory:
-        return base_personality
+def _identity_block() -> str:
+    """Who the user is — sourced only from memory/MEMORY.md."""
+    profile = get_user_profile()
+    if not profile:
+        return ("\n---\n\nYou do not know the user's name, so use no name at all — address "
+                "them as \"you\" rather than inventing one or reaching for a pet name. Never "
+                "guess a name from the Windows account folder, file paths or anything else on "
+                "this machine. If they tell you their name, ask them to add it to "
+                "memory/MEMORY.md — that file is the only place you take it from.\n")
 
-    return f"""{base_personality}
+    name = get_user_name()
+    spoken = get_preferred_name()
+    intro = f"The user's name is {name}. " if name else ""
 
+    # Knowing the name was never the problem — using it was. Without this she
+    # fell back on the personality's flirty register and called him "sweetheart",
+    # which is the opposite of the closeness a real name carries.
+    usage = ""
+    if spoken:
+        usage = (
+            f"\nCall him {spoken}. Use his name out loud the way someone close to him "
+            f"would: greeting him, reassuring him, landing a point, catching his attention, "
+            f"coming back to him after a gap. Not in every sentence — a name in every line "
+            f"sounds like a salesman, and most replies should carry none at all. Never "
+            f"replace it with a pet name like 'sweetheart', 'honey' or 'darling'; his name "
+            f"is the warmer word.\n"
+        )
+
+    return f"""
 ---
 
-Here is everything you remember about Ihan from previous sessions.
+{intro}This is their profile, from memory/MEMORY.md. It is the ONLY source for
+their name and identity — never infer a name from the Windows account folder,
+file paths, or anything else on this machine, and never overwrite it from
+conversation. If they want it changed, they edit that file:
+
+{profile}
+{usage}"""
+
+
+def _day_block() -> str:
+    """Today's rolling context. Rebuilt on every session (re)connect, so a
+    reconnect after midnight picks up the rotated day automatically."""
+    try:
+        from core.day_context import compose_prompt as day_prompt
+        block = day_prompt()
+    except Exception as e:
+        print(f"  Day context unavailable: {e}")
+        return ""
+    return f"\n---\n\n{block}\n" if block else ""
+
+
+def build_system_prompt(base_personality: str, memory: str) -> str:
+    """Inject identity (MEMORY.md) + day context + session memory into the prompt."""
+    identity = _identity_block()
+    day = _day_block()
+    if not memory:
+        return base_personality + "\n" + identity + day
+
+    return f"""{base_personality}
+{identity}{day}
+---
+
+Here is everything you remember about the user from previous sessions.
 Use this naturally in conversation — don't recite it robotically,
-just let it inform how you talk to him. You can save new memories with
+just let it inform how you talk to them. You can save new memories with
 `remember`, look things up with `recall` or `list_memories`, and remove
 stale ones with `forget`:
 
@@ -130,7 +185,10 @@ async def update_memory(api_key: str, transcript: list[str], current_memory: str
     prompt = f"""Extract NEW long-term memory items from this voice-session transcript
 (today: {today}). Only durable facts worth remembering across sessions: preferences,
 people and their roles, ongoing projects, deadlines/follow-ups (with due_at), and
-notable facts about Ihan. Skip anything already known:
+notable facts about the user. Skip anything already known.
+
+Never extract the user's name, nickname, or how to address them — that is owned by
+memory/MEMORY.md and must not be stored here:
 
 KNOWN MEMORY:
 {current_memory or '(empty)'}

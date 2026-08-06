@@ -89,7 +89,7 @@ def _run_job(job_id: str, task: str, config: dict, main_loop: asyncio.AbstractEv
     if result == _QUOTA:
         _emit_threadsafe(main_loop, runtime.inject(
             "I couldn't finish browsing — I've hit the free-tier quota on the Gemini API "
-            "for web tasks. Tell Ihan: try again later, or add billing / a second API key to "
+            "for web tasks. Tell the user: try again later, or add billing / a second API key to "
             "lift the limit. For quick facts I can still search the web instead."
         ))
     else:

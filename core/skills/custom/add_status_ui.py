@@ -10,7 +10,7 @@ def add_status_ui(args, ctx):
     import os
 
     # Define the file paths based on the context of main project directory
-    # Provided by Ihan in a previous turn
+    # Provided by the user in a previous turn
     project_path = "F:/freyav3/"
     ui_config_path = os.path.join(project_path, "freya-ui/src/config.json") # Example path, may need adjustment
 

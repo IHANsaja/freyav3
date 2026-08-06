@@ -58,6 +58,15 @@ async def lifespan(app: FastAPI):
     # here (not per-session) means mission/approval/suggestion events reach the
     # dashboard even while no voice session is running.
     unsubscribe = bus.subscribe(lambda event: broadcast(event.serialize()))
+    # Desktop popup layer — mirrors `card` / `image` events flagged `popup` onto
+    # always-on-top toasts, so Freya can surface what she found while the user is
+    # working in a completely different window (dashboard closed, no voice session).
+    try:
+        from core import desktop_popup
+        detach_popups = desktop_popup.attach_to_bus(load_config())
+    except Exception as e:
+        print(f"  desktop popups unavailable: {e}")
+        detach_popups = lambda: None
     # Import any legacy markdown memory into the structured store up front so
     # the Memory panel is populated before the first voice session.
     try:
@@ -67,6 +76,7 @@ async def lifespan(app: FastAPI):
         print(f"  memory migration check failed: {e}")
     yield
     unsubscribe()
+    detach_popups()
 
 
 app = FastAPI(lifespan=lifespan)
@@ -230,7 +240,7 @@ async def run_freya():
 
                 if is_rotation(e):
                     # Routine session rotation — reconnect silently and fast.
-                    # No UI noise: from Ihan's side nothing happened.
+                    # No UI noise: from the user's side nothing happened.
                     print("Rotating Freya session (context preserved).")
                     await asyncio.sleep(0.5)
                 else:
@@ -742,7 +752,7 @@ async def _dispatch_ws_message(websocket: WebSocket, msg_type, data: dict):
             _last_gesture_touch_ts = now
             if gesture == "Closed_Fist":
                 text = (
-                    "[GESTURE DETECTED — Ihan just squeezed/closed a fist at your "
+                    "[GESTURE DETECTED — the user just squeezed/closed a fist at your "
                     "orb-core through the webcam hand tracker, like he squeezed you. "
                     "React out loud, briefly and in character — playful protest, a "
                     "startled reaction, teasing him back, whatever fits your mood. "
@@ -750,7 +760,7 @@ async def _dispatch_ws_message(websocket: WebSocket, msg_type, data: dict):
                 )
             else:
                 text = (
-                    f"[GESTURE DETECTED — Ihan just made a '{gesture}' hand gesture at "
+                    f"[GESTURE DETECTED — the user just made a '{gesture}' hand gesture at "
                     "your orb through the webcam tracker, as if reaching out and "
                     "touching you. React out loud, briefly and in character, like you "
                     "felt that. One short sentence.]"

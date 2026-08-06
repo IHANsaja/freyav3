@@ -35,6 +35,14 @@ async def main():
     except Exception as e:
         print(f"  Machine index unavailable: {e}")
 
+    # Desktop popups — the console path has no dashboard at all, so this is the
+    # only surface `show_info` / `show_image` have here.
+    try:
+        from core import desktop_popup
+        desktop_popup.attach_to_bus(config)
+    except Exception as e:
+        print(f"  Desktop popups unavailable: {e}")
+
     consecutive_failures = 0
     max_reconnect_attempts = 5
     resume_handle = None
@@ -61,7 +69,7 @@ async def main():
 
                 if is_rotation(e):
                     # Expected lifecycle event, not a fault: don't spend the
-                    # failure budget and don't make Ihan wait 2-10 seconds.
+                    # failure budget and don't make the user wait 2-10 seconds.
                     print("🔄 Rotating session (context preserved)...")
                     await asyncio.sleep(0.5)
                 else:
@@ -91,6 +99,11 @@ async def main():
         try:
             from core.browser.driver import shutdown_browser
             shutdown_browser()
+        except Exception:
+            pass
+        try:
+            from core import desktop_popup
+            desktop_popup.shutdown()
         except Exception:
             pass
         memory_key = get_memory_api_key()

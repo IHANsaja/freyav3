@@ -49,6 +49,7 @@ export default function Home() {
     session,
     toolLog,
     images,
+    cards,
     newsItems,
     config,
     activeMode,
@@ -344,7 +345,7 @@ export default function Home() {
             )}
             {/* Holographic projection field: news, screen captures, tool
                 calls, sub-agents, and mission steps beam out of the orb */}
-            <SceneStage toolLog={stageLog} images={images} newsItems={stageNews} />
+            <SceneStage toolLog={stageLog} images={images} cards={cards} newsItems={stageNews} />
             <CenterCaption state={state} liveText={liveText} />
           </CenterStage>
 

@@ -154,14 +154,14 @@ class MissionOrchestrator:
                 mission.report = "I couldn't break that goal into steps."
                 await self._publish(mission, "status")
                 await runtime.inject(
-                    f"[Mission '{mission.goal}' failed: you couldn't form a plan. Tell Ihan briefly.]"
+                    f"[Mission '{mission.goal}' failed: you couldn't form a plan. Tell the user briefly.]"
                 )
                 return
 
             await runtime.inject(
                 f"[Mission plan ready for '{mission.goal}': "
                 + "; ".join(f"{s.id}. {s.title}" for s in mission.steps)
-                + ". Give Ihan a one-sentence heads-up that you're starting.]"
+                + ". Give the user a one-sentence heads-up that you're starting.]"
             )
             await runtime.emit("avatar", {"intent": "state", "name": "working"})
 
@@ -189,7 +189,7 @@ class MissionOrchestrator:
                               else f"The mission hit an error: {e}")
             await self._publish(mission, "status")
             await runtime.inject(
-                f"[Mission '{mission.goal}' failed: {mission.report}. Tell Ihan briefly.]"
+                f"[Mission '{mission.goal}' failed: {mission.report}. Tell the user briefly.]"
             )
         finally:
             await runtime.emit(
@@ -369,7 +369,7 @@ class MissionOrchestrator:
         )
         await self._publish(mission, "report")
         await runtime.inject(
-            f"[Mission '{mission.goal}' {mission.status}. Report to Ihan naturally: {mission.report}]"
+            f"[Mission '{mission.goal}' {mission.status}. Report to the user naturally: {mission.report}]"
         )
 
     async def _publish(self, mission: Mission, event: str):
@@ -388,9 +388,9 @@ missions = MissionOrchestrator()
     "Start a MISSION for a big, high-level goal that needs multiple planned steps "
     "(e.g. 'prepare my presentation', 'organize this project', 'research X and write "
     "a report'). The orchestrator plans the steps, executes them with background "
-    "agents, verifies each result, pauses for Ihan's approval on sensitive actions, "
+    "agents, verifies each result, pauses for the user's approval on sensitive actions, "
     "and reports back out loud. For small single tasks use dispatch_agent instead.",
-    OBJ({"goal": P(STR, "The complete high-level goal, with any constraints Ihan mentioned")},
+    OBJ({"goal": P(STR, "The complete high-level goal, with any constraints the user mentioned")},
         ["goal"]),
 )
 async def start_mission(args, ctx) -> str:

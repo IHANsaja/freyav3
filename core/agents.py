@@ -221,7 +221,7 @@ def _run_agent_thread(job_id: str, agent_type: str, task: str, config: dict,
     "Delegate a complex, multi-step task to a specialized background sub-agent so you can keep "
     "talking. Types: 'researcher' (deep web/news research), 'coder' (write/run code), 'operator' "
     "(drive the desktop GUI). The agent works in the background and will report back out loud when "
-    "done. Tell Ihan you've dispatched it.",
+    "done. Tell the user you've dispatched it.",
     OBJ({"agent_type": P(STR, "researcher, coder, or operator"),
          "task": P(STR, "The full task for the sub-agent to accomplish")},
         ["agent_type", "task"]),

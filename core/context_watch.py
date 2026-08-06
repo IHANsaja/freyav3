@@ -134,11 +134,22 @@ class ContextTracker:
     async def _observe(self, app: str, title: str, idle_s: float):
         now = time.time()
 
+        # `idle_s` is OS input idle — keyboard and mouse only. A voice
+        # conversation moves neither, so an hour of talking looked identical to
+        # an hour of nobody being there, and the idle_return nudge fired at the
+        # worst possible moment. If he has spoken more recently than he has
+        # typed, that is how long he has actually been idle.
+        idle_s = min(idle_s, runtime.seconds_since_activity())
+
         changed = (self._current is None or self._current.app != app
                    or self._current.title != title)
         if changed:
             if self._current:
                 self._history.append(self._current)
+                # A finished span is the raw material of the day context: where
+                # the hours actually went, and what was open long enough to
+                # count as "what he was working on".
+                self._record_span(self._current, now)
             self._current = _Span(app=app, title=title, started=now)
             self._stuck_fired_for = ""
             if now - self._last_emit > _DEBOUNCE_S:
@@ -150,7 +161,7 @@ class ContextTracker:
         idle_return_min = float(self._cfg().get("idle_return_minutes", 15))
         if self._last_idle_s >= idle_return_min * 60 and idle_s < 5:
             await self._trigger("idle_return",
-                                f"Ihan just came back after {int(self._last_idle_s / 60)} minutes away. "
+                                f"the user just came back after {int(self._last_idle_s / 60)} minutes away. "
                                 f"He was last on '{title}' in {app}.")
         self._last_idle_s = idle_s
 
@@ -161,11 +172,28 @@ class ContextTracker:
                     and self._stuck_fired_for != span_key):
                 self._stuck_fired_for = span_key
                 await self._trigger("stuck",
-                                    f"Ihan has been on the same window for {int(stuck_min)}+ minutes "
+                                    f"the user has been on the same window for {int(stuck_min)}+ minutes "
                                     f"with active input: '{title}' in {app}. He might be stuck or deep in focus.")
             if changed and _FORM_PATTERNS.search(title):
                 await self._trigger("form",
-                                    f"Ihan just opened what looks like a form: '{title}' in {app}.")
+                                    f"the user just opened what looks like a form: '{title}' in {app}.")
+
+    _FOCUS_WORTH_NOTING_S = 8 * 60
+
+    def _record_span(self, span: _Span, ended: float):
+        """Feed a finished focus span into the day context (never raises)."""
+        duration = ended - span.started
+        try:
+            from core import day_context
+            day_context.note_activity(span.app, span.title, duration)
+            # Only long, deliberate stretches earn a line in the day's timeline —
+            # a timeline of every alt-tab is noise, not context.
+            if duration >= self._FOCUS_WORTH_NOTING_S and span.title:
+                minutes = int(duration // 60)
+                day_context.note("focus", f"{minutes}m on '{span.title[:100]}' ({span.app})",
+                                 subject=span.app)
+        except Exception:
+            pass
 
     # ── Suggestion pipeline ────────────────────────────────────────────────
 
@@ -206,7 +234,11 @@ class ContextTracker:
         await runtime.emit("suggestion", {"event": "created", "id": sid,
                                           "text": text, "kind": kind})
         if self._cfg().get("voice_suggestions", False):
-            await runtime.inject(f"[Proactive nudge, keep it to one casual sentence]: {text}")
+            # Low priority: if he's already talking to her, this nudge is stale
+            # and gets dropped. The dashboard suggestion above still stands, so
+            # nothing is lost — it just doesn't hijack a live conversation.
+            await runtime.inject(
+                f"[Proactive nudge, keep it to one casual sentence]: {text}", priority="low")
 
     async def _draft(self, kind: str, situation: str) -> str:
         """One cheap text call to phrase the suggestion. No screenshots."""
@@ -218,7 +250,7 @@ class ContextTracker:
                 model=self._cfg().get("draft_model", "gemini-2.5-flash-lite"),
                 contents=(
                     "You are Freya, a proactive assistant. Based on this observation, write ONE "
-                    "short, casual, genuinely useful suggestion to Ihan (max 15 words). Offer help, "
+                    "short, casual, genuinely useful suggestion to the user (max 15 words). Offer help, "
                     "don't nag. No emoji, no preamble.\n"
                     f"OBSERVATION ({kind}): {situation}"
                 ),
@@ -245,7 +277,7 @@ class ContextTracker:
             base = float(self._cfg().get("cooldown_minutes", 30)) * 60
             self._cooldown_len[kind] = base  # reset backoff — it was welcome
             await runtime.inject(
-                f"[Ihan accepted your suggestion: '{entry['text']}' (context: {entry['situation']}). "
+                f"[the user accepted your suggestion: '{entry['text']}' (context: {entry['situation']}). "
                 f"Act on it now — look at the screen with capture_screen if needed.]"
             )
         else:

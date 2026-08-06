@@ -68,7 +68,7 @@ Object.defineProperty(navigator, 'deviceMemory', {get: () => 8});
 """
 
 # Consent-banner buttons we may press without asking. Reject-only, deliberately:
-# an autonomous agent should never be the thing that accepts tracking on Ihan's
+# an autonomous agent should never be the thing that accepts tracking on the user's
 # behalf. If only an "Accept all" is on offer, the banner is left standing and
 # the agent has to reason about it.
 _CONSENT_REJECT = [
@@ -142,7 +142,7 @@ class HumanBrowser:
             locale=self._bcfg.get("locale", "en-US"),
             timezone_id=self._bcfg.get("timezone", "Asia/Colombo"),
             # A cert warning is a wall, not a page. Freya should be able to read
-            # a site with a lapsed certificate the same way Ihan can click through.
+            # a site with a lapsed certificate the same way the user can click through.
             ignore_https_errors=True,
             java_script_enabled=True,
             permissions=[],

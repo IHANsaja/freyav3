@@ -218,14 +218,14 @@ async def dispatch(name: str, args: dict, ctx: ToolContext) -> str:
             pid = approvals.request_deferred(summary, name, args, thunk, timeout=timeout)
             return (
                 f"APPROVAL_REQUIRED[{pid}]: This is a sensitive action ({summary}) and it "
-                f"has NOT run yet. Briefly tell Ihan what you're about to do and ask for a "
+                f"has NOT run yet. Briefly tell the user what you're about to do and ask for a "
                 f"yes or no. If he agrees, call approve_action with action_id '{pid}' — its "
                 f"result is the real outcome. If he declines, call reject_action."
             )
 
         approved = await approvals.wait(summary, name, args, source=ctx.source, timeout=timeout)
         if not approved:
-            return f"Ihan declined this action ({summary}). Do not retry it; adapt or skip."
+            return f"the user declined this action ({summary}). Do not retry it; adapt or skip."
 
     return await _execute(name, args, ctx, entry)
 

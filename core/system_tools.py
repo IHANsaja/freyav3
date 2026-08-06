@@ -34,7 +34,7 @@ def clipboard_read(args, ctx) -> str:
 
 @tool(
     "clipboard_write",
-    "Copy text onto the Windows clipboard so Ihan can paste it.",
+    "Copy text onto the Windows clipboard so the user can paste it.",
     OBJ({"text": P(STR, "Text to place on the clipboard")}, ["text"]),
 )
 def clipboard_write(args, ctx) -> str:

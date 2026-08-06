@@ -15,7 +15,7 @@ const CONFIDENCE_FLOOR = 0.6;
  *  `Open_Palm` is deliberately EXCLUDED. It's the pose a relaxed hand falls
  *  into while moving around to spin the orb, so treating it as a gesture made
  *  Freya react to what was really just steering. Dragging is now silent — she
- *  only speaks up when Ihan actually signs at her or squeezes. */
+ *  only speaks up when the user actually signs at her or squeezes. */
 const REACTIVE_GESTURES: ReadonlySet<GestureLabel> = new Set<GestureLabel>([
   "Closed_Fist",
   "Victory",

@@ -1,6 +1,7 @@
 from asyncio import selector_events
 import asyncio
 import json
+import time
 from concurrent.futures import ThreadPoolExecutor
 from google import genai
 from google.genai import types
@@ -39,7 +40,7 @@ TOOL_DECLARATIONS = [
     ),
     types.FunctionDeclaration(
         name="switch_mode",
-        description="Switch Freya into a different operational mode. Use when Ihan says 'switch to coding mode', 'language learning mode', 'go back to normal', etc.",
+        description="Switch Freya into a different operational mode. Use when the user says 'switch to coding mode', 'language learning mode', 'go back to normal', etc.",
         parameters=types.Schema(
             type=types.Type.OBJECT,
             properties={
@@ -188,7 +189,7 @@ class SessionRotation(Exception):
     surface as Freya randomly stopping mid-conversation.
 
     We now close voluntarily when GoAway arrives and reconnect with the
-    session-resumption handle, so the rotation is invisible to Ihan and must
+    session-resumption handle, so the rotation is invisible to the user and must
     NOT be counted against the reconnect-failure budget.
     """
 
@@ -242,6 +243,68 @@ class FreyaModel:
         # Freya is actually talking, cleared when she stops.
         self._model_speaking = None
 
+    # Conversation is the richest signal for what a day was about, but a line per
+    # utterance would drown the day timeline. One sample every few minutes is
+    # enough to reconstruct the shape of the day at rotation time.
+    _DAY_TURN_INTERVAL_S = 180.0
+    _last_day_turn = 0.0
+
+    def _note_day_turn(self, text: str):
+        now = time.time()
+        if now - self._last_day_turn < self._DAY_TURN_INTERVAL_S or len(text) < 15:
+            return
+        self._last_day_turn = now
+        try:
+            from core import day_context
+            day_context.note("conversation", text[:200], subject="said")
+        except Exception:
+            pass
+
+    def _compression_budget(self, declarations) -> tuple[int, int]:
+        """(trigger_tokens, target_tokens) for context-window compression.
+
+        This is the single most consequential number in the whole client, and it
+        used to be wrong in a way nothing surfaced. The budget has to hold an
+        *immovable* baseline — the system instruction plus every tool
+        declaration — before it can hold one word of conversation. With ~100
+        tools that baseline is around 18k tokens, and the old settings were
+        trigger=16k with target unset (the server then assumes trigger/2 = 8k).
+
+        So compression fired on the very first turn and tried to shrink the
+        context to less than half of what could not be removed: the sliding
+        window evicted the conversation continuously. That is why Freya could
+        explain a screenshot of his notes and then, one turn later, have no idea
+        what "question 12" referred to — and why she sometimes re-greeted him
+        mid-answer, which is what a model does when its history is truncated out
+        from under it.
+
+        The fix is to size the budget above the baseline and to say so out loud
+        at startup, so this can never again be wrong silently.
+        """
+        freya_cfg = (self.config or {}).get("freya", {})
+        trigger = int(freya_cfg.get("compression_trigger_tokens", 96000))
+        target = int(freya_cfg.get("compression_target_tokens", 32000))
+
+        # The SDK requires target < trigger; a config that violates it would be
+        # rejected at connect time, so clamp rather than fail.
+        if target >= trigger:
+            target = max(1000, trigger // 2)
+
+        prompt_tokens = len(self.personality or "") // 4
+        tool_tokens = sum(len(str(d)) for d in declarations) // 4
+        baseline = prompt_tokens + tool_tokens
+
+        print(f"  Context budget: baseline ~{baseline:,} tok "
+              f"(prompt {prompt_tokens:,} + {len(declarations)} tools {tool_tokens:,})")
+        if target <= baseline:
+            print(f"  !! COMPRESSION TARGET TOO LOW: target {target:,} <= baseline {baseline:,}. "
+                  f"Every turn will be evicted as soon as it is spoken. Raise "
+                  f"freya.compression_target_tokens in config/freya_config.json.")
+        else:
+            print(f"                  trigger {trigger:,} / target {target:,} "
+                  f"-> ~{target - baseline:,} tok for conversation")
+        return trigger, target
+
     def get_config(self):
         # ── Native VAD tuning: tighter, more human turn-taking ──
         vad_cfg = (self.config or {}).get("vad", {})
@@ -253,6 +316,11 @@ class FreyaModel:
             "LOW": types.EndSensitivity.END_SENSITIVITY_LOW,
             "HIGH": types.EndSensitivity.END_SENSITIVITY_HIGH,
         }
+        # Built once so the budget can be measured against the exact list that
+        # gets sent — the declarations ARE most of the immovable baseline.
+        declarations = TOOL_DECLARATIONS + build_declarations(self.config)
+        trigger_tokens, target_tokens = self._compression_budget(declarations)
+
         return types.LiveConnectConfig(
             response_modalities=["AUDIO"],
             speech_config=types.SpeechConfig(
@@ -284,9 +352,7 @@ class FreyaModel:
             ),
             # Static tools (the original 23) + dynamically registered superpowers
             # (news, screen, sub-agents, MCP servers, self-written skills, …).
-            tools=[types.Tool(
-                function_declarations=TOOL_DECLARATIONS + build_declarations(self.config)
-            )],
+            tools=[types.Tool(function_declarations=declarations)],
             # ── Session continuity ──────────────────────────────────────────
             # Ask the server to keep a resumable snapshot of the conversation
             # and hand us back a token for it. Passing that token on the next
@@ -301,11 +367,13 @@ class FreyaModel:
             # oldest turns rather than terminating the session. Without this the
             # connection is force-closed after ~10-15 minutes, which is exactly
             # the 1008 GoAway abort Freya kept dying on.
+            #
+            # `target_tokens` is set EXPLICITLY. Left unset the server assumes
+            # trigger/2, and that silent default is what shredded the
+            # conversation — see _compression_budget() for the full story.
             context_window_compression=types.ContextWindowCompressionConfig(
-                trigger_tokens=int(
-                    (self.config or {}).get("freya", {}).get("compression_trigger_tokens", 16000)
-                ),
-                sliding_window=types.SlidingWindow(),
+                trigger_tokens=trigger_tokens,
+                sliding_window=types.SlidingWindow(target_tokens=target_tokens),
             ),
         )
 
@@ -344,14 +412,25 @@ class FreyaModel:
 
         WAIT_LIMIT = 20.0
         POLL = 0.1
+        # A conversational gap, not merely silence. Waiting only for
+        # `model_speaking` to clear was not enough: the pause between the user
+        # finishing a question and Freya starting her answer reads as silence,
+        # so an injection could land in that gap and take the turn — which is
+        # exactly how "explain this note" got answered with "welcome back from
+        # your movie break". The question was never answered at all.
+        GAP_S = 6.0
 
         async with self._inject_lock:
             speaking = self._model_speaking
-            if speaking is not None:
-                waited = 0.0
-                while speaking.is_set() and waited < WAIT_LIMIT:
-                    await asyncio.sleep(POLL)
-                    waited += POLL
+            waited = 0.0
+            while waited < WAIT_LIMIT:
+                busy = speaking is not None and speaking.is_set()
+                mid_exchange = runtime.seconds_since_activity() < GAP_S
+                if not busy and not mid_exchange:
+                    break
+                await asyncio.sleep(POLL)
+                waited += POLL
+
             if not self.session:  # session may have closed while we waited
                 return
             try:
@@ -359,8 +438,11 @@ class FreyaModel:
                     turns=types.Content(
                         role="user",
                         parts=[types.Part(text=(
-                            "[PROACTIVE — say this to Ihan out loud now, naturally, in your own "
-                            f"voice and style]: {text}"
+                            "[PROACTIVE — say this to the user out loud now, naturally, in your own "
+                            "voice and style. It is an aside: if you were in the middle of "
+                            "something with him, deal with this in one sentence and then go "
+                            "straight back to what you were both doing. Never treat it as a "
+                            "reason to greet him again or change the subject]: " + text
                         ))],
                     ),
                     turn_complete=True,
@@ -391,7 +473,7 @@ class FreyaModel:
                     role="user",
                     parts=[types.Part(text=(
                         "[SESSION RECONNECTED — the previous connection dropped. This is the "
-                        "transcript of the conversation you and Ihan were having moments ago. "
+                        "transcript of the conversation you and the user were having moments ago. "
                         "Treat it as your own memory of the last few minutes and simply carry "
                         "on from where you left off. Do NOT announce the reconnection, do NOT "
                         "ask him to repeat himself or re-share his screen, and do NOT greet him "
@@ -447,6 +529,9 @@ class FreyaModel:
             self.session = session
             # Publish this session's channels so background powers can reach it.
             runtime.set_channels(self._inject_text, self.on_event)
+            # Publish the conversation record too, so `recall_conversation` can
+            # reach it when the server-side context has dropped something.
+            runtime.set_transcript(self.transcript)
             # Kick off scheduler + ambient loops bound to this session.
             try:
                 from core.scheduler import scheduler
@@ -458,6 +543,11 @@ class FreyaModel:
                 tracker.attach(self.config)
             except Exception:
                 pass
+            try:
+                from core.day_context import rotator
+                rotator.attach(self.config)
+            except Exception as e:
+                print(f"  Day context unavailable: {e}")
             try:
                 from core.hotkeys import start_pause_hotkey
                 start_pause_hotkey(self.config)
@@ -523,9 +613,13 @@ class FreyaModel:
                     user_buffer = ""
                     if full:
                         print(f"  You  : {full}")
+                        # Speech is presence. Without this the context tracker
+                        # reads a long spoken session as an empty chair.
+                        runtime.note_user_turn()
                         if self.transcript:
-                            self.transcript.add("Ihan", full)
-                        await self.on_transcript("Ihan", full)
+                            self.transcript.add("User", full)
+                        self._note_day_turn(full)
+                        await self.on_transcript("User", full)
 
                 async def flush_freya(cut: bool = False):
                     nonlocal freya_buffer
@@ -535,6 +629,7 @@ class FreyaModel:
                         if cut:
                             full += " …"
                         print(f"  Freya: {full}")
+                        runtime.note_model_turn()
                         if self.transcript:
                             self.transcript.add("Freya", full)
                         await self.on_transcript("Freya", full)
@@ -737,6 +832,11 @@ class FreyaModel:
                 try:
                     from core.context_watch import tracker
                     tracker.detach()
+                except Exception:
+                    pass
+                try:
+                    from core.day_context import rotator
+                    rotator.detach()
                 except Exception:
                     pass
                 try:

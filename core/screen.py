@@ -354,7 +354,7 @@ def control_element(args, ctx) -> str:
                 "(focus_window) or run read_screen_elements to see what's there.")
     name = (ctrl.Name or "").strip() or "(unnamed)"
     ctype = ctrl.ControlTypeName.replace("Control", "")
-    _fx_ctrl(ctrl)  # crimson core-sync lock-on so Ihan sees exactly what she's operating
+    _fx_ctrl(ctrl)  # crimson core-sync lock-on so the user sees exactly what she's operating
     try:
         if action in ("click", "invoke", "press", "open", "activate"):
             how = _do_invoke(ctrl)

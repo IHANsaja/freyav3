@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, useCallback } from "react";
 import type {
     ApprovalPayload,
     AvatarIntentPayload,
+    CardEventPayload,
     ContextPayload,
     MissionEventPayload,
     MissionPayload,
@@ -17,7 +18,7 @@ export type FreyaState = "idle" | "listening" | "speaking" | "interrupted";
 
 export interface TranscriptEntry {
     id: number;
-    speaker: "Ihan" | "Freya";
+    speaker: "User" | "Freya";
     text: string;
     timestamp: Date;
 }
@@ -34,6 +35,18 @@ export interface ImageEntry {
     id: number;
     data: string;   // base64 JPEG (no data: prefix)
     label: string;
+    timestamp: Date;
+}
+
+/** A piece of information Freya retrieved (usually from the web) and chose to put
+ *  on screen: a headline, a few sentences, an optional photo, a source. */
+export interface InfoCard {
+    id: number;
+    title: string;
+    body: string;
+    source: string;
+    image: string | null;   // base64 JPEG (no data: prefix)
+    url: string | null;
     timestamp: Date;
 }
 
@@ -102,6 +115,7 @@ export function useFreyaSocket() {
     const [liveText, setLiveText] = useState<string>(""); // Freya's words as she speaks
     const [toolLog, setToolLog] = useState<ToolEntry[]>([]);
     const [images, setImages] = useState<ImageEntry[]>([]);
+    const [cards, setCards] = useState<InfoCard[]>([]);
     const [newsItems, setNewsItems] = useState<NewsItem[]>([]);
     const [config, setConfig] = useState<FreyaConfig | null>(null);
     const [audioDevices, setAudioDevices] = useState<{ input: AudioDevice[]; output: AudioDevice[] }>({
@@ -256,7 +270,7 @@ export function useFreyaSocket() {
                     freyaBuffer.current += " " + msg.text;
                     setLiveText(freyaBuffer.current.trim());
                 } else if (msg.type === "transcript") {
-                    if (msg.speaker === "Ihan") {
+                    if (msg.speaker === "User") {
                         // User's turn captured → commit Freya's line + clear caption
                         flushFreyaBuffer();
                         setTranscript((prev) => [
@@ -283,15 +297,36 @@ export function useFreyaSocket() {
                     ]);
                 } else if (msg.type === "image") {
                     // A new image Freya received (e.g. a screen capture) → show on the canvas.
-                    setImages((prev) => [
-                        ...prev,
-                        {
-                            id: counter.current++,
-                            data: msg.data,
-                            label: msg.label || "Image",
-                            timestamp: new Date(),
-                        },
-                    ].slice(-6));
+                    // `dashboard: false` means it was aimed at the desktop popup only;
+                    // absent means "yes" so screen captures keep their old behaviour.
+                    if (msg.dashboard !== false) {
+                        setImages((prev) => [
+                            ...prev,
+                            {
+                                id: counter.current++,
+                                data: msg.data,
+                                label: msg.label || "Image",
+                                timestamp: new Date(),
+                            },
+                        ].slice(-6));
+                    }
+                } else if (msg.type === "card") {
+                    // Text (± a photo) Freya retrieved and put on screen.
+                    const c = msg as CardEventPayload;
+                    if (c.dashboard !== false) {
+                        setCards((prev) => [
+                            ...prev,
+                            {
+                                id: counter.current++,
+                                title: c.title || "",
+                                body: c.body || "",
+                                source: c.source || "",
+                                image: c.image ?? null,
+                                url: c.url ?? null,
+                                timestamp: new Date(),
+                            },
+                        ].slice(-6));
+                    }
                 } else if (msg.type === "news") {
                     // Structured world-news headlines → dynamic scene projections.
                     const now = new Date();
@@ -493,6 +528,7 @@ export function useFreyaSocket() {
         liveText,
         toolLog,
         images,
+        cards,
         newsItems,
         config,
         audioDevices,

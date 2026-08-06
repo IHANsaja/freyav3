@@ -21,7 +21,7 @@ Two impedance mismatches this module resolves:
 
 Nothing here submits an application, sends an email, or spends money —
 career-ops is explicitly human-in-the-loop by design, and that property is
-preserved: Freya reports and drafts, Ihan decides.
+preserved: Freya reports and drafts, the user decides.
 """
 
 import os
@@ -122,11 +122,11 @@ def _ready() -> tuple[bool, str]:
 
 def _build_decl() -> str:
     base = (
-        "Load one career-ops job-search workflow and follow it. career-ops is Ihan's job "
+        "Load one career-ops job-search workflow and follow it. career-ops is the user's job "
         "search system: it finds openings, scores them against a structured A-G rubric, "
         "tailors his CV, drafts cover letters and tracks applications. Call this BEFORE "
         "doing any job-search work so you follow the real procedure instead of improvising. "
-        "It never applies or sends anything on its own — you evaluate and draft, Ihan decides. "
+        "It never applies or sends anything on its own — you evaluate and draft, the user decides. "
     )
     modes = discover_modes()
     if not modes:
@@ -171,13 +171,13 @@ def use_career_mode(args, ctx) -> str:
     return (
         f"[CAREER-OPS WORKFLOW — {entry['id']}: {entry['title']}]\n"
         f"Working directory: {root}\n"
-        f"Ihan's CV is {os.path.join(root, 'cv.md')} and his profile is "
+        f"the user's CV is {os.path.join(root, 'cv.md')} and his profile is "
         f"{os.path.join(root, 'config', 'profile.yml')}.\n"
         "Follow the procedure below. Where it tells you to browse or search, use your own "
         "web_search / web_fetch / browser_task tools; where it names a Node script, run it "
         "with run_career_script. Deliver the result out loud, conversationally — lead with "
         "the verdict and the score, then the reasoning. Never apply, submit or send "
-        "anything; draft it and let Ihan decide.\n\n"
+        "anything; draft it and let the user decide.\n\n"
         f"{body}"
     )
 
@@ -229,7 +229,7 @@ def run_career_script(args, ctx) -> str:
 
 @tool(
     "career_status",
-    "Check whether Ihan's job-search system is set up and what's in his pipeline right now.",
+    "Check whether the user's job-search system is set up and what's in his pipeline right now.",
     OBJ(),
 )
 def career_status(args, ctx) -> str:

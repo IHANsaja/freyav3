@@ -57,7 +57,7 @@ async def main():
     await run("run_code", {"code": "print(6*7)"})
 
     # 6) Semantic recall (needs embeddings API key; tolerated if offline)
-    await run("recall", {"query": "what do you know about Ihan"})
+    await run("recall", {"query": "what do you know about the user"})
 
     # 7) Safety gate refuses a destructive command
     res = await run("run_terminal_command", {"command": "rm -rf /"})

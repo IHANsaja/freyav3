@@ -2,7 +2,7 @@
 from core.registry import tool, OBJ, P, STR, INT, BOOL
 
 
-@tool('toggle_listening', 'Toggles active listening mode. When turned off, I will stop processing user speech until it is turned back on. Use when Ihan wants to watch media without me responding.', OBJ({"input": P(STR, "optional free-form input")}))
+@tool('toggle_listening', 'Toggles active listening mode. When turned off, I will stop processing user speech until it is turned back on. Use when the user wants to watch media without me responding.', OBJ({"input": P(STR, "optional free-form input")}))
 def toggle_listening(args, ctx):
     text = args.get("input", "")
     import json

@@ -81,7 +81,7 @@ class ApprovalManager:
         # Ask out loud too — the user may be away from the dashboard.
         await runtime.inject(
             f"[APPROVAL NEEDED] A background mission wants to: {summary}. "
-            f"Ask Ihan briefly whether to go ahead, and call approve_action or "
+            f"Ask the user briefly whether to go ahead, and call approve_action or "
             f"reject_action with action_id '{action.id}' based on his answer."
         )
         try:
@@ -150,7 +150,7 @@ class ApprovalManager:
         if not approved:
             if via == "ui":
                 await runtime.inject(
-                    f"[Ihan denied '{action.summary}' from the dashboard. Acknowledge briefly.]"
+                    f"[the user denied '{action.summary}' from the dashboard. Acknowledge briefly.]"
                 )
             return "Denied."
         try:
@@ -160,7 +160,7 @@ class ApprovalManager:
         if via == "ui":
             # Result can't ride the original tool response — narrate it instead.
             await runtime.inject(
-                f"[Ihan approved '{action.summary}' from the dashboard. It ran with "
+                f"[the user approved '{action.summary}' from the dashboard. It ran with "
                 f"result: {result}. Tell him the outcome naturally.]"
             )
         return result
@@ -190,9 +190,9 @@ def _pick(action_id: str | None) -> Optional[PendingAction]:
 
 @tool(
     "approve_action",
-    "Confirm a pending action after Ihan says yes. Call with the action_id from the "
+    "Confirm a pending action after the user says yes. Call with the action_id from the "
     "APPROVAL_REQUIRED message; omit it to confirm the most recent request. Returns "
-    "the executed action's result — relay it to Ihan.",
+    "the executed action's result — relay it to the user.",
     OBJ({"action_id": P(STR, "The pending action id, e.g. 'a-1b2c3d4e'.")}),
 )
 async def approve_action(args, ctx):
@@ -205,7 +205,7 @@ async def approve_action(args, ctx):
 
 @tool(
     "reject_action",
-    "Cancel a pending action after Ihan says no. Omit action_id to reject the most "
+    "Cancel a pending action after the user says no. Omit action_id to reject the most "
     "recent request.",
     OBJ({"action_id": P(STR, "The pending action id.")}),
 )
@@ -219,7 +219,7 @@ async def reject_action(args, ctx):
 
 @tool(
     "list_pending_actions",
-    "List actions currently waiting for Ihan's approval.",
+    "List actions currently waiting for the user's approval.",
 )
 async def list_pending_actions(args, ctx):
     items = approvals.pending()

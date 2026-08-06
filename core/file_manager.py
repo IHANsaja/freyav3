@@ -135,7 +135,7 @@ def move_item(args, ctx) -> str:
 @tool(
     "delete_item",
     "Delete a file or folder. By default it goes to the Windows Recycle Bin so it can be "
-    "restored; only set permanent when Ihan explicitly asks for it to be gone for good.",
+    "restored; only set permanent when the user explicitly asks for it to be gone for good.",
     OBJ({"path": P(STR, "Path of the file or folder to delete"),
          "permanent": P(BOOL, "Bypass the Recycle Bin and erase it irreversibly (default false)")},
         ["path"]),
@@ -187,7 +187,7 @@ def create_folder(args, ctx) -> str:
 # ══════════════════════════════════════════════
 @tool(
     "get_user_folders",
-    "Look up the REAL paths of Ihan's standard folders (desktop, documents, downloads, "
+    "Look up the REAL paths of the user's standard folders (desktop, documents, downloads, "
     "pictures, music, videos, home). Use this whenever he refers to one by name and you "
     "need a concrete path — never guess his username or build the path yourself, because "
     "the account folder is often not what you'd expect from his first name.",
@@ -196,7 +196,7 @@ def create_folder(args, ctx) -> str:
 def get_user_folders(args, ctx) -> str:
     from core.user_paths import all_user_folders
     folders = all_user_folders()
-    return "Ihan's folders: " + "; ".join(f"{k} = {v}" for k, v in folders.items())
+    return "the user's folders: " + "; ".join(f"{k} = {v}" for k, v in folders.items())
 
 
 @tool(
@@ -304,7 +304,7 @@ def open_path(args, ctx) -> str:
 
 @tool(
     "reveal_in_explorer",
-    "Open File Explorer with a specific file highlighted, so Ihan can see where it lives.",
+    "Open File Explorer with a specific file highlighted, so the user can see where it lives.",
     OBJ({"path": P(STR, "Path of the file to reveal")}, ["path"]),
 )
 def reveal_in_explorer(args, ctx) -> str:

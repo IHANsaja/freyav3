@@ -1,7 +1,7 @@
 """
 Real news — Freya reads headlines aloud AND projects them onto the dashboard as dynamic cards.
 
-When Ihan asks for news, this:
+When the user asks for news, this:
   1. Pulls the Google News RSS feed (no API key) and returns the top headlines as text for
      Freya to speak.
   2. Emits a structured `news` event to the UI immediately so the dashboard can scatter the
@@ -67,7 +67,7 @@ def _format(headlines: list[str], label: str) -> str:
         return f"I couldn't pull any {label} right now — the news feed didn't respond."
     lines = "; ".join(f"{i+1}. {h}" for i, h in enumerate(headlines))
     return (f"Here are the top {label} right now: {lines}. "
-            "Read these to Ihan conversationally — don't just list numbers robotically.")
+            "Read these to the user conversationally — don't just list numbers robotically.")
 
 
 def _og_image(link: str, timeout: int = 5) -> str | None:

@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState, ReactNode } from "react";
-import { ToolEntry, ImageEntry, NewsItem } from "../hooks/useFreyaSocket";
+import { ToolEntry, ImageEntry, InfoCard, NewsItem } from "../hooks/useFreyaSocket";
 import LiveFigure from "./LiveFigure";
 
 /**
@@ -12,8 +12,9 @@ import LiveFigure from "./LiveFigure";
  * Projections fade after a TTL so the scene stays alive and uncluttered.
  */
 
-const TTL = 16000; // ms a projection stays on screen
-const MAX = 6;     // max concurrent projections
+const TTL = 16000;      // ms a projection stays on screen
+const CARD_TTL = 40000; // info cards carry text meant to be READ, so they linger
+const MAX = 6;          // max concurrent projections
 
 // ── tiny seeded PRNG so each item keeps a stable scatter position ──
 function hashStr(s: string): number {
@@ -77,11 +78,12 @@ function renderHeadline(title: string): ReactNode[] {
 
 type Proj = {
   key: string;
-  kind: "news" | "image" | "tool";
+  kind: "news" | "image" | "tool" | "card";
   ts: number;
   news?: NewsItem;
   image?: ImageEntry;
   tool?: ToolEntry;
+  card?: InfoCard;
 };
 
 const TOOL_ICON: Record<string, string> = {
@@ -96,10 +98,12 @@ const TOOL_ICON: Record<string, string> = {
 export default function SceneStage({
   toolLog,
   images,
+  cards,
   newsItems,
 }: {
   toolLog: ToolEntry[];
   images: ImageEntry[];
+  cards: InfoCard[];
   newsItems: NewsItem[];
 }) {
   const ref = useRef<HTMLDivElement>(null);
@@ -127,11 +131,12 @@ export default function SceneStage({
   const projections: Proj[] = [
     ...newsItems.map((n) => ({ key: `n${n.id}`, kind: "news" as const, ts: n.timestamp.getTime(), news: n })),
     ...images.map((i) => ({ key: `i${i.id}`, kind: "image" as const, ts: i.timestamp.getTime(), image: i })),
+    ...cards.map((c) => ({ key: `c${c.id}`, kind: "card" as const, ts: c.timestamp.getTime(), card: c })),
     ...toolLog
       .filter((t) => !["get_world_news", "get_news"].includes(t.name))
       .map((t) => ({ key: `t${t.id}`, kind: "tool" as const, ts: t.timestamp.getTime(), tool: t })),
   ]
-    .filter((p) => now - p.ts < TTL)
+    .filter((p) => now - p.ts < (p.kind === "card" ? CARD_TTL : TTL))
     .sort((a, b) => b.ts - a.ts)
     .slice(0, MAX);
 
@@ -182,6 +187,7 @@ export default function SceneStage({
           >
             {p.kind === "news" && p.news && <NewsCard item={p.news} />}
             {p.kind === "image" && p.image && <ImageCard item={p.image} />}
+            {p.kind === "card" && p.card && <InfoProjection item={p.card} />}
             {p.kind === "tool" && p.tool && <ToolCard item={p.tool} />}
           </div>
         );
@@ -238,6 +244,36 @@ function ImageCard({ item }: { item: ImageEntry }) {
       </div>
       {/* eslint-disable-next-line @next/next/no-img-element */}
       <img src={`data:image/jpeg;base64,${item.data}`} alt={item.label} className="w-full mt-2" />
+    </div>
+  );
+}
+
+/** Retrieved information — the dashboard twin of the desktop popup card. */
+function InfoProjection({ item }: { item: InfoCard }) {
+  return (
+    <div className={SHELL}>
+      {item.image && (
+        // eslint-disable-next-line @next/next/no-img-element
+        <img
+          src={`data:image/jpeg;base64,${item.image}`}
+          alt=""
+          className="w-full h-28 object-cover border-b border-outline-variant/20"
+        />
+      )}
+      <div className="p-3 flex flex-col gap-1.5">
+        <span className="flex items-center gap-1.5 text-[9px] font-bold uppercase tracking-widest text-primary">
+          <span className="w-1.5 h-1.5 rounded-full bg-primary live-dot" /> RETRIEVED
+        </span>
+        <p className="text-[12.5px] leading-snug font-semibold text-parchment">{item.title}</p>
+        {item.body && (
+          <p className="text-[11px] leading-snug text-on-surface whitespace-pre-wrap line-clamp-[10]">
+            {item.body}
+          </p>
+        )}
+        {item.source && (
+          <span className="text-[9px] text-outline-variant uppercase tracking-wider">{item.source}</span>
+        )}
+      </div>
     </div>
   );
 }

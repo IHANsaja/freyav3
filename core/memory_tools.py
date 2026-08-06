@@ -115,7 +115,7 @@ async def update_memory_item(args, ctx) -> str:
 
 @tool(
     "forget",
-    "Deactivate a stored memory by id when Ihan says it's wrong or no longer relevant. "
+    "Deactivate a stored memory by id when the user says it's wrong or no longer relevant. "
     "It's hidden, not destroyed.",
     OBJ({"memory_id": P(INT, "The item id to forget")}, ["memory_id"]),
 )
@@ -139,3 +139,61 @@ async def whats_coming_up(args, ctx) -> str:
     if not items:
         return "Nothing due in the next two weeks."
     return "\n".join(f"{i.due_at}: {i.subject} — {i.content}" for i in items)
+
+
+# ══════════════════════════════════════════════
+#  THIS SESSION'S CONVERSATION
+# ══════════════════════════════════════════════
+# Separate from the memory store on purpose: the store holds what is worth
+# keeping forever, this reads back what was *just said*. It exists because the
+# server-side context can be compressed out from under her mid-conversation —
+# she explains a screenshot of his notes, and two turns later "question 12"
+# means nothing. Asking him to repeat himself is the one response that makes the
+# loss his problem, so she gets a way to look it up instead.
+
+def _search_transcript(lines: list[str], query: str, limit: int, context_lines: int) -> list[str]:
+    """Matching lines plus their neighbours, in order, no duplicates."""
+    terms = [t for t in query.lower().split() if t]
+    hits = [i for i, line in enumerate(lines)
+            if all(t in line.lower() for t in terms)]
+    if not hits:
+        return []
+    keep: set[int] = set()
+    for i in hits[-limit:]:
+        keep.update(range(max(0, i - context_lines), min(len(lines), i + context_lines + 1)))
+    return [lines[i] for i in sorted(keep)]
+
+
+@tool(
+    "recall_conversation",
+    "Look back at what was actually said earlier in this session. Use it the moment a "
+    "reference doesn't land — 'question 12', 'that file', 'the one we picked', 'like I said' "
+    "— instead of asking him to repeat himself or re-share his screen. Do it silently and "
+    "just continue; never announce that you looked it up. Omit `query` to re-read the last "
+    "few exchanges.",
+    OBJ({
+        "query": P(STR, "Words to search for, e.g. 'question 12' or 'exam'. Omit for the "
+                        "most recent exchanges."),
+        "limit": P(INT, "How many matching moments to return (default 5)"),
+    }),
+)
+async def recall_conversation(args, ctx) -> str:
+    from core import runtime
+    transcript = runtime.get_transcript()
+    lines = transcript.get() if transcript else []
+    if not lines:
+        return ("Nothing has been said in this session yet — there's no earlier conversation "
+                "to look back on.")
+
+    query = str(args.get("query", "")).strip()
+    limit = max(1, min(20, int(args.get("limit", 5) or 5)))
+
+    if not query:
+        recent = lines[-12:]
+        return "The last few exchanges:\n" + "\n".join(recent)
+
+    found = _search_transcript(lines, query, limit, context_lines=2)
+    if not found:
+        return (f"Nothing in this session's conversation mentions '{query}'. It may have been "
+                f"from an earlier session — try `recall` or `get_day_context` instead.")
+    return f"Earlier in this session, about '{query}':\n" + "\n".join(found)

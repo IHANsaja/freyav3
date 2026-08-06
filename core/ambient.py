@@ -68,7 +68,7 @@ class Ambient:
                 if answer.upper().startswith("YES"):
                     note = answer.split(":", 1)[1].strip() if ":" in answer else ""
                     await runtime.inject(
-                        f"Heads up Ihan — the thing you asked me to watch for just happened: "
+                        f"Heads up — the thing you asked me to watch for just happened: "
                         f"{instruction}. {note}")
                     await runtime.emit("ambient", {"id": wid, "status": "triggered"})
                     break
@@ -85,7 +85,7 @@ ambient = Ambient()
 
 @tool(
     "watch_screen",
-    "Proactively monitor the screen and tell Ihan the moment a condition becomes true, without "
+    "Proactively monitor the screen and tell the user the moment a condition becomes true, without "
     "him asking again. Use for 'tell me when X finishes/appears/changes'. Runs in the background.",
     OBJ({"instruction": P(STR, "The condition to watch for, e.g. 'the video export reaches 100%'"),
          "interval_seconds": P(INT, "How often to check (default 20)"),

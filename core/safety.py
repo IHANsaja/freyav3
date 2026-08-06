@@ -222,8 +222,8 @@ def path_is_allowed(path: str, config: dict) -> bool:
     Comparison is case-INSENSITIVE via os.path.normcase. Windows filesystems
     resolve paths case-insensitively (open() on a mismatched-case path still
     hits the same real file), but Gemini routinely generates the user's name
-    in natural title case ("Ihan Hansaja") rather than however the actual
-    Windows account folder happens to be cased ("IHAN HANSAJA") — a naive
+    in natural title case ("Jane Doe") rather than however the actual
+    Windows account folder happens to be cased ("JANE DOE") — a naive
     case-sensitive compare here would then hard-block access to a folder
     (like the user's own Desktop) that Windows would happily write to and
     that may even be explicitly listed in safety.allowed_roots.
@@ -359,7 +359,7 @@ _PATH_ARGS: dict[str, tuple[str, ...]] = {
 
 
 # ══════════════════════════════════════════════════════════════════════════
-#  Approval rules — which actions must pause for Ihan's explicit yes.
+#  Approval rules — which actions must pause for the user's explicit yes.
 #
 #  Distinct from `guard` above: guard *blocks* the outright destructive, this
 #  decides what is allowed but sensitive enough to need a human checkpoint

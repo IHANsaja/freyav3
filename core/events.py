@@ -30,7 +30,8 @@ NEW_TYPES = {
 }
 
 # Only these families are replayed to newly connected clients. Transient audio-ish
-# events (speech, state, image) would be confusing or heavy to replay.
+# events (speech, state, image) would be confusing or heavy to replay. `card` is
+# excluded for the same reason as `image`: it can carry an embedded base64 photo.
 REPLAYABLE = NEW_TYPES | {"agent", "browser", "schedule", "ambient", "mcp"}
 
 

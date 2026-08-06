@@ -57,6 +57,8 @@ BUILTIN_SKILLS: list[tuple[str, SkillManifest]] = [
      "Watch the screen for a condition and alert proactively", gate="ambient.enabled")),
     ("core.context_watch", SkillManifest("context", "Context Awareness",
      "Always-on window tracking with proactive suggestions")),
+    ("core.day_context", SkillManifest("day", "Day Context",
+     "Knows what today has been about; rotates and summarizes the day at the boundary")),
     ("core.self_extend", SkillManifest("self_extend", "Self-Extension",
      "Freya writes and hot-loads new tools for herself")),
     ("core.listening_tools", SkillManifest("listening", "Listening Control",

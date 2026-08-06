@@ -9,7 +9,7 @@ Filtering
 ---------
 SafeSearch is OFF by default (`kp=-2`), set both as a URL parameter and as the
 `p` cookie so it holds across in-browser navigation. Freya is a personal
-assistant on Ihan's own machine; a search layer that silently drops results is a
+assistant on the user's own machine; a search layer that silently drops results is a
 search layer that lies to her about what's on the web. Flip
 `browser.safe_search` to true in config to put the filter back.
 

@@ -6,7 +6,7 @@ version: "1.0"
 
 # Watching video
 
-You can actually watch video. Use this whenever Ihan gives you a video link or
+You can actually watch video. Use this whenever the user gives you a video link or
 points at a video file and wants to know what's in it.
 
 ## How to run it
@@ -14,7 +14,7 @@ points at a video file and wants to know what's in it.
 Call `run_skill_script` with skill `watch`, script `watch.py`, and these args:
 
 1. The video — a YouTube URL, any other video URL, or a local file path.
-2. The question — what Ihan wants to know. If he didn't ask anything specific,
+2. The question — what the user wants to know. If he didn't ask anything specific,
    pass `summarise this video`.
 
 Optional flags, appended as extra args:

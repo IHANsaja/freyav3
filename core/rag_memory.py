@@ -2,9 +2,9 @@
 Semantic RAG memory & document knowledge.
 
 core/memory.py keeps a flat markdown log that's pasted wholesale into the system prompt —
-fine for a few facts, useless once it grows or when Ihan asks about a specific document.
+fine for a few facts, useless once it grows or when the user asks about a specific document.
 This module adds *retrieval*: Gemini embeddings (text-embedding-004) over the memory file
-plus any folders Ihan points at, stored in a local Chroma vector DB. Freya can then:
+plus any folders the user points at, stored in a local Chroma vector DB. Freya can then:
 
   • recall(query)      — semantically search everything she knows / has indexed
   • index_folder(path) — ingest a folder of notes/docs so "what did my notes say about X" works
@@ -94,7 +94,7 @@ def upsert_memory_item(doc_id: str, text: str):
 @tool(
     "recall",
     "Semantically search Freya's long-term memory and any indexed documents for relevant info. "
-    "Use when Ihan asks what you remember about something, or references his notes/files.",
+    "Use when the user asks what you remember about something, or references his notes/files.",
     OBJ({"query": P(STR, "What to recall, in natural language")}, ["query"]),
     gate="rag.enabled",
 )

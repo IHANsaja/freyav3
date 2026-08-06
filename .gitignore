@@ -181,6 +181,9 @@ cython_debug/
 .cursorindexingignore
 
 memory/freya_memory.md
+# The only place the user's name and personal profile live (core/user_identity.py).
+memory/MEMORY.md
+MEMORY.md
 config/freya_horny.json
 .claude
 # career-ops: nested third-party clone + personal CV/profile/application data

@@ -26,7 +26,7 @@ TRANSITIONS = ["walk", "run", "flourish"]
 # These results are fed back into the live session as function responses, and a
 # response that reads like a finished English sentence ("Expression set to
 # calm.") is one the voice model will sometimes just say out loud — which is
-# exactly the bug Ihan hit mid-conversation. Body language is not something a
+# exactly the bug the user hit mid-conversation. Body language is not something a
 # person announces; the response has to look like machinery, not dialogue.
 SILENT = "[SILENT — body language only. Do not say this, do not acknowledge it, just keep talking.]"
 
@@ -78,7 +78,7 @@ async def set_gesture(args, ctx) -> str:
 @tool(
     "set_idle_state",
     "Change your avatar's resting posture. States: standing (default), seated "
-    "(relaxed night-time presence), attentive (leaning in, focused on Ihan)." + _NO_NARRATE,
+    "(relaxed night-time presence), attentive (leaning in, focused on the user)." + _NO_NARRATE,
     OBJ({"state": P(STR, "The idle posture", enum=IDLE_STATES)}, ["state"]),
 )
 async def set_idle_state(args, ctx) -> str:
@@ -111,7 +111,7 @@ async def trigger_thinking(args, ctx) -> str:
 
 @tool(
     "trigger_listening",
-    "Snap back to an attentive listening pose focused on Ihan." + _NO_NARRATE,
+    "Snap back to an attentive listening pose focused on the user." + _NO_NARRATE,
 )
 async def trigger_listening(args, ctx) -> str:
     await _emit(ctx, {"intent": "state", "name": "listening"})

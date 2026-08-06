@@ -2,9 +2,9 @@
 User folder resolution — where "my desktop" actually is.
 
 Freya kept failing to write to well-known locations because she had no way to
-*know* them, so she guessed from conversation: the account is addressed as
-"Ihan", so she'd try `C:\\Users\\Ihan\\Desktop`, Windows denied it (WinError 5),
-and she'd silently fall back to the project folder. The safety sandbox was
+*know* them, so she guessed from conversation: the user goes by a first name, so
+she'd try `C:\\Users\\<first name>\\Desktop`, Windows denied it (WinError 5), and
+she'd silently fall back to the project folder. The safety sandbox was
 never involved — the path simply didn't exist.
 
 This module resolves the real locations through the Windows shell

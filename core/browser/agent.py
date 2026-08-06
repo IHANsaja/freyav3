@@ -31,7 +31,7 @@ from config import get_agent_api_key
 from core.browser.driver import get_browser
 from core.browser.perception import PageView
 
-SYSTEM = """You are Freya's browser. You are looking at a real Chromium window on Ihan's \
+SYSTEM = """You are Freya's browser. You are looking at a real Chromium window on the user's \
 computer and you drive it exactly like a person would: you read what's on screen, you click \
 things, you type into boxes, you scroll to see more.
 
@@ -54,7 +54,7 @@ WHAT YOU ARE NOT
 You are not a summariser of your own guesses. Everything you report must come from a page you \
 actually opened in this session. If you could not find it, say so plainly in finish and say \
 where you looked. Report what pages say accurately, including content you find distasteful — \
-you are reading the web on Ihan's behalf, not curating it."""
+you are reading the web on the user's behalf, not curating it."""
 
 
 def _tools() -> list[types.Tool]:
@@ -103,7 +103,7 @@ def _safety(relaxed: bool) -> list[types.SafetySetting] | None:
     Relaxed by default: the agent's job is to report what a page says. With the
     default thresholds it will abandon a research task mid-way over a quoted
     slur in a news article or a medical page's clinical detail, which reads to
-    Ihan as Freya simply failing.
+    the user as Freya simply failing.
     """
     if not relaxed:
         return None
