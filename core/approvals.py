@@ -190,9 +190,8 @@ def _pick(action_id: str | None) -> Optional[PendingAction]:
 
 @tool(
     "approve_action",
-    "Confirm a pending action after the user says yes. Call with the action_id from the "
-    "APPROVAL_REQUIRED message; omit it to confirm the most recent request. Returns "
-    "the executed action's result — relay it to the user.",
+    "Confirm a pending action after he says yes. Use the action_id from APPROVAL_REQUIRED, or "
+    "omit it for the latest. Returns the real result — relay it.",
     OBJ({"action_id": P(STR, "The pending action id, e.g. 'a-1b2c3d4e'.")}),
 )
 async def approve_action(args, ctx):
@@ -207,7 +206,7 @@ async def approve_action(args, ctx):
     "reject_action",
     "Cancel a pending action after the user says no. Omit action_id to reject the most "
     "recent request.",
-    OBJ({"action_id": P(STR, "The pending action id.")}),
+    OBJ({"action_id": P(STR)}),
 )
 async def reject_action(args, ctx):
     action = _pick(args.get("action_id"))

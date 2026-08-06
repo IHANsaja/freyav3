@@ -35,7 +35,7 @@ def clipboard_read(args, ctx) -> str:
 @tool(
     "clipboard_write",
     "Copy text onto the Windows clipboard so the user can paste it.",
-    OBJ({"text": P(STR, "Text to place on the clipboard")}, ["text"]),
+    OBJ({"text": P(STR)}, ["text"]),
 )
 def clipboard_write(args, ctx) -> str:
     try:
@@ -52,7 +52,7 @@ def clipboard_write(args, ctx) -> str:
 @tool(
     "read_file",
     "Read a text file from disk and return its contents.",
-    OBJ({"path": P(STR, "Absolute path to the file")}, ["path"]),
+    OBJ({"path": P(STR)}, ["path"]),
 )
 def read_file(args, ctx) -> str:
     path = resolve_user_path(args.get("path", ""))
@@ -69,8 +69,8 @@ def read_file(args, ctx) -> str:
 @tool(
     "write_file",
     "Create or overwrite a text file with the given content.",
-    OBJ({"path": P(STR, "Absolute path to write"),
-         "content": P(STR, "Full text content to write")}, ["path", "content"]),
+    OBJ({"path": P(STR),
+         "content": P(STR)}, ["path", "content"]),
     dangerous=True,
 )
 def write_file(args, ctx) -> str:
@@ -106,7 +106,7 @@ def list_dir(args, ctx) -> str:
 @tool(
     "search_files",
     "Search a directory tree for files matching a glob pattern (e.g. *.pdf, report*).",
-    OBJ({"directory": P(STR, "Root directory to search"),
+    OBJ({"directory": P(STR),
          "pattern": P(STR, "Glob pattern, e.g. *.png")}, ["directory", "pattern"]),
 )
 def search_files(args, ctx) -> str:

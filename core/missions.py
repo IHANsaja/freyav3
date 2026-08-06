@@ -385,11 +385,9 @@ missions = MissionOrchestrator()
 
 @tool(
     "start_mission",
-    "Start a MISSION for a big, high-level goal that needs multiple planned steps "
-    "(e.g. 'prepare my presentation', 'organize this project', 'research X and write "
-    "a report'). The orchestrator plans the steps, executes them with background "
-    "agents, verifies each result, pauses for the user's approval on sensitive actions, "
-    "and reports back out loud. For small single tasks use dispatch_agent instead.",
+    "Start a mission for a big goal needing several planned steps ('prepare my presentation'). "
+    "It plans, executes, verifies and reports back, pausing for approval on sensitive steps. "
+    "For a single task use dispatch_agent.",
     OBJ({"goal": P(STR, "The complete high-level goal, with any constraints the user mentioned")},
         ["goal"]),
 )

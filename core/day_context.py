@@ -331,16 +331,22 @@ class DayContext:
                    if e["kind"] == "note" and e["subject"].lower() in ("open", "todo", "pending")]
         return " ".join(bits), pending
 
-    async def _summarize(self, day: str, api_key: str | None) -> tuple[str, list[str], list[str]]:
-        """(summary, carry_over, highlights) for a day that is being closed."""
+    async def _summarize(self, day: str, api_key: str | None
+                         ) -> tuple[str, list[str], list[str], bool]:
+        """(summary, carry_over, highlights, from_model) for a day being closed.
+
+        `from_model` is False when the deterministic fallback wrote the text.
+        Those close-outs are bookkeeping, not memory, and must not be archived
+        into the long-term store — see rotate().
+        """
         evs = self.events(day, limit=120)
         acts = self.activity(day, limit=10)
         if not evs and not acts:
-            return "", [], []
+            return "", [], [], False
 
         fallback_summary, fallback_carry = self._fallback_summary(day)
         if not api_key:
-            return fallback_summary, fallback_carry, []
+            return fallback_summary, fallback_carry, [], False
 
         timeline = "\n".join(
             f"{e['ts'][11:16]} [{e['kind']}] {e['subject']+': ' if e['subject'] else ''}{e['text']}"
@@ -384,10 +390,10 @@ class DayContext:
             summary = str(data.get("summary", "")).strip() or fallback_summary
             carry = [str(c).strip() for c in data.get("carry_over", []) if str(c).strip()][:8]
             highs = [str(h).strip() for h in data.get("highlights", []) if str(h).strip()][:6]
-            return summary, carry, highs
+            return summary, carry, highs, True
         except Exception as e:
             print(f"  [day] summarizer unavailable ({e}); using deterministic close-out.")
-            return fallback_summary, fallback_carry, []
+            return fallback_summary, fallback_carry, [], False
 
     async def rotate(self, api_key: str | None = None, day: str | None = None) -> dict | None:
         """Close one day and start the next. Returns the closed day, or None.
@@ -405,7 +411,7 @@ class DayContext:
                 return None
             closing = pending[0]
 
-        summary, carry, highs = await self._summarize(closing, api_key)
+        summary, carry, highs, from_model = await self._summarize(closing, api_key)
         with self._lock:
             self._conn.execute(
                 "UPDATE days SET closed_at = ?, summary = ?, carry_over = ?, highlights = ? "
@@ -422,8 +428,11 @@ class DayContext:
                                    (json.dumps(carry), today))
                 self._conn.commit()
 
-        # Keep the long-term store in sync — one durable row per closed day.
-        if summary:
+        # Keep the long-term store in sync — but only for days that were
+        # actually about something. Archiving every close-out meant rows like
+        # "Recorded: 1 note." accumulating forever in long-term memory, each one
+        # paying rent in the system prompt and telling her nothing.
+        if summary and from_model:
             try:
                 from core.memory_store import get_store
                 get_store().add(kind="session_summary", subject=closing, content=summary,
@@ -645,10 +654,8 @@ from core.registry import tool, OBJ, P, STR  # noqa: E402  (registry imports con
 
 @tool(
     "note_day_context",
-    "Record something into today's context — what the user is working on, a decision made, "
-    "something that happened. Use it when something matters beyond this minute but isn't a "
-    "permanent fact (use `remember` for those). Mark it open/todo if it is unfinished, and it "
-    "will carry into tomorrow when the day rotates.",
+    "Record something into today's context — what he's working on, a decision, something that "
+    "happened. For durable facts use `remember`. Tag it open/todo and it carries into tomorrow.",
     OBJ({
         "text": P(STR, "What happened, one sentence"),
         "subject": P(STR, "Optional tag — a project name, or 'open'/'todo' if unfinished"),
@@ -665,9 +672,8 @@ async def note_day_context(args, ctx) -> str:
 
 @tool(
     "get_day_context",
-    "Read the context of a day — today by default, or 'yesterday' or a YYYY-MM-DD date. "
-    "Use when the user asks what they did today/yesterday/on a date, what they were working "
-    "on, or where their time went.",
+    "Read a day's context — today, 'yesterday', or YYYY-MM-DD. Use for what he did, what he was "
+    "working on, or where his time went.",
     OBJ({"day": P(STR, "'today', 'yesterday', or a YYYY-MM-DD date")}),
 )
 async def get_day_context_tool(args, ctx) -> str:

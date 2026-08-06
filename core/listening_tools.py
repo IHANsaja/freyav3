@@ -13,10 +13,8 @@ from core.registry import tool, OBJ
 
 @tool(
     "pause_listening",
-    "Mute your own listening (stop the mic) so a movie or background sound doesn't make you "
-    "respond. Use when the user says he's watching something, wants quiet, says 'stop listening', "
-    "'pause', 'mute yourself', etc. Tell him you'll stop, and that he can tap Resume on the "
-    "dashboard or press Ctrl+Alt+Space to bring you back.",
+    "Mute your mic so a movie or background noise can't trigger you. Use on 'stop listening', "
+    "'quiet', 'I am watching something'. Tell him Ctrl+Alt+Space or Resume brings you back.",
     OBJ(),
 )
 def pause_listening(args, ctx) -> str:

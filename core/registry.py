@@ -35,8 +35,14 @@ ARR = types.Type.ARRAY
 
 
 def P(type_, description: str = "", **kw) -> types.Schema:
-    """A single property schema."""
-    return types.Schema(type=type_, description=description, **kw)
+    """A single property schema.
+
+    An empty description is dropped rather than serialized as `""`. Some
+    parameters need no gloss — `path`, `url`, `query` say it themselves once the
+    tool description is read — and every declaration is re-sent on every turn,
+    so an empty field is pure tax.
+    """
+    return types.Schema(type=type_, description=description or None, **kw)
 
 
 def OBJ(properties: dict | None = None, required: list | None = None) -> types.Schema:

@@ -16,7 +16,7 @@ import base64
 TOOL_DECLARATIONS = [
     types.FunctionDeclaration(
         name="open_app",
-        description="Launch an application by name. Use this when the user says open, launch or start an app.",
+        description="Launch an application by name.",
         parameters=types.Schema(
             type=types.Type.OBJECT,
             properties={
@@ -40,7 +40,7 @@ TOOL_DECLARATIONS = [
     ),
     types.FunctionDeclaration(
         name="switch_mode",
-        description="Switch Freya into a different operational mode. Use when the user says 'switch to coding mode', 'language learning mode', 'go back to normal', etc.",
+        description="Switch Freya into a different operational mode, e.g. coding or language learning.",
         parameters=types.Schema(
             type=types.Type.OBJECT,
             properties={
@@ -54,9 +54,8 @@ TOOL_DECLARATIONS = [
     ),
     types.FunctionDeclaration(
         name="get_news",
-        description="Fetch latest news for a topic, read it aloud, AND show the headlines with "
-                    "images on the dashboard scene (no browser). Use this (or get_world_news) for "
-                    "ALL news and news-image requests — never open a browser for news.",
+        description="Latest news on a topic, read aloud and shown with images on the dashboard. "
+                    "Never open a browser for news.",
         parameters=types.Schema(
             type=types.Type.OBJECT,
             properties={
@@ -290,8 +289,17 @@ class FreyaModel:
         if target >= trigger:
             target = max(1000, trigger // 2)
 
+        # Measure what actually goes over the wire. `str(decl)` is the pydantic
+        # repr, which pads every unset field with `=None` and overstates the
+        # real cost by roughly a third — a meter that lies is worse than none.
+        def _decl_chars(d) -> int:
+            try:
+                return len(d.model_dump_json(exclude_none=True, by_alias=True))
+            except Exception:
+                return len(str(d))
+
         prompt_tokens = len(self.personality or "") // 4
-        tool_tokens = sum(len(str(d)) for d in declarations) // 4
+        tool_tokens = sum(_decl_chars(d) for d in declarations) // 4
         baseline = prompt_tokens + tool_tokens
 
         print(f"  Context budget: baseline ~{baseline:,} tok "

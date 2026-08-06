@@ -46,9 +46,9 @@ async def _emit(ctx, payload: dict) -> None:
 
 @tool(
     "set_expression",
-    "Set your avatar's emotional expression so your body language matches your words. "
-    "Use sparingly at genuine emotional beats, not every sentence." + _NO_NARRATE,
-    OBJ({"expression": P(STR, "Your avatar's expression", enum=EXPRESSIONS),
+    "Set your avatar's expression to match your words. Sparingly, at genuine emotional "
+    "beats." + _NO_NARRATE,
+    OBJ({"expression": P(STR, enum=EXPRESSIONS),
          "intensity": P(NUM, "0.0-1.0, default 0.7")},
         ["expression"]),
 )
@@ -65,7 +65,7 @@ async def set_expression(args, ctx) -> str:
     "set_gesture",
     "Play a one-shot body gesture on your avatar to punctuate what you're saying. "
     "It plays once and returns to your current pose." + _NO_NARRATE,
-    OBJ({"gesture": P(STR, "The gesture to play", enum=GESTURES)}, ["gesture"]),
+    OBJ({"gesture": P(STR, enum=GESTURES)}, ["gesture"]),
 )
 async def set_gesture(args, ctx) -> str:
     name = str(args.get("gesture", "")).lower().strip()
@@ -77,9 +77,9 @@ async def set_gesture(args, ctx) -> str:
 
 @tool(
     "set_idle_state",
-    "Change your avatar's resting posture. States: standing (default), seated "
-    "(relaxed night-time presence), attentive (leaning in, focused on the user)." + _NO_NARRATE,
-    OBJ({"state": P(STR, "The idle posture", enum=IDLE_STATES)}, ["state"]),
+    "Change your avatar's resting posture: standing (default), seated (relaxed), "
+    "attentive (leaning in)." + _NO_NARRATE,
+    OBJ({"state": P(STR, enum=IDLE_STATES)}, ["state"]),
 )
 async def set_idle_state(args, ctx) -> str:
     name = str(args.get("state", "")).lower().strip()

@@ -604,11 +604,9 @@ def _safe_listdir(path: str) -> list[str]:
 # ══════════════════════════════════════════════
 @tool(
     "find_on_pc",
-    "Find where something lives on the user's computer — an app, a project, a document, a folder. "
-    "ALWAYS use this before asking him where something is: you have an index of his machine and "
-    "you can search it yourself. If it isn't in the index this searches the disk live, which "
-    "takes a few seconds — say 'give me a minute' out loud first, then call it. Only ask the user "
-    "where something is if this comes back with nothing.",
+    "Find where an app, project, document or folder lives on this PC. ALWAYS use this before "
+    "asking him where something is. A live disk search takes seconds — say 'give me a second' "
+    "first. Only ask him if this finds nothing.",
     OBJ({"what": P(STR, "What you're looking for, e.g. 'my CV', 'freyav3', 'valorant'"),
          "kind": P(STR, "Optional filter: app, project, document, folder, media")},
         ["what"]),
@@ -754,10 +752,9 @@ def list_my_projects(args, ctx) -> str:
 
 @tool(
     "refresh_pc_knowledge",
-    "Re-scan the computer for newly installed apps or new projects. You almost never need this: "
-    "find_on_pc already searches the disk live when something isn't indexed. Only use it if the user "
-    "explicitly asks you to update what you know. It runs silently in the background — say one "
-    "short line and move on; never poll it, never narrate its progress.",
+    "Re-scan the PC for new apps and projects. Rarely needed — find_on_pc already searches "
+    "live. Only on explicit request. Runs in the background: say one short line, never "
+    "narrate progress.",
     OBJ({"deep": P(STR, "'true' to scan data drives more thoroughly (slower)")}),
 )
 async def refresh_pc_knowledge(args, ctx) -> str:

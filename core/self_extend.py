@@ -65,9 +65,8 @@ def load_custom_tools():
 
 @tool(
     "create_tool",
-    "Write a brand-new tool for yourself in Python and add it to your abilities permanently. "
-    "Provide a snake_case name, a description, and the function BODY (lines that use the variable "
-    "`text` for input and `return` a string). The new tool becomes available next session.",
+    "Write yourself a new Python tool, permanently. Give a snake_case name, a description, and "
+    "the function BODY (use `text` for input, `return` a string). Available next session.",
     OBJ({"name": P(STR, "snake_case tool name, e.g. roll_dice"),
          "description": P(STR, "What the tool does (Gemini sees this)"),
          "python_code": P(STR, "The function body. Use `text` for input, `return` a string. "

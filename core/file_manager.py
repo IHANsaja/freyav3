@@ -71,7 +71,7 @@ def _dest_for(src: str, dst: str) -> str:
     "copy_item",
     "Copy a file or an entire folder to another location. Works for both — folders are "
     "copied recursively with everything inside them.",
-    OBJ({"source": P(STR, "Path of the file or folder to copy"),
+    OBJ({"source": P(STR),
          "destination": P(STR, "Destination path, or an existing folder to copy into"),
          "overwrite": P(BOOL, "Replace the destination if it already exists (default false)")},
         ["source", "destination"]),
@@ -101,7 +101,7 @@ def copy_item(args, ctx) -> str:
     "move_item",
     "Move or rename a file or folder. Renaming is just moving it to a new name in the same "
     "folder — use this for both.",
-    OBJ({"source": P(STR, "Path of the file or folder to move"),
+    OBJ({"source": P(STR),
          "destination": P(STR, "New full path, or an existing folder to move it into"),
          "overwrite": P(BOOL, "Replace the destination if it already exists (default false)")},
         ["source", "destination"]),
@@ -136,7 +136,7 @@ def move_item(args, ctx) -> str:
     "delete_item",
     "Delete a file or folder. By default it goes to the Windows Recycle Bin so it can be "
     "restored; only set permanent when the user explicitly asks for it to be gone for good.",
-    OBJ({"path": P(STR, "Path of the file or folder to delete"),
+    OBJ({"path": P(STR),
          "permanent": P(BOOL, "Bypass the Recycle Bin and erase it irreversibly (default false)")},
         ["path"]),
     dangerous=True,
@@ -168,7 +168,7 @@ def delete_item(args, ctx) -> str:
 @tool(
     "create_folder",
     "Create a new folder (including any missing parent folders).",
-    OBJ({"path": P(STR, "Full path of the folder to create")}, ["path"]),
+    OBJ({"path": P(STR)}, ["path"]),
     dangerous=True,
 )
 def create_folder(args, ctx) -> str:
@@ -187,10 +187,8 @@ def create_folder(args, ctx) -> str:
 # ══════════════════════════════════════════════
 @tool(
     "get_user_folders",
-    "Look up the REAL paths of the user's standard folders (desktop, documents, downloads, "
-    "pictures, music, videos, home). Use this whenever he refers to one by name and you "
-    "need a concrete path — never guess his username or build the path yourself, because "
-    "the account folder is often not what you'd expect from his first name.",
+    "Real paths of his standard folders (desktop, documents, downloads, pictures, music, "
+    "videos, home). Never guess his username — the account folder is not his first name.",
     OBJ(),
 )
 def get_user_folders(args, ctx) -> str:
@@ -203,7 +201,7 @@ def get_user_folders(args, ctx) -> str:
     "file_info",
     "Get details about a file or folder: size, when it was created and last modified, and "
     "for folders how many items it holds.",
-    OBJ({"path": P(STR, "Path to inspect")}, ["path"]),
+    OBJ({"path": P(STR)}, ["path"]),
 )
 def file_info(args, ctx) -> str:
     path = _x(args.get("path", ""))
@@ -287,7 +285,7 @@ def find_files_by(args, ctx) -> str:
     "open_path",
     "Open a file or folder in whatever Windows app handles it — a document in Word, a photo "
     "in the viewer, a folder in Explorer.",
-    OBJ({"path": P(STR, "Path of the file or folder to open")}, ["path"]),
+    OBJ({"path": P(STR)}, ["path"]),
 )
 def open_path(args, ctx) -> str:
     path = _x(args.get("path", ""))
@@ -305,7 +303,7 @@ def open_path(args, ctx) -> str:
 @tool(
     "reveal_in_explorer",
     "Open File Explorer with a specific file highlighted, so the user can see where it lives.",
-    OBJ({"path": P(STR, "Path of the file to reveal")}, ["path"]),
+    OBJ({"path": P(STR)}, ["path"]),
 )
 def reveal_in_explorer(args, ctx) -> str:
     path = _x(args.get("path", ""))
@@ -324,7 +322,7 @@ def reveal_in_explorer(args, ctx) -> str:
 @tool(
     "zip_item",
     "Compress a file or folder into a .zip archive.",
-    OBJ({"source": P(STR, "File or folder to compress"),
+    OBJ({"source": P(STR),
          "destination": P(STR, "Path for the .zip file (defaults to alongside the source)")},
         ["source"]),
     dangerous=True,
@@ -355,7 +353,7 @@ def zip_item(args, ctx) -> str:
 @tool(
     "unzip_archive",
     "Extract a .zip archive into a folder.",
-    OBJ({"path": P(STR, "The .zip file to extract"),
+    OBJ({"path": P(STR),
          "destination": P(STR, "Folder to extract into (defaults to a folder beside the zip)")},
         ["path"]),
     dangerous=True,

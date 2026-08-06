@@ -114,9 +114,8 @@ def _scan(max_elements: int = 60, max_depth: int = 14) -> list[dict]:
 # ══════════════════════════════════════════════
 @tool(
     "read_screen_elements",
-    "Scan the focused window with Windows UI Automation and return a numbered list of the REAL "
-    "clickable elements (buttons, fields, links) with their exact positions. Call this before "
-    "click_element to act precisely without guessing coordinates from a screenshot.",
+    "List the REAL clickable elements in the focused window (buttons, fields, links) with their "
+    "positions. Call before click_element instead of guessing from a screenshot.",
     OBJ(),
 )
 def read_screen_elements(args, ctx) -> str:
@@ -304,10 +303,9 @@ def _do_set(ctrl, value: str) -> str:
 
 @tool(
     "find_element",
-    "Search the focused window for an element by the text/label it shows (e.g. 'Save', 'address "
-    "bar', 'Bold'). Reports whether it exists and what similar elements are around it. Use to "
-    "locate something before acting on it — you never need coordinates.",
-    OBJ({"query": P(STR, "Visible name/label of the element to find")}, ["query"]),
+    "Find an element in the focused window by its visible label (e.g. 'Save'). Reports whether "
+    "it exists and what is near it. You never need coordinates.",
+    OBJ({"query": P(STR)}, ["query"]),
 )
 def find_element(args, ctx) -> str:
     query = (args.get("query") or "").strip()
@@ -330,11 +328,9 @@ def find_element(args, ctx) -> str:
 
 @tool(
     "control_element",
-    "Operate a UI element by its visible name using the Windows accessibility API — no coordinates, "
-    "no guessing. This is your PRIMARY way to control apps. Actions: 'click' (press a button/link), "
-    "'type' (set a field's text via value), 'toggle' (checkbox/switch), 'select' (list/menu item), "
-    "'expand'/'collapse', 'focus'. It returns what happened so you can confirm it worked yourself "
-    "instead of asking. Focus the right app window first if needed.",
+    "Operate a UI element by its visible name — your PRIMARY way to control apps, no coordinates. "
+    "Actions: click, type (with value), toggle, select, expand, collapse, focus. Returns what "
+    "happened, so confirm it yourself instead of asking. Focus the window first if needed.",
     OBJ({"query": P(STR, "Visible name/label of the target element, e.g. 'Save', 'Search'"),
          "action": P(STR, "click, type, toggle, select, expand, collapse, or focus"),
          "value": P(STR, "Text to enter when action is 'type'")}, ["query", "action"]),

@@ -59,10 +59,17 @@ def _migrate_markdown_if_needed() -> None:
 # ══════════════════════════════════════════════
 #  READ MEMORY
 # ══════════════════════════════════════════════
-def load_memory() -> str:
+def load_memory(config: dict | None = None) -> str:
     """The memory block injected into the system prompt."""
     _migrate_markdown_if_needed()
-    content = get_store().compose_prompt()
+    store = get_store()
+
+    removed = store.dedupe() + store.purge_trivial_day_summaries()
+    if removed:
+        print(f"  Memory: deactivated {removed} duplicate/empty item(s).")
+
+    max_items = int(((config or {}).get("memory", {}) or {}).get("prompt_max_items", 20))
+    content = store.compose_prompt(max_items=max_items)
     print("  Memory loaded." if content else "  No memories yet, starting fresh.")
     return content
 

@@ -127,11 +127,8 @@ def _save_to_kb(label: str, docs: list[str]) -> bool:
 # ══════════════════════════════════════════════
 @tool(
     "web_search",
-    "Search the LIVE web and read the top results yourself — fast and quota-free (no browser). "
-    "Use this for quick lookups: 'search the web for X', 'look something up', 'what's the latest "
-    "on X', checking a current fact, date, price, or definition. By default it also saves what it "
-    "finds to your knowledge base so you remember it. Prefer this over browser_task for simple "
-    "information lookups.",
+    "Search the live web and read the top results — fast, quota-free, no browser. Your default "
+    "for lookups and current facts; saves findings to your knowledge base.",
     OBJ({"query": P(STR, "What to search for"),
          "save": P(BOOL, "Save the findings to your knowledge base (default true)")}, ["query"]),
 )
@@ -155,30 +152,49 @@ def web_search(args, ctx) -> str:
             f"\nSummarize these for the user and cite sources naturally.{saved}")
 
 
-def _surfaces(where: str | None) -> tuple[bool, bool]:
-    """Parse the `where` argument into (dashboard, desktop).
+def _surfaces(where: str | None, config: dict | None = None) -> tuple[bool, bool, str]:
+    """Parse the `where` argument into (dashboard, desktop, how_it_was_decided).
 
-    Default is BOTH: the point of these tools is that the user sees the result
-    even when the dashboard isn't the window in front of him.
+    The default is `auto`, and auto means *look where he actually is*. Freya
+    picks the surface from what she can see herself, because she is a poor judge
+    of it from inside the conversation: when he is studying, in an editor, or
+    watching something full-screen, a card on the dashboard is displayed to
+    nobody, and he ends up asking her to repeat something she already "showed".
+
+      dashboard in front  -> dashboard only; a toast over her own UI is noise
+      anything else       -> both; the dashboard keeps the record, the desktop
+                             card on the right is the copy he will actually see
+
+    An explicit `where` is always obeyed — if he asks for one surface, he gets
+    exactly that.
     """
-    w = (where or "both").strip().lower()
+    w = (where or "auto").strip().lower()
     if w in ("desktop", "popup", "screen"):
-        return False, True
+        return False, True, "desktop"
     if w in ("dashboard", "canvas", "ui"):
-        return True, False
-    return True, True
+        return True, False, "dashboard"
+    if w == "both":
+        return True, True, "both"
+
+    try:
+        from core.context_watch import attention
+        att = attention(config)
+    except Exception:
+        return True, True, "both"
+
+    if att.get("onDashboard"):
+        return True, False, "dashboard"
+    return True, True, "desktop"
 
 
 @tool(
     "show_image",
-    "Download an image and display it — on the dashboard canvas and as a popup card on the "
-    "user's desktop, so he sees it even while working in another window. Provide a direct image "
-    "URL, or a search query to find a relevant image (e.g. for a news story, place, person, or "
-    "topic). Use it to illustrate what you're talking about — especially alongside news.",
+    "Show an image on the dashboard and as a desktop popup. Give a direct URL or a query to "
+    "find one. Use it to illustrate what you're saying.",
     OBJ({"query": P(STR, "What to show, e.g. 'Eiffel Tower at night' or a news subject"),
          "url": P(STR, "A direct image URL (optional; use instead of query)"),
          "label": P(STR, "Short caption shown on the card"),
-         "where": P(STR, "'both' (default), 'dashboard', or 'desktop'")}),
+         "where": P(STR, "Leave empty to auto-pick by where he is looking; or 'desktop', 'dashboard', 'both'")}),
 )
 async def show_image(args, ctx) -> str:
     loop = asyncio.get_running_loop()
@@ -194,30 +210,27 @@ async def show_image(args, ctx) -> str:
     raw = await loop.run_in_executor(None, lambda: download_image_raw(url, url))
     if not raw:
         return "I found an image but couldn't download it."
-    dash, desk = _surfaces(args.get("where"))
+    dash, desk, how = _surfaces(args.get("where"), ctx.config)
     # ONE event carrying both surface flags — emitting twice would render the
     # card twice on the dashboard, since the WS broadcaster forwards everything
     # and only the consumers decide what to draw.
     await ctx.emit("image", {"data": raw, "label": label, "source": _domain(url),
                              "dashboard": dash, "popup": desk})
-    return f"There — I've put an image of {label} on screen."
+    where = "on the right of his screen" if desk else "on the dashboard"
+    return f"[SILENT] Image of {label} is up {where}."
 
 
 @tool(
     "show_info",
-    "SHOW the user something you found — text, a snippet, a definition, a summary, a price, a "
-    "quote — as a card with an optional picture. It appears on the dashboard canvas AND as a "
-    "popup on the right of his desktop, so he reads it even while working in another window. "
-    "Use this whenever information is easier to read than to hear (numbers, names, addresses, "
-    "code, lists, anything he might want to look at), and after web_search / web_fetch / "
-    "browser_task when the answer is worth putting on screen. Keep the body short — a few "
-    "sentences at most — and still say the gist out loud.",
+    "Put text on screen as a card (dashboard + desktop popup). Use whenever something is easier "
+    "read than heard — numbers, names, addresses, code, lists — and after a web lookup worth "
+    "showing. Keep the body to a few sentences and still say the gist aloud.",
     OBJ({"title": P(STR, "Short headline for the card"),
          "text": P(STR, "The information to display — a few sentences, plain text"),
          "source": P(STR, "Where it came from, e.g. a domain or publication"),
          "image_url": P(STR, "Direct image URL to illustrate the card (optional)"),
          "image_query": P(STR, "Search for a fitting image instead of giving a URL (optional)"),
-         "where": P(STR, "'both' (default), 'dashboard', or 'desktop'"),
+         "where": P(STR, "Leave empty to auto-pick by where he is looking; or 'desktop', 'dashboard', 'both'"),
          "seconds": P(NUM, "How long the desktop popup stays up (default 14)")},
         ["title"]),
 )
@@ -241,22 +254,26 @@ async def show_info(args, ctx) -> str:
     except (TypeError, ValueError):
         duration_ms = 14000
 
-    dash, desk = _surfaces(args.get("where"))
+    dash, desk, how = _surfaces(args.get("where"), ctx.config)
     await ctx.emit("card", {
         "title": title, "body": text, "source": source or _domain(img_url),
         "image": raw, "url": img_url or None, "durationMs": duration_ms,
         "dashboard": dash, "popup": desk,
     })
 
-    surface = "on your screen" if desk else "on the dashboard"
-    return (f"[SILENT] Card '{title}' is {surface} now. Say the gist naturally — "
+    if desk:
+        surface = ("on the right of his screen, over whatever he's working in"
+                   if how == "desktop" else "on his screen")
+    else:
+        surface = "on the dashboard he's looking at"
+    return (f"[SILENT] Card '{title}' is up {surface}. Say the gist naturally — "
             f"don't read the card out or mention that you displayed it.")
 
 
 @tool(
     "web_fetch",
-    "Open a specific web page by URL and read its main text — quota-free, no browser. Use to go "
-    "deeper on a result from web_search. Can save the page to your knowledge base.",
+    "Open a URL and read its main text — quota-free, no browser. Use to go deeper on a "
+    "web_search result.",
     OBJ({"url": P(STR, "The full URL to open and read"),
          "save": P(BOOL, "Save the page content to your knowledge base")}, ["url"]),
 )

@@ -34,9 +34,8 @@ def _mirror_to_rag(item_id: int, subject: str, content: str):
 
 @tool(
     "remember",
-    "Save something important to your long-term memory the moment you learn it: a "
-    "preference, a person and their role, an ongoing project, a deadline or follow-up "
-    f"(include due_at), or a notable fact. Kinds: {', '.join(_USER_KINDS)}.",
+    "Save something to long-term memory the moment you learn it — a preference, a person, a "
+    f"project, a deadline (with due_at), a fact. Kinds: {', '.join(_USER_KINDS)}.",
     OBJ({
         "kind": P(STR, f"One of: {', '.join(_USER_KINDS)}"),
         "subject": P(STR, "Short subject — a name, project, or topic"),
@@ -68,8 +67,8 @@ async def remember(args, ctx) -> str:
     "List what you remember, optionally filtered by kind "
     f"({', '.join(_USER_KINDS)}) or a search query.",
     OBJ({
-        "kind": P(STR, "Optional kind filter"),
-        "query": P(STR, "Optional search text"),
+        "kind": P(STR),
+        "query": P(STR),
     }),
 )
 async def list_memories(args, ctx) -> str:
@@ -89,9 +88,9 @@ async def list_memories(args, ctx) -> str:
     "update_memory_item",
     "Correct or update a stored memory by its id (get ids from list_memories).",
     OBJ({
-        "memory_id": P(INT, "The item id"),
-        "content": P(STR, "New content"),
-        "subject": P(STR, "New subject"),
+        "memory_id": P(INT),
+        "content": P(STR),
+        "subject": P(STR),
         "importance": P(INT, "New importance 1-5"),
         "due_at": P(STR, "New ISO due datetime, for deadlines/followups"),
     }, ["memory_id"]),
@@ -166,11 +165,9 @@ def _search_transcript(lines: list[str], query: str, limit: int, context_lines: 
 
 @tool(
     "recall_conversation",
-    "Look back at what was actually said earlier in this session. Use it the moment a "
-    "reference doesn't land — 'question 12', 'that file', 'the one we picked', 'like I said' "
-    "— instead of asking him to repeat himself or re-share his screen. Do it silently and "
-    "just continue; never announce that you looked it up. Omit `query` to re-read the last "
-    "few exchanges.",
+    "Look back at what was said earlier this session. Use it the moment a reference doesn't "
+    "land ('question 12', 'that file') instead of asking him to repeat himself. Silent — never "
+    "announce it. Omit query for the last few exchanges.",
     OBJ({
         "query": P(STR, "Words to search for, e.g. 'question 12' or 'exam'. Omit for the "
                         "most recent exchanges."),

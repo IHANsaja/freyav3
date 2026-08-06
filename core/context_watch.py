@@ -69,6 +69,69 @@ class _Span:
     started: float
 
 
+# ══════════════════════════════════════════════
+#  ATTENTION — is he actually looking at her?
+# ══════════════════════════════════════════════
+# The dashboard is where Freya shows things, and most of the time it is not the
+# window in front of him: he is studying, in an editor, or watching something
+# full-screen. Anything she "displays" there is then displayed to nobody.
+#
+# This is deliberately independent of the tracker loop above — it reads the
+# foreground window directly, so it works even with `context_tracker.enabled`
+# off, which is the default. Cached for a couple of seconds because a single
+# spoken turn can produce several show_* calls.
+
+_ATTENTION_TTL_S = 2.0
+_DASHBOARD_HINTS = ("f.r.e.y.a", "freya v3")
+_attention_cache: tuple[float, dict] = (0.0, {})
+
+
+def attention(config: dict | None = None) -> dict:
+    """Where his attention is right now.
+
+    Returns `onDashboard` (is Freya's own UI in front?), `paused` (mic muted —
+    he asked for quiet, so he's watching something), `focusMinutes` (how long
+    he's been in the current window, when the tracker is running), and `known`
+    (False when Win32 metadata isn't available at all).
+    """
+    global _attention_cache
+    now = time.time()
+    ts, cached = _attention_cache
+    if cached and now - ts < _ATTENTION_TTL_S:
+        return cached
+
+    state = {"app": "", "title": "", "idleS": 0, "onDashboard": False,
+             "focusMinutes": 0, "paused": runtime.is_paused(), "known": False}
+    try:
+        app, title, idle_s = _win_snapshot()
+        hints = tuple(h.lower() for h in
+                      ((config or {}).get("desktop_popup", {}) or {}).get(
+                          "dashboard_title_match", _DASHBOARD_HINTS))
+        low = (title or "").lower()
+        state.update(app=app, title=title, idleS=int(idle_s), known=True,
+                     onDashboard=any(h in low for h in hints))
+    except Exception:
+        # No pywin32 / no desktop session. "Unknown" must behave like "not
+        # looking", so nothing is ever quietly shown where he cannot see it.
+        pass
+
+    # `tracker` is defined at the bottom of this module; look it up lazily so
+    # this stays callable no matter when it is imported.
+    _t = globals().get("tracker")
+    current = _t._current if _t is not None else None
+    if current and current.app == state["app"] and current.title == state["title"]:
+        state["focusMinutes"] = int((now - current.started) // 60)
+
+    _attention_cache = (now, state)
+    return state
+
+
+def heads_down(config: dict | None = None) -> bool:
+    """True when he is working in something else, not watching Freya's UI."""
+    att = attention(config)
+    return not att["onDashboard"]
+
+
 class ContextTracker:
     def __init__(self):
         self._task: asyncio.Task | None = None

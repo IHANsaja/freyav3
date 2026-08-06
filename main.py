@@ -16,7 +16,7 @@ output_idx = config["audio"]["output_device_index"]
 
 async def main():
     global config, api_key, model_id, voice, base_personality
-    memory = load_memory()
+    memory = load_memory(config)
     personality = build_system_prompt(get_mode_personality(config, base_personality), memory)  # ← was just base_personality
     transcript = TranscriptCollector()
 

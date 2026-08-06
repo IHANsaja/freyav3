@@ -15,7 +15,7 @@ Freya is a local, real-time voice assistant built on a low-latency bi-directiona
 > [!NOTE]
 > For the modular design, internal subsystems, and operational patterns, see the [Architecture Documentation](./ARCHITECTURE.md).
 
-Armed with **75+ tools**, a **mission orchestrator**, **approval-gated autopilot**, **structured long-term memory**, **webcam hand-gesture control**, an **intent-driven 3D avatar**, and **always-on context awareness**, Freya doesn't just run tools; she plans, acts, verifies, remembers, and animates herself.
+Armed with **100+ tools**, a **mission orchestrator**, **approval-gated autopilot**, **structured long-term memory**, a **rolling day context**, **webcam hand-gesture control**, an **intent-driven 3D avatar**, and **always-on context awareness**, Freya doesn't just run tools; she plans, acts, verifies, remembers, and animates herself.
 
 ---
 
@@ -72,6 +72,8 @@ cd freya-ui; npm install; cd ..
 *   🎯 **Mission Mode**: Give a high-level goal — Freya plans steps, executes them with background agents, verifies each result, and reports back out loud.
 *   🛡️ **Approval Checkpoints**: Sensitive actions pause for your explicit yes — by voice or a dashboard button — with an editable folder sandbox.
 *   🧠 **Structured Memory**: Typed, searchable, editable memory items in SQLite+FTS5, mirrored into semantic vector recall. Due items get spoken reminders.
+*   📅 **Day Context**: She knows what *today* has been about — what you worked on, where the hours went, what's still open — and rotates it at 4am, carrying unfinished threads into tomorrow.
+*   🪪 **She Knows You by Name**: One file, `memory/MEMORY.md`, is the only place your name and profile live. She uses it the way someone close to you would.
 *   👁️ **Context Awareness**: Opt-in, metadata-only tracking of your active window with rate-limited proactive suggestions. Zero screenshots unless you accept.
 *   💃 **Living 3D Avatar**: Freya animates her own body through tools — clip crossfades, procedural breathing/look-at, shader accents. Never frozen.
 *   📊 **Live Dashboard**: Real sub-agent tracking, the running conversation, mission progress, and genuine system telemetry — no placeholder data.
@@ -108,11 +110,14 @@ Design notes:
 | 🤖 **Sub-Agents** | Delegates multi-step research, coding, or UI tasks to background workers on their own threads. | `dispatch_agent`, `check_agents` |
 | 🌐 **Browser** | Drives a real Chromium window the way a person does — DuckDuckGo search, curved mouse moves, typed keystrokes, scrolling and reading. Built from scratch in `core/browser`. | `browser_task`, `browser_research`, `browser_open`, `browser_status` |
 | 🔎 **Web & News** | Quota-free search/fetch plus live headlines projected into the scene. | `web_search`, `web_fetch`, `get_world_news` |
+| 🖼️ **Show, Don't Say** | Puts what she found on screen, following your attention: a card on the right of your screen when you're heads-down, the dashboard when you're actually looking at it. | `show_info`, `show_image` |
+| 📅 **Day Context** | Knows what today has been about; rotates and summarises the day at 4am, carrying open threads forward. | `note_day_context`, `get_day_context`, `rotate_day_context` |
+| 🔦 **PC Knowledge** | Knows where your apps, projects and documents live, and searches the disk live when they aren't indexed. | `find_on_pc`, `list_installed_apps`, `refresh_pc_knowledge` |
 | 📁 **File Manager** | Copy, move/rename, recycle, zip/unzip, inspect, reveal in Explorer, find large/recent files. | `copy_item`, `move_item`, `delete_item`, `zip_item`, `find_files_by`, … |
 | 🎬 **Watch Video** | Actually watches a YouTube link or local file and answers questions about it. | `use_skill("watch")` |
 | 💼 **Career Ops** | Bridged [career-ops](https://github.com/santifer/career-ops): scan portals, A–G offer evaluation, CV tailoring, tracking. | `use_career_mode`, `run_career_script` |
 | 💃 **Avatar** | Emotional expressions, gestures, poses on her 3D body. | `set_expression`, `set_gesture`, `set_idle_state` |
-| 🧠 **Memory** | Save/search/edit/forget typed memories mid-conversation. | `remember`, `list_memories`, `forget`, `whats_coming_up` |
+| 🧠 **Memory** | Save/search/edit/forget typed memories mid-conversation, and re-read what was said earlier this session. | `remember`, `list_memories`, `forget`, `whats_coming_up`, `recall_conversation` |
 | 👁️ **Context** | Always-on window awareness with proactive suggestions. | `enable_context_awareness`, `watch_screen` |
 | 🎯 **System Automation** | Clipboard, windows, volume/media, lock/sleep, screen control via UI-Automation. | `clipboard_*`, `focus_window`, `control_element`, … |
 | 🧬 **Self-Extension** | Autonomously writes, loads, and uses new Python tools. | `create_tool`, `run_code` |
@@ -158,7 +163,10 @@ freyav3/
 │   ├── md_skills.py        # SKILL.md packs w/ progressive disclosure
 │   ├── career_ops.py       # career-ops bridge
 │   ├── memory_store.py     # Structured memory (SQLite + FTS5)
+│   ├── day_context.py      # Rolling day context + daily rotation
+│   ├── user_identity.py    # Reads memory/MEMORY.md — the only source of your name
 │   ├── context_watch.py    # Always-on metadata context tracker (opt-in)
+│   ├── desktop_popup.py    # show_info / show_image cards outside the dashboard
 │   └── ...                 # audio, model loop, registry, screen, browser, scheduler
 ├── freya-ui/
 │   └── app/
@@ -167,7 +175,10 @@ freyav3/
 │       ├── hooks/useHandGestures.ts     # MediaPipe webcam tracking
 │       └── hooks/useGestureOrbBridge.ts # Gesture -> reaction dispatch
 ├── skills/watch/           # Markdown skill pack: video watching
-├── memory/                 # freya_memory.db (SQLite), rag_db (Chroma), schedule.json
+├── memory/
+│   ├── MEMORY.md           # Who you are (gitignored) — copy MEMORY.example.md
+│   ├── freya_memory.db     # Structured memory + day context (SQLite)
+│   └── rag_db/             # Chroma vector store
 ├── install.ps1             # One-command installer
 ├── main.py                 # CLI entrypoint
 ├── server.py               # FastAPI + WebSocket backend
@@ -195,6 +206,56 @@ cd freya-ui; npm run dev
 Open `http://localhost:3000` and press **START FREYA**.
 
 **Headless CLI:** `.\venv\Scripts\python.exe main.py` (`Ctrl+C` stops and persists memory).
+
+---
+
+## 🪪 Telling Her Who You Are
+
+Nothing in the code knows your name. Copy the template and fill it in:
+
+```powershell
+copy memory\MEMORY.example.md memory\MEMORY.md
+```
+
+```markdown
+# Freya Memory — Jane Doe
+
+## Personal
+- Name: Jane Doe
+- Preferred name: Jane      # optional; otherwise she uses your first name
+```
+
+`memory/MEMORY.md` is the **only** source for your name — never the config, never your Windows
+account folder, never something she inferred mid-conversation. She reads it at startup and
+addresses you by name the way someone close to you would: at greetings, reassurance, and when
+picking a thread back up — not in every sentence. Without the file she simply says "you".
+
+It's gitignored, so the repo never carries your details.
+
+---
+
+## 🧮 Context Budget
+
+Freya's *immovable* context — system prompt plus every tool declaration — is re-sent on every
+turn, so it costs you on each one and eats into what's left for the conversation.
+
+| | tokens | set by |
+| :--- | ---: | :--- |
+| model input limit (`gemini-3.1-flash-live-preview`) | 131,072 | Google |
+| `freya.compression_trigger_tokens` | 96,000 | you |
+| `freya.compression_target_tokens` | 32,000 | you |
+| baseline: system prompt + 105 tool declarations | ~11,300 | code |
+| conversation retained after a compression | ~20,700 | result |
+
+She prints this at startup so it can never drift silently:
+
+```
+Context budget: baseline ~11,316 tok (prompt 2,599 + 105 tools 8,717)
+                trigger 96,000 / target 32,000 -> ~20,684 tok for conversation
+```
+
+If the target ever drops below the baseline she says so loudly — that combination shreds the
+conversation on every turn, and it looks exactly like her "forgetting" what you just told her.
 
 ---
 
@@ -242,6 +303,11 @@ curl -X POST http://localhost:8000/debug/emit -H "Content-Type: application/json
 | **Mission mode** | *"Start a mission: research screen recorders and write a comparison to my desktop"* | Plan appears, steps tick with verification, she reports aloud |
 | **Watch a video** | *"Watch this video and tell me what happens at 2:30"* + a YouTube link | She actually analyses the frames and audio |
 | **Memory** | *"Remember my dentist appointment is Friday at 3pm"* | A `deadline` item appears in Settings; she reminds you when due |
+| **Attention-aware cards** | While studying or watching something, ask her to look something up | The answer lands as a card on the right of your screen, not on a dashboard you aren't looking at |
+| **Day context** | *"What did I work on yesterday?"* | She answers from the rotated day summary, not a guess |
+| **Carry-over** | *"Note that the API refactor is still open"* | It's tagged open and reappears in tomorrow's context after the 4am rotation |
+| **Session recall** | Discuss something, talk for a while, then refer back to it obliquely | She looks it up in the transcript instead of asking you to repeat |
+| **Your name** | Just talk to her | She uses your first name naturally — never a pet name |
 | **Personas** | Click **Night Guardian** | Voice, theme, core speed and avatar posture all change |
 
 ---

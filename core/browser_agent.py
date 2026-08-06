@@ -103,13 +103,9 @@ def _run_job(job_id: str, task: str, config: dict, main_loop: asyncio.AbstractEv
 # ══════════════════════════════════════════════
 @tool(
     "browser_task",
-    "Drive a real Chromium browser like a person: search, click through pages, fill forms, log "
-    "in, navigate a web app, add to cart, work through a multi-step site. It searches with "
-    "DuckDuckGo, reads the pages it opens, and runs in the background — reporting back out loud "
-    "when done. "
-    "For a quick fact or a one-line lookup use web_search instead: it's faster and quota-free. "
-    "For headlines use get_world_news / get_news. Use the browser when the task genuinely needs "
-    "reading real pages or interacting with them.",
+    "Drive a real browser: click through pages, fill forms, log in, work through a multi-step "
+    "site. Runs in the background and reports back. Only when clicking is genuinely needed — "
+    "use web_search for lookups, get_world_news for headlines.",
     OBJ({"task": P(STR, "The web task in plain language, e.g. 'find the top 3 GPUs under $500 "
                         "with current prices' or 'log into my account and check the order status'")},
         ["task"]),
@@ -135,11 +131,9 @@ async def browser_task(args, ctx) -> str:
 
 @tool(
     "browser_research",
-    "Research something on the live web with the real browser and WAIT for the findings. "
-    "Searches DuckDuckGo, opens the actual pages, reads them, and returns what it found. "
-    "Slower than web_search but far deeper — it reads full articles instead of snippets and "
-    "follows links. Use this when you need real substance: comparing sources, current details, "
-    "anything where a search snippet isn't enough.",
+    "Research on the live web with the real browser and wait for findings. Slower than "
+    "web_search but deeper: reads full articles and follows links. Use when a snippet "
+    "isn't enough.",
     OBJ({"topic": P(STR, "What to research, as a full question or instruction"),
          "depth": P(INT, "Roughly how many actions to spend on it (default 12, max 30). Each "
                          "search, click, scroll and read costs one.")},
@@ -181,10 +175,9 @@ async def browser_research(args, ctx) -> str:
 
 @tool(
     "browser_open",
-    "Open a page in the real browser and read it out — no LLM loop, no quota. Use when you "
-    "already know the URL and just want to see what's on it, or when web_fetch was blocked by a "
-    "site that needs real JavaScript to render.",
-    OBJ({"url": P(STR, "The URL to open")}, ["url"]),
+    "Open a known URL in the real browser and read it — no quota. Use when web_fetch was "
+    "blocked by a site that needs JavaScript.",
+    OBJ({"url": P(STR)}, ["url"]),
     gate="browser.enabled",
 )
 async def browser_open(args, ctx) -> str:

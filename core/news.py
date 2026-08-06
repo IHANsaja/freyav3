@@ -139,10 +139,8 @@ async def _emit_and_speak(items: list[dict], label: str, ctx) -> str:
 # ── Tools (async so they can emit UI events while staying fast for voice) ──
 @tool(
     "get_world_news",
-    "Fetch the latest TOP world/global news, read the headlines aloud, AND display them with "
-    "images directly on Freya's dashboard scene (no browser). This is the tool for ANY news "
-    "request — including 'show me the news images', 'show news', 'what's happening around the "
-    "world'. NEVER open a browser for news; this shows everything in the UI.",
+    "Top world headlines, read aloud and shown with images on the dashboard. Use for ANY news "
+    "request, including 'show the news images'. NEVER open a browser for news.",
     OBJ(),
 )
 async def get_world_news(args: dict, ctx) -> str:

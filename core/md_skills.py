@@ -151,10 +151,8 @@ def _build_decl() -> str:
     names+descriptions permanently visible without their bodies."""
     skills = discover()
     base = (
-        "Load the full instructions for one of your installed skills, then follow them. "
-        "A skill is a capability pack that teaches you how to do something specific — you "
-        "only see its summary until you call this, so call it BEFORE attempting any task a "
-        "skill covers. "
+        "Load a skill's full instructions, then follow them. You only see the summary until "
+        "you call this, so call it BEFORE attempting a task a skill covers. "
     )
     if not skills:
         return base + "(No skills are installed yet — they live in the project's skills/ folder.)"
@@ -208,9 +206,8 @@ def list_skills(args, ctx) -> str:
 
 @tool(
     "run_skill_script",
-    "Run a script that ships inside one of your skills (from its scripts/ folder). Use this "
-    "only after use_skill told you to — its instructions say which script to run and with "
-    "what arguments. Long jobs like video processing are expected to take a while.",
+    "Run a script from a skill's scripts/ folder. Only after use_skill told you to. Long jobs "
+    "like video processing take a while.",
     OBJ({"skill": P(STR, "The skill id that owns the script"),
          "script": P(STR, "Script filename, e.g. watch.py"),
          "args": P(ARR, "Command-line arguments to pass", items=P(STR))},

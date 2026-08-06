@@ -159,7 +159,7 @@ async def run_freya():
     model_id = get_mode_model(config)
     voice = get_mode_voice(config)
     base_personality = get_personality(config)
-    memory = load_memory()
+    memory = load_memory(config)
     personality = build_system_prompt(get_mode_personality(config, base_personality), memory)
     transcript = TranscriptCollector()
 

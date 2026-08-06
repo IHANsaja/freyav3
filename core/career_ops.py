@@ -122,11 +122,9 @@ def _ready() -> tuple[bool, str]:
 
 def _build_decl() -> str:
     base = (
-        "Load one career-ops job-search workflow and follow it. career-ops is the user's job "
-        "search system: it finds openings, scores them against a structured A-G rubric, "
-        "tailors his CV, drafts cover letters and tracks applications. Call this BEFORE "
-        "doing any job-search work so you follow the real procedure instead of improvising. "
-        "It never applies or sends anything on its own — you evaluate and draft, the user decides. "
+        "Load one career-ops job-search workflow and follow it. Call this BEFORE any job-search "
+        "work so you follow the real procedure. It never applies or sends anything itself — "
+        "you draft, he decides. "
     )
     modes = discover_modes()
     if not modes:
@@ -184,10 +182,8 @@ def use_career_mode(args, ctx) -> str:
 
 @tool(
     "run_career_script",
-    "Run one of career-ops' built-in Node scripts — the deterministic parts of the job "
-    "pipeline (portal scanning, tracker checks, PDF generation). Use only when a career-ops "
-    "workflow told you to. Common commands: 'scan' (find new openings), 'verify' (check "
-    "pipeline integrity), 'pipeline' (status), 'dedup', 'normalize', 'doctor' (diagnose setup).",
+    "Run a career-ops Node script (scan, verify, pipeline, dedup, normalize, doctor). Only when "
+    "a career-ops workflow told you to.",
     OBJ({"command": P(STR, "npm script name, e.g. scan, verify, doctor, pdf"),
          "args": P(ARR, "Extra command-line arguments", items=P(STR))},
         ["command"]),

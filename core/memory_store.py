@@ -184,15 +184,29 @@ class MemoryStore:
 
     # ── Rendered views ─────────────────────────────────────────────────────
 
-    def compose_prompt(self, max_items: int = 60) -> str:
+    def compose_prompt(self, max_items: int = 20) -> str:
         """The system-prompt memory block: ranked facts, people, projects,
-        preferences, upcoming deadlines, and recent session summaries."""
+        preferences, upcoming deadlines, and recent session summaries.
+
+        This block is re-sent on every single turn, so it is a standing tax on
+        the context budget — it has to earn its place. Two rules keep it honest:
+
+        `markdown_import` rows are excluded. Those 300-odd items are the old
+        append-only log imported wholesale on first run; they are historical
+        chatter, and letting them compete on importance meant they crowded out
+        the facts that actually matter right now (his exam tomorrow, what he is
+        studying). They are not lost — `recall`, `list_memories` and the vector
+        store still reach every one of them on demand.
+
+        And `max_items` is small. Always-resident memory is for what she must
+        know without asking; everything else she can go and look up.
+        """
         if self.count() == 0:
             return ""
         sections: list[str] = []
 
         core_kinds = ("preference", "person", "project", "fact")
-        items = self.list(kinds=list(core_kinds), limit=max_items)
+        items = self._prompt_items(list(core_kinds), max_items)
         by_kind: dict[str, list[MemoryItem]] = {}
         for item in items:
             by_kind.setdefault(item.kind, []).append(item)
@@ -212,12 +226,69 @@ class MemoryStore:
             lines = "\n".join(f"- {r['due_at']}: {r['subject']} — {r['content']}" for r in upcoming)
             sections.append(f"### Upcoming deadlines & follow-ups\n{lines}")
 
-        summaries = self.list(kinds=["session_summary"], limit=3)
+        summaries = self._prompt_items(["session_summary"], 3)
         if summaries:
             lines = "\n".join(f"- {i.created_at[:10]}: {i.content}" for i in summaries)
             sections.append(f"### Recent sessions\n{lines}")
 
         return "\n\n".join(sections)
+
+    # Rows that never belong in the always-on block: bulk history, and the
+    # deterministic day-rotation fallbacks ("A quiet day", "Recorded: 1 note.")
+    # which say nothing but would otherwise occupy a Recent-sessions slot.
+    _PROMPT_EXCLUDED_SOURCES = ("markdown_import",)
+    _TRIVIAL_PREFIXES = ("A quiet day", "Recorded: ")
+
+    # Annotations are quoted: `list` is a method on this class, so a bare
+    # `list[str]` here resolves to it instead of the builtin.
+    def _prompt_items(self, kinds: "list[str]", limit: int) -> "list[MemoryItem]":
+        """Items eligible for the system prompt, most important first."""
+        placeholders = ",".join("?" * len(kinds))
+        excluded = ",".join("?" * len(self._PROMPT_EXCLUDED_SOURCES))
+        rows = self._conn.execute(
+            f"SELECT * FROM items WHERE active = 1 AND kind IN ({placeholders}) "
+            f"AND source NOT IN ({excluded}) "
+            f"ORDER BY importance DESC, updated_at DESC LIMIT ?",
+            [*kinds, *self._PROMPT_EXCLUDED_SOURCES, limit * 2],
+        ).fetchall()
+        items = [self._row(r) for r in rows
+                 if not r["content"].startswith(self._TRIVIAL_PREFIXES)]
+        return items[:limit]
+
+    def purge_trivial_day_summaries(self) -> int:
+        """Soft-delete day close-outs that the deterministic fallback wrote.
+
+        `day_context.rotate()` no longer archives these, but rows written before
+        that fix are still sitting in long-term memory saying nothing ("About
+        1h 35m at the machine, mostly Code.exe. Recorded: 1 note."). Matched
+        narrowly on the fallback's own phrasing so a real summary is never hit.
+        """
+        with self._lock:
+            cur = self._conn.execute(
+                "UPDATE items SET active = 0 WHERE active = 1 AND source = 'day_rotation' "
+                "AND (content LIKE 'A quiet day%' OR content LIKE 'Recorded: %' "
+                "     OR content LIKE '%at the machine, mostly%')"
+            )
+            self._conn.commit()
+            return cur.rowcount
+
+    def dedupe(self) -> int:
+        """Deactivate all but the newest row of each identical content.
+
+        Session extraction re-learns the same thing across sessions ("Freya's
+        clicks are offset a little below") and the markdown import brought in
+        its own repeats, so the store accumulated 50-odd contents duplicated up
+        to nine times each — every copy paying rent in the prompt. Soft-delete
+        only: this is the same `active = 0` that `forget` uses, so nothing is
+        destroyed and `recall` behaves exactly as it would after a manual forget.
+        """
+        with self._lock:
+            cur = self._conn.execute(
+                "UPDATE items SET active = 0 WHERE active = 1 AND id NOT IN "
+                "(SELECT MAX(id) FROM items WHERE active = 1 GROUP BY content)"
+            )
+            self._conn.commit()
+            return cur.rowcount
 
     def export_markdown(self) -> str:
         """Legacy view for the old GET /memory endpoint / settings modal."""

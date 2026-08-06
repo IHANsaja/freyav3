@@ -95,7 +95,7 @@ def upsert_memory_item(doc_id: str, text: str):
     "recall",
     "Semantically search Freya's long-term memory and any indexed documents for relevant info. "
     "Use when the user asks what you remember about something, or references his notes/files.",
-    OBJ({"query": P(STR, "What to recall, in natural language")}, ["query"]),
+    OBJ({"query": P(STR)}, ["query"]),
     gate="rag.enabled",
 )
 def recall(args, ctx) -> str:
@@ -134,7 +134,7 @@ def recall(args, ctx) -> str:
     "index_folder",
     "Index a folder of documents/notes into Freya's knowledge base so she can recall from them "
     "later. Reads common text files recursively.",
-    OBJ({"path": P(STR, "Absolute folder path to index")}, ["path"]),
+    OBJ({"path": P(STR)}, ["path"]),
     gate="rag.enabled",
 )
 def index_folder(args, ctx) -> str:
