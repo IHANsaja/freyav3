@@ -84,7 +84,12 @@ def _load() -> tuple[str, str]:
         if _cache["path"] == path and _cache["mtime"] == mtime:
             return str(_cache["text"]), str(_cache["name"])
         try:
-            with open(path, "r", encoding="utf-8") as f:
+            # utf-8-sig, not utf-8: install.ps1 writes this file with PowerShell
+            # 5.1's `Out-File -Encoding utf8`, which emits a BOM. A leading
+            # ﻿ would stop the first line matching `^#`, so a MEMORY.md
+            # carrying only a `# Freya Memory - Name` heading would silently
+            # yield no name at all.
+            with open(path, "r", encoding="utf-8-sig") as f:
                 text = f.read()
         except Exception as e:
             print(f"  MEMORY.md could not be read ({e}); continuing without a user name.")

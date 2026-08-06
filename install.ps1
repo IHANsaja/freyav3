@@ -245,12 +245,26 @@ GEMINI_API_KEY=$key
     Write-Ok "Wrote .env"
 }
 
-# Seed personal memory from the example, if present.
-$memExample = Join-Path $root "memory\freya_memory.example.md"
-$memFile    = Join-Path $root "memory\freya_memory.md"
-if ((Test-Path $memExample) -and (-not (Test-Path $memFile))) {
-    Copy-Item $memExample $memFile
-    Write-Ok "Seeded memory\freya_memory.md"
+# Identity. memory\MEMORY.md is the ONLY place Freya takes your name from
+# (core\user_identity.py) - without it she never uses a name at all.
+$idExample = Join-Path $root "memory\MEMORY.example.md"
+$idFile    = Join-Path $root "memory\MEMORY.md"
+if (-not (Test-Path $idFile)) {
+    Write-Host ""
+    Write-Host "    What should Freya call you? (Enter to skip)" -ForegroundColor White
+    $userName = Read-Host "    Your name"
+
+    if ([string]::IsNullOrWhiteSpace($userName)) {
+        if (Test-Path $idExample) {
+            Copy-Item $idExample $idFile
+            Write-Warn2 "No name given - edit memory\MEMORY.md to add one"
+        }
+    } else {
+        $userName = $userName.Trim()
+        $idBody = "# Freya Memory - $userName`r`n`r`n## Personal`r`n- Name: $userName`r`n"
+        $idBody | Out-File -FilePath $idFile -Encoding utf8
+        Write-Ok "Wrote memory\MEMORY.md - Freya will call you $userName"
+    }
 }
 
 # -- 6. Launch helper ------------------------------------------------------
