@@ -1,6 +1,7 @@
 from asyncio import selector_events
 import asyncio
 import json
+import re
 import time
 from concurrent.futures import ThreadPoolExecutor
 from google import genai
@@ -13,6 +14,31 @@ import base64
 # ─────────────────────────────────────────────
 #  TOOL DEFINITIONS  (Gemini function calling)
 # ─────────────────────────────────────────────
+# Protocol debris that occasionally lands in the OUTPUT TRANSCRIPTION stream —
+# the model narrating its own function call rather than speaking. Observed live:
+#
+#   Freya: response:trigger_emphasis{}It is now Saturday, August 8th...
+#
+# The system prompt already tells her never to speak tool names, but this is not
+# something she chose to say — it arrives in the transcription channel, so no
+# amount of prompting removes it. Left alone it is spoken aloud, printed, shown
+# in the dashboard, and then written into memory and day context, where it comes
+# back as context on the next turn.
+_SPEECH_NOISE = re.compile(
+    r"""(?xi)
+    response:\s*\w+\s*\{[^{}]*\}   # response:trigger_emphasis{}
+    | ^\s*tool_(?:code|outputs?)\s*:? # stray tool_code / tool_output markers
+    | \[SILENT[^\]]*\]             # our own silent-note marker, if it ever echoes
+    """
+)
+
+
+def _clean_speech(text: str) -> str:
+    """Strip protocol debris out of a spoken-transcription fragment."""
+    cleaned = _SPEECH_NOISE.sub(" ", text)
+    return re.sub(r"\s{2,}", " ", cleaned).strip()
+
+
 TOOL_DECLARATIONS = [
     # NOTE: `open_app` is deliberately NOT declared here. It lives in
     # core/machine_index.py as a real @tool, because the declaration is the
@@ -103,18 +129,10 @@ TOOL_DECLARATIONS = [
             required=["city"]
         )
     ),
-    types.FunctionDeclaration(
-        name="open_project",
-        description="Open a project folder in VS Code by project name.",
-        parameters=types.Schema(
-            type=types.Type.OBJECT,
-            properties={
-                "project_name": types.Schema(type=types.Type.STRING,
-                    description="Project name configured in config e.g. freyav3")
-            },
-            required=["project_name"]
-        )
-    ),
+    # NOTE: `open_project` is declared in core/machine_index.py alongside
+    # `open_app`, for the same reason — this declaration said "configured in
+    # config e.g. freyav3", so the model only ever tried the config keys and
+    # the handler behind it could only answer "add it to freya_config.json".
     types.FunctionDeclaration(
         name="run_terminal_command",
         description="Run a terminal or shell command and read back the output. Good for git status, pip list, directory listing etc.",
@@ -772,7 +790,7 @@ class FreyaModel:
                         # Buffer Freya's words — don't emit yet
                         out = getattr(sc, 'output_transcription', None)
                         if out:
-                            text = getattr(out, 'text', str(out)).strip()
+                            text = _clean_speech(getattr(out, 'text', str(out)) or "")
                             if text:
                                 # Model started answering → the user's turn is over
                                 await flush_user()

@@ -107,7 +107,7 @@
   },
   "ambient": {
     "enabled": true,
-    "vision_model": "gemini-2.5-flash",
+    "vision_model": "gemini-flash-latest",
     "context_tracker": {
       "enabled": false,
       "stuck_minutes": 10,
@@ -118,7 +118,7 @@
         "08:00"
       ],
       "voice_suggestions": false,
-      "draft_model": "gemini-2.5-flash-lite"
+      "draft_model": "gemini-flash-lite-latest"
     }
   },
   "context": {
@@ -129,8 +129,8 @@
   },
   "browser": {
     "enabled": true,
-    "llm_model": "gemini-2.5-flash",
-    "fallback_model": "gemini-2.5-flash-lite",
+    "llm_model": "gemini-flash-latest",
+    "fallback_model": "gemini-flash-lite-latest",
     "headless": false,
     "max_steps": 25,
     "vision": true,
@@ -178,19 +178,19 @@
     "refresh_days": 7
   },
   "missions": {
-    "planner_model": "gemini-2.5-flash",
-    "verifier_model": "gemini-2.5-flash-lite",
+    "planner_model": "gemini-flash-latest",
+    "verifier_model": "gemini-flash-lite-latest",
     "max_plan_steps": 6
   },
   "sub_agents": {
     "researcher": {
-      "model": "gemini-2.5-flash"
+      "model": "gemini-flash-latest"
     },
     "coder": {
-      "model": "gemini-2.5-flash"
+      "model": "gemini-flash-latest"
     },
     "operator": {
-      "model": "gemini-2.5-flash"
+      "model": "gemini-flash-latest"
     }
   },
   "mcp_servers": {

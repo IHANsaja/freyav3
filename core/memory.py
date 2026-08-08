@@ -7,7 +7,7 @@ Migration: on first run with an empty store, an existing memory/freya_memory.md 
 parsed deterministically (section headers → subjects, bullets → items) and renamed to
 freya_memory.imported.md as a backup. No LLM call is needed to migrate.
 
-Session-end extraction now asks gemini-2.5-flash-lite for a JSON array of typed
+Session-end extraction now asks gemini-flash-lite-latest for a JSON array of typed
 memory items plus one session summary, inserted as rows — searchable and editable
 instead of appended forever.
 """
@@ -213,7 +213,7 @@ TRANSCRIPT:
             response = await loop.run_in_executor(
                 None,
                 lambda: client.models.generate_content(
-                    model="gemini-2.5-flash-lite",
+                    model="gemini-flash-lite-latest",
                     contents=prompt,
                     config=types.GenerateContentConfig(
                         response_mime_type="application/json",

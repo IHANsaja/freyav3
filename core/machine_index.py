@@ -826,6 +826,41 @@ async def _open_app_smart(args, ctx) -> str:
     return f"{hit['name']} is launching (from {hit['path']})."
 
 
+@tool(
+    "open_project",
+    "Open one of his code projects in VS Code by name. You do NOT need a path and must never "
+    "ask him to add it to a config file — this searches the indexed projects on the whole PC. "
+    "Names are matched loosely, so 'freya v3', 'freyav3' and 'freya' all find the same project.",
+    OBJ({"project_name": P(STR, "What he called the project, e.g. freyav3, battlezik")},
+        ["project_name"]),
+)
+async def open_project(args, ctx) -> str:
+    name = str(args.get("project_name") or "").strip()
+    if not name:
+        return "Which project?"
+
+    configured = (ctx.config.get("projects") or {}).get(name.lower())
+    if not (configured and os.path.isdir(configured)):
+        # Tokenised, so "freya v3" and "freya_v3" reach the folder called freyav3.
+        hit = best_match(name, kind="project") or next(
+            (r for r in lookup(name) if r["kind"] == "project" and os.path.isdir(r["path"])), None)
+        configured = hit["path"] if hit else None
+
+    if not configured:
+        found = [h for h in live_search(name, kinds=("project",)) if os.path.isdir(h["path"])]
+        configured = found[0]["path"] if found else None
+
+    if not configured:
+        return (f"I can't find a project called '{name}' anywhere on this PC. Ask him what it's "
+                f"actually called, or where he keeps it.")
+
+    try:
+        subprocess.Popen(["code", configured], shell=True)
+    except Exception as e:
+        return f"Found {name} at {configured} but couldn't open VS Code: {e}"
+    return f"Opening {os.path.basename(configured)} in VS Code (from {configured})."
+
+
 def _launchable(hit: dict) -> bool:
     """Is this indexed entry still something we can actually start?"""
     path = hit.get("path") or ""

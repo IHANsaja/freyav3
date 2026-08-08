@@ -381,7 +381,7 @@ class DayContext:
             )
             client = genai.Client(api_key=api_key)
             resp = await client.aio.models.generate_content(
-                model="gemini-2.5-flash-lite",
+                model="gemini-flash-lite-latest",
                 contents=prompt,
                 config=types.GenerateContentConfig(
                     response_mime_type="application/json", response_schema=schema),

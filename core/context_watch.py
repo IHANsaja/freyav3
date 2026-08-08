@@ -311,7 +311,7 @@ class ContextTracker:
             from config import get_agent_api_key
             client = genai.Client(api_key=get_agent_api_key())
             resp = await client.aio.models.generate_content(
-                model=self._cfg().get("draft_model", "gemini-2.5-flash-lite"),
+                model=self._cfg().get("draft_model", "gemini-flash-lite-latest"),
                 contents=(
                     "You are Freya, a proactive assistant. Based on this observation, write ONE "
                     "short, casual, genuinely useful suggestion to the user (max 15 words). Offer help, "

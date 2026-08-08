@@ -132,8 +132,8 @@ class BrowserAgent:
         self.bcfg = self.config.get("browser", {})
         self.on_step = on_step          # async (step:int, action:str, detail:str)
         self.client = genai.Client(api_key=get_agent_api_key())
-        self.model = self.bcfg.get("llm_model", "gemini-2.5-flash")
-        self.fallback = self.bcfg.get("fallback_model", "gemini-2.5-flash-lite")
+        self.model = self.bcfg.get("llm_model", "gemini-flash-latest")
+        self.fallback = self.bcfg.get("fallback_model", "gemini-flash-lite-latest")
         self.max_steps = int(self.bcfg.get("max_steps", 25))
         self.use_vision = bool(self.bcfg.get("vision", True))
         self.history: list[types.Content] = []

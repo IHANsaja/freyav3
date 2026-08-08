@@ -37,8 +37,8 @@ StepStatus = Literal["pending", "running", "verifying", "awaiting_approval",
 MissionStatus = Literal["planning", "running", "awaiting_approval", "verifying",
                         "done", "failed", "cancelled"]
 
-PLANNER_MODEL_DEFAULT = "gemini-2.5-flash"
-VERIFIER_MODEL_DEFAULT = "gemini-2.5-flash-lite"
+PLANNER_MODEL_DEFAULT = "gemini-flash-latest"
+VERIFIER_MODEL_DEFAULT = "gemini-flash-lite-latest"
 MAX_PLAN_STEPS = 6
 MAX_STEP_ATTEMPTS = 2
 

@@ -31,7 +31,7 @@ from core.registry import register, tool, dispatch as registry_dispatch, ToolCon
 # Built-in agent specs (config `sub_agents.<type>` may override model/system/tools).
 DEFAULT_AGENTS = {
     "researcher": {
-        "model": "gemini-2.5-flash",
+        "model": "gemini-flash-latest",
         "system": (
             "You are Freya's research sub-agent. Investigate the task properly — do not answer "
             "from what you already know.\n"
@@ -49,7 +49,7 @@ DEFAULT_AGENTS = {
                   "get_world_news", "recall", "read_file", "search_files"],
     },
     "coder": {
-        "model": "gemini-2.5-flash",
+        "model": "gemini-flash-latest",
         "system": (
             "You are Freya's coding sub-agent. Complete the engineering task end to end: read the "
             "relevant files, make the change, run code/tests to verify. Be precise. Finish with a "
@@ -59,7 +59,7 @@ DEFAULT_AGENTS = {
                   "search_files", "run_terminal_command"],
     },
     "operator": {
-        "model": "gemini-2.5-flash",
+        "model": "gemini-flash-latest",
         "system": (
             "You are Freya's desktop-operator sub-agent. Drive the Windows GUI through the "
             "accessibility API — never guess coordinates. Workflow: focus_window to bring the "
