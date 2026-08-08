@@ -17,6 +17,9 @@ interface PortraitSceneProps {
   /** Bubbles the AvatarController's expression state up so the orb scene can
    *  react (matching accent color + particle-burst transition). */
   onExpressionChange: (e: ExpressionEvent | null) => void;
+  /** Hold the figure still. Expressions still bubble up, so the orb keeps
+   *  reacting — only the body animation is suspended. */
+  frozen?: boolean;
 }
 
 /** Reports Suspense resolution upward without rendering anything. */
@@ -33,11 +36,12 @@ function LoadSentinel({ onLoading }: { onLoading: (l: boolean) => void }) {
  * the pointer while it's anywhere over the window — aware, not robotic. The
  * AvatarController's own procedural layer keeps breathing/sway underneath.
  */
-function PortraitRig({ children }: { children: ReactNode }) {
+function PortraitRig({ children, frozen = false }: { children: ReactNode; frozen?: boolean }) {
   const group = useRef<THREE.Group>(null!);
   const target = useRef({ yaw: 0, pitch: 0 });
 
   useEffect(() => {
+    if (frozen) return;
     const onMove = (e: PointerEvent) => {
       const nx = (e.clientX / window.innerWidth) * 2 - 1;
       const ny = (e.clientY / window.innerHeight) * 2 - 1;
@@ -46,10 +50,16 @@ function PortraitRig({ children }: { children: ReactNode }) {
     };
     window.addEventListener("pointermove", onMove, { passive: true });
     return () => window.removeEventListener("pointermove", onMove);
-  }, []);
+  }, [frozen]);
 
   useFrame((_, delta) => {
     if (!group.current) return;
+    // Frozen: hold the 3/4 portrait angle exactly, no cursor tracking. A still
+    // figure that still swivels to follow the mouse reads as half-broken.
+    if (frozen) {
+      group.current.rotation.set(0, -0.35, 0);
+      return;
+    }
     const k = Math.min(1, delta * 4);
     // -0.35 base yaw = the 3/4 portrait angle from the reference.
     group.current.rotation.y = THREE.MathUtils.lerp(group.current.rotation.y, -0.35 + target.current.yaw, k);
@@ -84,6 +94,7 @@ export default function PortraitScene({
   onLoading,
   onError,
   onExpressionChange,
+  frozen = false,
 }: PortraitSceneProps) {
   return (
     <PortraitErrorBoundary onError={onError}>
@@ -101,8 +112,13 @@ export default function PortraitScene({
         <ambientLight intensity={0.25} />
 
         <Suspense fallback={null}>
-          <PortraitRig>
-            <FreyaAvatar state={state} avatarIntent={avatarIntent} onExpression={onExpressionChange} />
+          <PortraitRig frozen={frozen}>
+            <FreyaAvatar
+              state={state}
+              avatarIntent={avatarIntent}
+              onExpression={onExpressionChange}
+              frozen={frozen}
+            />
           </PortraitRig>
           <LoadSentinel onLoading={onLoading} />
         </Suspense>
