@@ -714,8 +714,16 @@ class FreyaModel:
                                         # later. Client content is appended to the conversation
                                         # context deterministically and in order; turn_complete=
                                         # False adds the image WITHOUT triggering generation, so
-                                        # the tool response that follows is what resumes the model
-                                        # — with the image guaranteed already in context.
+                                        # the tool response that follows lands after it — with the
+                                        # image guaranteed already in context.
+                                        #
+                                        # The turn is then closed explicitly below. It has to be:
+                                        # per the SDK, turn_complete=False means "the model will
+                                        # wait for you to send additional client_content, and will
+                                        # not return until you send turn_complete=True". A tool
+                                        # response does NOT close a client-content turn, so she sat
+                                        # silent after taking the screenshot and only answered once
+                                        # the user spoke again and that utterance closed the turn.
                                         await session.send_client_content(
                                             turns=types.Content(
                                                 role="user",
@@ -745,6 +753,9 @@ class FreyaModel:
                                                 )}
                                             )]
                                         )
+                                        # Close the turn opened above. Without this she never
+                                        # replies to "look at my screen" — she just waits.
+                                        await session.send_client_content(turn_complete=True)
                                         print("  Screen sent to Gemini (client_content).")
                                     else:
                                         await session.send_tool_response(
