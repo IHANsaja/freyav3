@@ -30,6 +30,7 @@ not allowed to modify them anyway (see core/safety.py).
 """
 
 import fnmatch
+import json
 import os
 import re
 import sqlite3
@@ -37,10 +38,15 @@ import subprocess
 import threading
 import time
 
-from core.registry import register, tool, OBJ, P, STR, INT
-from core.user_paths import all_user_folders, resolve_user_path
+from core.registry import tool, OBJ, P, STR, INT, BOOL
+from core.user_paths import all_user_folders
 
 DB_PATH = os.path.join(os.path.dirname(__file__), "..", "memory", "machine_index.db")
+
+#: Prefix marking an entry Windows launches by app-id rather than by path
+#: (Microsoft Store / UWP apps). Defined up here because _add() has to recognise
+#: it before any scanner runs.
+UWP_PREFIX = "shell:AppsFolder\\"
 
 # Directory names never worth walking into. Dependency trees and caches are
 # where a naive indexer spends 95% of its time and finds nothing anyone asked
@@ -99,11 +105,15 @@ def _db() -> sqlite3.Connection:
 
 
 def _add(conn, kind: str, name: str, path: str, detail: str = "") -> None:
+    # Store-app entries are shell app-ids, not filesystem paths — abspath() would
+    # glue the working directory onto the front and turn a launchable id into
+    # nonsense like "F:\Projects\Freya\shell:AppsFolder\Microsoft.WindowsCalculator…".
+    stored = path if path.startswith(UWP_PREFIX) else os.path.abspath(path)
     try:
         conn.execute(
             "INSERT OR REPLACE INTO entries (kind, name, path, detail, seen_at) "
             "VALUES (?, ?, ?, ?, ?)",
-            (kind, name.strip(), os.path.abspath(path), detail, time.time()),
+            (kind, name.strip(), stored, detail, time.time()),
         )
     except Exception:
         pass
@@ -153,7 +163,12 @@ def lookup(query: str, kind: str | None = None, limit: int = 12) -> list[dict]:
             sql += " AND kind = ?"
             params.append(kind)
         # Cap the candidate set: a one-letter token would otherwise pull the
-        # whole table into memory before scoring.
+        # whole table into memory before scoring. The ORDER BY is what makes the
+        # cap safe — this table is ~87% indexed media, so an unordered LIMIT
+        # filled all 4000 slots with holiday photos and truncated the apps and
+        # documents away *before* scoring ever ran. Mirrors _KIND_RANK.
+        sql += (" ORDER BY CASE kind WHEN 'app' THEN 0 WHEN 'project' THEN 1 "
+                "WHEN 'folder' THEN 2 WHEN 'document' THEN 3 ELSE 4 END, LENGTH(name)")
         rows = conn.execute(sql + " LIMIT 4000", params).fetchall()
     finally:
         conn.close()
@@ -214,8 +229,13 @@ def best_match(query: str, kind: str | None = None) -> dict | None:
     # Something the user configured himself wins outright — he named it, so that is
     # what he means. ("valorant" matched both the registry entry and his own
     # configured Riot Client path; only one of those is his answer.)
+    #
+    # But only when it matches the name at least as well as the best hit does.
+    # Unconditionally, this rule made "open photos" launch Photoshop: `photoshop`
+    # is a configured app and merely *starts with* "photos", while the Store's
+    # `Photos` is an exact match. A config entry is a tiebreaker, not a trump card.
     configured = [h for h in hits if h["detail"] == "configured"]
-    if len(configured) == 1:
+    if len(configured) == 1 and configured[0]["score"][0] <= hits[0]["score"][0]:
         return configured[0]
 
     top, second = hits[0]["score"], hits[1]["score"]
@@ -338,6 +358,48 @@ def _scan_registry_apps(conn) -> int:
     return found
 
 
+def _scan_uwp_apps(conn) -> int:
+    """Microsoft Store / UWP apps, via Get-StartApps.
+
+    These have no Start Menu .lnk and no uninstall key, so both scanners above
+    miss them entirely — Calculator, Photos, Windows Terminal, the Store build
+    of WhatsApp. "Open calculator" then fell through to a 25-second live disk
+    walk and came back "I can't find anything called that installed".
+
+    Get-StartApps is the supported way to enumerate them and returns exactly
+    what the Start Menu shows, with the AppID needed to launch each one.
+    """
+    try:
+        proc = subprocess.run(
+            ["powershell", "-NoProfile", "-NonInteractive", "-Command",
+             "Get-StartApps | ConvertTo-Json -Compress"],
+            capture_output=True, text=True, timeout=60,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+        if proc.returncode != 0 or not (proc.stdout or "").strip():
+            return 0
+        data = json.loads(proc.stdout)
+    except Exception:
+        return 0  # no PowerShell, locked down, or a malformed dump — not fatal
+
+    if isinstance(data, dict):
+        data = [data]
+    found = 0
+    for item in data if isinstance(data, list) else []:
+        try:
+            name = str(item.get("Name") or "").strip()
+            app_id = str(item.get("AppID") or "").strip()
+        except AttributeError:
+            continue
+        # Win32 entries come back with a filesystem path as the AppID; the two
+        # scanners above already cover those and know the real executable.
+        if not name or not app_id or "!" not in app_id:
+            continue
+        _add(conn, "app", name, UWP_PREFIX + app_id, "uwp")
+        found += 1
+    return found
+
+
 # Executables that ship alongside real applications but are never what somebody
 # means when they name a program.
 _HELPER_EXE = (
@@ -369,14 +431,16 @@ def _scan_config_apps(conn, config: dict | None) -> int:
     """
     found = 0
     cfg = config or {}
-    for name, path in (cfg.get("apps") or {}).items():
-        if path:
-            _add(conn, "app", name, path, "configured")
-            found += 1
-    for name, path in (cfg.get("projects") or {}).items():
-        if path:
-            _add(conn, "project", name, path, "configured")
-            found += 1
+    for kind, block in (("app", cfg.get("apps")), ("project", cfg.get("projects"))):
+        for name, path in (block or {}).items():
+            # Don't index config rot. These entries go stale — installers leave
+            # placeholder paths behind ("F:/Your/Work/Folder/Path"), and apps
+            # like Discord pin a build folder their updater renames. A dead
+            # entry indexed as 'configured' outranks everything real, so
+            # "open work" confidently launched a path that does not exist.
+            if path and os.path.exists(path):
+                _add(conn, kind, name, path, "configured")
+                found += 1
     return found
 
 
@@ -467,6 +531,7 @@ def run_scan(config: dict | None = None, deep: bool = False) -> dict:
         try:
             summary["apps"] = (_scan_apps(conn)
                                + _scan_registry_apps(conn)
+                               + _scan_uwp_apps(conn)
                                + _scan_config_apps(conn, config))
             conn.commit()
 
@@ -488,20 +553,20 @@ def run_scan(config: dict | None = None, deep: bool = False) -> dict:
         return summary
 
 
-def scan_in_background(config: dict | None = None) -> None:
+def scan_in_background(config: dict | None = None, deep: bool = False) -> None:
     """Kick off the first-run scan without delaying startup."""
     global _scan_thread
     if _scan_state["running"]:
         return
     _scan_thread = threading.Thread(
-        target=lambda: _quiet_scan(config), daemon=True, name="freya-machine-index")
+        target=lambda: _quiet_scan(config, deep), daemon=True, name="freya-machine-index")
     _scan_thread.start()
 
 
-def _quiet_scan(config):
+def _quiet_scan(config, deep: bool = False):
     try:
         started = time.time()
-        summary = run_scan(config)
+        summary = run_scan(config, deep=deep)
         print(f"  Machine index: {summary['total']} things learned "
               f"({summary['apps']} apps) in {time.time() - started:.0f}s.")
     except Exception as e:
@@ -548,6 +613,12 @@ def live_search(query: str, kinds: tuple[str, ...] = (), limit: int = 10,
     q = (query or "").strip().lower()
     if not q:
         return []
+    # Tokenised, exactly like lookup(). This used to be a whole-string
+    # `q not in entry.lower()`, which meant the fallback path could never match
+    # a multi-word query: "my CV" never found "My CV ihan.docx", "vs code" never
+    # found "Code.exe". The index tokenised and the fallback didn't, so every
+    # two-word question silently died here after a 25-second walk.
+    toks = _tokens(q) or [q]
     deadline = time.time() + budget
     hits: list[dict] = []
     seen = set()
@@ -564,7 +635,8 @@ def live_search(query: str, kinds: tuple[str, ...] = (), limit: int = 10,
                 break
             dirs[:] = [d for d in dirs if d not in _SKIP_DIRS]
             for entry in dirs + files:
-                if q not in entry.lower():
+                low = entry.lower()
+                if not all(t in low for t in toks):
                     continue
                 full = os.path.join(dirpath, entry)
                 if full in seen:
@@ -641,16 +713,63 @@ def find_on_pc(args, ctx) -> str:
             "vague 'which one'.")
 
 
-# ── open_app override ──────────────────────────────────────────────────────
-# The legacy handler looked only in config["apps"] and, on a miss, returned
-# "I don't have a path configured for X. Please add it to freya_config.json."
-# Freya read that out as "could you point me to where it's installed?" — while
-# the index knew exactly where Blender was. A handler-only override (decl=None
-# keeps model.py's static declaration) makes the index the fallback, so the
-# question never comes up.
+# ── open_app ───────────────────────────────────────────────────────────────
+# This replaces the legacy handler in core/tools.py, which looked only in
+# config["apps"] and, on a miss, returned "I don't have a path configured for X.
+# Please add it to freya_config.json." Freya read that out as "could you point
+# me to where it's installed?" — while the index knew exactly where Blender was.
+#
+# It was first fixed as a handler-only override (decl=None), which kept
+# model.py's static declaration. That half-fixed it: the handler could reach
+# every indexed app, but the declaration still described open_app as taking
+# "valorant, photoshop, discord, steam, word, edge, vscode" — the config keys —
+# so the model never tried anything else. The declaration lives here now, and
+# the static one in model.py is gone. Both must not exist: Gemini rejects
+# duplicate function names.
 
-def _launch(path: str) -> None:
+def _exe_in(folder: str, wanted: str = "") -> str | None:
+    """The executable inside an install folder that is most likely *the* app.
+
+    _scan_registry_apps stores the registry's InstallLocation, which is a
+    directory. Launching a directory opened an Explorer window instead of the
+    program — 63 indexed apps behaved that way, VALORANT among them. So when the
+    indexed path is a folder, find the real exe: prefer one named like the app
+    (or like the folder), skip the installers and crash handlers, and take the
+    shallowest match so a bundled updater two levels down never wins.
+    """
+    target = _tokens(wanted or os.path.basename(folder.rstrip("\\/")))
+    best: tuple[tuple, str] | None = None
+    root_depth = folder.rstrip("\\/").count(os.sep)
+    for dirpath, dirs, files in os.walk(folder, onerror=lambda e: None):
+        depth = dirpath.count(os.sep) - root_depth
+        if depth > 2:
+            dirs[:] = []
+            continue
+        dirs[:] = [d for d in dirs if d not in _SKIP_DIRS]
+        for f in files:
+            if not f.lower().endswith(".exe"):
+                continue
+            stem = os.path.splitext(f)[0]
+            if _is_helper_exe(stem):
+                continue
+            stem_toks = set(_tokens(stem))
+            overlap = len(stem_toks & set(target))
+            score = (-overlap, depth, len(stem))
+            if best is None or score < best[0]:
+                best = (score, os.path.join(dirpath, f))
+    return best[1] if best else None
+
+
+def _launch(path: str, wanted: str = "") -> None:
+    if path.lower().startswith(UWP_PREFIX.lower()):
+        # Store apps have no path — explorer resolves the app-id and starts it.
+        subprocess.Popen(["explorer.exe", path])
+        return
     if os.path.isdir(path):
+        exe = _exe_in(path, wanted)
+        if exe:
+            os.startfile(exe)
+            return
         subprocess.Popen(["explorer", os.path.abspath(path)])
         return
     # startfile, not Popen: it resolves .lnk shortcuts and honours file
@@ -658,20 +777,40 @@ def _launch(path: str) -> None:
     os.startfile(os.path.abspath(path))
 
 
+@tool(
+    "open_app",
+    "Launch any application installed on this PC, by name. You do NOT need a path and you "
+    "must never ask him where something is installed or to add it to a config file — this "
+    "searches the Start Menu, the installed-programs registry, Microsoft Store apps and the "
+    "drives themselves. Works for anything he has: 'open blender', 'open spotify', "
+    "'open calculator', 'open valorant'. Just call it with what he called it.",
+    OBJ({"name": P(STR, "What he called the app, e.g. blender, spotify, vs code, valorant")},
+        ["name"]),
+)
 async def _open_app_smart(args, ctx) -> str:
     name = str(args.get("name") or "").strip()
     if not name:
         return "Which app?"
 
+    # Config is authoritative — but only if it still points at something real.
+    # These entries rot: installers leave placeholder paths behind, and Discord
+    # pins a build folder its own updater renames on every release. A dead
+    # config entry must fall through to the index, not abort the launch.
     configured = (ctx.config.get("apps") or {}).get(name.lower())
-    if configured:
+    if configured and os.path.exists(configured):
         try:
-            _launch(configured)
+            _launch(configured, name)
             return f"{name.capitalize()} is launching."
         except Exception as e:
             return f"Couldn't launch {name}: {e}"
 
-    hit = best_match(name, kind="app") or _first_app(lookup(name))
+    # The index is never pruned, so it happily returns apps that have since been
+    # uninstalled or moved. Check before launching rather than after failing.
+    hit = best_match(name, kind="app")
+    if hit is not None and not _launchable(hit):
+        hit = None
+    if hit is None:
+        hit = _first_app(lookup(name))
     if hit is None:
         found = [h for h in live_search(name) if h["path"].lower().endswith((".exe", ".lnk"))]
         hit = found[0] if found else None
@@ -681,17 +820,20 @@ async def _open_app_smart(args, ctx) -> str:
                 f"it's actually called, or whether it's installed at all.")
 
     try:
-        _launch(hit["path"])
+        _launch(hit["path"], hit["name"])
     except Exception as e:
         return f"Found {name} at {hit['path']} but couldn't launch it: {e}"
     return f"{hit['name']} is launching (from {hit['path']})."
 
 
+def _launchable(hit: dict) -> bool:
+    """Is this indexed entry still something we can actually start?"""
+    path = hit.get("path") or ""
+    return path.startswith(UWP_PREFIX) or os.path.exists(path)
+
+
 def _first_app(results: list[dict]) -> dict | None:
-    return next((r for r in results if r["kind"] == "app"), None)
-
-
-register("open_app", _open_app_smart, decl=None)
+    return next((r for r in results if r["kind"] == "app" and _launchable(r)), None)
 
 
 @tool(
@@ -755,12 +897,16 @@ def list_my_projects(args, ctx) -> str:
     "Re-scan the PC for new apps and projects. Rarely needed — find_on_pc already searches "
     "live. Only on explicit request. Runs in the background: say one short line, never "
     "narrate progress.",
-    OBJ({"deep": P(STR, "'true' to scan data drives more thoroughly (slower)")}),
+    OBJ({"deep": P(BOOL, "Scan data drives more thoroughly — several minutes longer")}),
 )
 async def refresh_pc_knowledge(args, ctx) -> str:
     if _scan_state["running"]:
         return SILENT_NOTE + " A scan is already running. Say nothing further about it."
-    scan_in_background(ctx.config)
+    # `deep` was declared as a STRING and then never read, so run_scan(deep=True)
+    # — the 240s-per-drive path — was unreachable from anywhere.
+    deep = args.get("deep")
+    deep = deep if isinstance(deep, bool) else str(deep or "").strip().lower() in ("true", "yes", "1")
+    scan_in_background(ctx.config, deep=deep)
     # Deliberately gives her nothing to wait for. The first version ended with
     # "ask me again in a minute and I'll know more", and she did exactly that —
     # polling pc_knowledge_status and narrating the scan instead of doing the

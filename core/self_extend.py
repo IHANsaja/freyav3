@@ -17,6 +17,7 @@ import subprocess
 import sys
 
 from core.registry import tool, register, OBJ, P, STR
+from core.user_paths import resolve_user_path
 
 _CUSTOM_DIR = os.path.join(os.path.dirname(__file__), "skills", "custom")
 

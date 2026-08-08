@@ -5,8 +5,30 @@ from dotenv import load_dotenv
 load_dotenv()
 
 CONFIG_PATH = os.path.join(os.path.dirname(__file__), "freya_config.json")
+EXAMPLE_CONFIG_PATH = os.path.join(os.path.dirname(__file__), "freya_config.example.json")
+
+
+def ensure_config():
+    """Create freya_config.json from the shipped example on first run.
+
+    The real config is gitignored: it accumulates absolute paths to whatever is
+    installed on the machine, which is personal to that machine and has no place
+    in a public repository. Only the example is tracked, so a fresh clone starts
+    from a clean template and diverges locally from there.
+    """
+    if os.path.exists(CONFIG_PATH):
+        return
+    if not os.path.exists(EXAMPLE_CONFIG_PATH):
+        raise FileNotFoundError(
+            f"Neither {CONFIG_PATH} nor {EXAMPLE_CONFIG_PATH} exists — the install is incomplete."
+        )
+    import shutil
+    shutil.copyfile(EXAMPLE_CONFIG_PATH, CONFIG_PATH)
+    print("  Created config/freya_config.json from the example template.")
+
 
 def load_config():
+    ensure_config()
     with open(CONFIG_PATH, "r", encoding="utf-8") as f:
         config = json.load(f)
     

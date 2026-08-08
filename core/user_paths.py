@@ -14,7 +14,7 @@ routes its path argument through `resolve_user_path`, so all of these land in
 the same real place:
 
     "desktop/notes.txt"                     "~/Desktop/notes.txt"
-    "%USERPROFILE%/Desktop/notes.txt"       "C:/Users/IHAN HANSAJA/Desktop/notes.txt"
+    "%USERPROFILE%/Desktop/notes.txt"       "C:/Users/Jane Doe/Desktop/notes.txt"
 """
 
 import ctypes

@@ -145,8 +145,10 @@ def _is_repo_root(target: str) -> bool:
 
 
 # Operations that destroy or relocate rather than edit.
+# `undo_organize` is deliberately absent: putting things back must always work,
+# even if the folder has since been classified as protected.
 _DESTRUCTIVE_TOOLS = {
-    "delete_file", "delete_item", "move_item", "unzip_archive",
+    "delete_file", "delete_item", "move_item", "unzip_archive", "organize_folder",
 }
 
 
@@ -355,6 +357,9 @@ _PATH_ARGS: dict[str, tuple[str, ...]] = {
     "create_folder": ("path",),
     "zip_item": ("source", "destination"),
     "unzip_archive": ("path", "destination"),
+    # core/organizer.py
+    "organize_folder": ("folder",),
+    "undo_organize": ("folder",),
 }
 
 

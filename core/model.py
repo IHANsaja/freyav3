@@ -14,18 +14,11 @@ import base64
 #  TOOL DEFINITIONS  (Gemini function calling)
 # ─────────────────────────────────────────────
 TOOL_DECLARATIONS = [
-    types.FunctionDeclaration(
-        name="open_app",
-        description="Launch an application by name.",
-        parameters=types.Schema(
-            type=types.Type.OBJECT,
-            properties={
-                "name": types.Schema(type=types.Type.STRING,
-                    description="App name e.g. valorant, photoshop, discord, steam, word, edge, vscode")
-            },
-            required=["name"]
-        )
-    ),
+    # NOTE: `open_app` is deliberately NOT declared here. It lives in
+    # core/machine_index.py as a real @tool, because the declaration is the
+    # whole feature: this one used to advertise seven hardcoded config keys
+    # while the handler behind it could reach every app on the machine.
+    # Declaring it in both places makes Gemini reject the tool list outright.
     types.FunctionDeclaration(
         name="close_app",
         description="Close or kill a running application.",

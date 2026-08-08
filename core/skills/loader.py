@@ -38,6 +38,8 @@ BUILTIN_SKILLS: list[tuple[str, SkillManifest]] = [
      "Clipboard, files, windows, volume and media control")),
     ("core.file_manager", SkillManifest("files", "File Manager",
      "Copy, move, rename, recycle, zip and inspect files and folders")),
+    ("core.organizer", SkillManifest("organize", "Tidy Up",
+     "Sort a cluttered folder — desktop, downloads — into type-based subfolders, reversibly")),
     ("core.screen", SkillManifest("screen", "Screen Control",
      "Read and operate on-screen UI elements via Windows accessibility", gate="screen.engine")),
     ("core.agents", SkillManifest("agents", "Sub-Agents",

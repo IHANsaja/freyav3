@@ -106,7 +106,7 @@ def get_user_name(default: str = "") -> str:
 def get_preferred_name(default: str = "") -> str:
     """What to actually call the user out loud.
 
-    A voice assistant saying "Ihan Hansaja" every time would be absurd, so this
+    A voice assistant saying "Jonathan Whitfield" every time would be absurd, so this
     is the spoken form: an explicit `Preferred name:` / `Nickname:` / `Call me:`
     line in MEMORY.md if there is one, otherwise the first word of the name.
     """
