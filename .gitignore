@@ -197,3 +197,54 @@ memory/machine_index.db
 # Persistent by design (core/browser/driver.py) so she stays logged in; must
 # never be committed.
 memory/browser_profile/
+
+# ── Everything below is personal to one machine and one person ─────────────
+# Freya remembers what you tell her. That memory is a diary: who you are, what
+# you worked on, what you asked for and when. None of it belongs in a public
+# repo, and it is regenerated locally on first run, so there is nothing lost by
+# excluding it.
+
+# The structured memory store (facts, preferences, session summaries, day log).
+memory/freya_memory.db
+memory/freya_memory.db-journal
+memory/freya_memory.db-wal
+memory/freya_memory.db-shm
+
+# A memory export — plain-text personal profile and session history.
+memory/freya_memory.imported.md
+
+# Vector embeddings of the same memory (core/rag_memory.py).
+memory/rag_db/
+
+# Local config: fills up with absolute paths to whatever is installed on THIS
+# machine. config/freya_config.example.json is the tracked template; the loader
+# copies it here on first run (config/__init__.py: ensure_config).
+config/freya_config.json
+
+# Runtime state written by Freya herself at the project root
+# (core/skills/custom/toggle_listening.py).
+/config.json
+
+# Tools Freya wrote for herself at runtime. Machine-specific by definition, and
+# whatever she writes next is unreviewed code — it should not arrive by clone.
+core/skills/custom/*.py
+!core/skills/custom/__init__.py
+
+# Run logs — transcripts of real sessions.
+*.log
+server_run.log
+test_run.log
+
+# Screenshots and captures Freya takes (take_screenshot writes to the Desktop,
+# but anything landing here is a capture of a real screen).
+screenshots/
+captures/
+*.screenshot.png
+
+# Scratch/debug scripts — these accumulate absolute paths to other projects.
+_*.py
+!__init__.py
+
+# Env files beyond the ignored .env — keys must never arrive by clone.
+.env.*
+!.env.example

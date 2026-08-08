@@ -146,12 +146,32 @@ def skill_catalog(config: dict) -> list[dict]:
 
 
 def build_declarations(config: dict) -> list[types.FunctionDeclaration]:
-    """All NEW tool declarations to merge with model.py's static list."""
+    """All NEW tool declarations to merge with model.py's static list.
+
+    Two gates apply. A tool may carry its own `gate=`, and the SKILL that owns it
+    may carry one in its manifest. Only the per-tool gate used to be enforced,
+    so the dashboard's skill toggle silently did nothing for any skill whose
+    tools didn't repeat the gate individually — `machine` and `scheduler` both.
+    Turning "PC Knowledge" off wrote the flag, said "applies on next session
+    start", and the tools came back anyway.
+    """
     _load_skills()
+    skill_gates = {}
+    try:
+        from core.skills.loader import load_all
+        skill_gates = {m.id: m.gate for m in load_all().values() if m.gate}
+    except Exception:
+        pass
+
     decls = []
     for entry in _REGISTRY.values():
-        if entry["decl"] is not None and _gate_open(entry["gate"], config):
-            decls.append(entry["decl"])
+        if entry["decl"] is None:
+            continue
+        if not _gate_open(entry["gate"], config):
+            continue
+        if not _gate_open(skill_gates.get(entry.get("skill")), config):
+            continue
+        decls.append(entry["decl"])
     # Live MCP-server tools
     try:
         from core.mcp_client import mcp_manager
@@ -205,6 +225,19 @@ async def dispatch(name: str, args: dict, ctx: ToolContext) -> str:
     """
     _load_skills()
     entry = _REGISTRY.get(name)
+
+    # Hard refusals come BEFORE the approval gate. Otherwise a write into
+    # C:\Windows asked the user to approve it, waited for a yes, and only then
+    # refused — pestering him for permission he was never able to grant, and
+    # training him to click yes on prompts that don't mean anything.
+    if entry is not None and entry["dangerous"]:
+        try:
+            from core.safety import guard
+            ok, msg = guard(name, args, ctx.config)
+            if not ok:
+                return msg
+        except Exception:
+            pass  # a broken guard must not become a bypass — _execute re-checks
 
     try:
         from core.safety import needs_approval, describe_action

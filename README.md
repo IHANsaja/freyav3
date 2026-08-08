@@ -15,7 +15,11 @@ Freya is a local, real-time voice assistant built on a low-latency bi-directiona
 > [!NOTE]
 > For the modular design, internal subsystems, and operational patterns, see the [Architecture Documentation](./ARCHITECTURE.md).
 
-Armed with **100+ tools**, a **mission orchestrator**, **approval-gated autopilot**, **structured long-term memory**, a **rolling day context**, **webcam hand-gesture control**, an **intent-driven 3D avatar**, and **always-on context awareness**, Freya doesn't just run tools; she plans, acts, verifies, remembers, and animates herself.
+Armed with **108 tools**, a **mission orchestrator**, **approval-gated autopilot**, **structured long-term memory**, a **rolling day context**, **webcam hand-gesture control**, an **intent-driven 3D avatar**, and **always-on context awareness**, Freya doesn't just run tools; she plans, acts, verifies, remembers, and animates herself.
+
+She also knows the machine she lives on. Ask her what you've got open, tell her to launch
+something, ask where a file went, or tell her your desktop is a mess — she resolves all of it
+herself from an index of your PC, without asking you for a single path.
 
 ---
 
@@ -61,6 +65,11 @@ cd freya-ui; npm install; cd ..
 # create .env with GEMINI_API_KEY=...
 ```
 
+`config/freya_config.json` is created automatically from `config/freya_config.example.json`
+the first time Freya starts — you don't need to write one. The `apps` and `projects` blocks in
+it are **optional overrides**: `open_app` resolves anything installed from its own PC index, so
+leaving them empty is the normal case.
+
 </details>
 
 ---
@@ -68,6 +77,8 @@ cd freya-ui; npm install; cd ..
 ## 🌟 Key Capabilities
 
 *   🔊 **Zero-Latency Live Conversation**: 16 kHz input / 24 kHz output on a dedicated audio thread pool, so background agents can never stutter her voice.
+*   🖥️ **She Knows Your Desktop**: What programs are open, which window is in front, where any file lives, and how to launch anything installed — Start Menu, registry, Microsoft Store apps and portable exes all indexed. You never give her a path.
+*   🧹 **Tidy Up**: *"Organise my desktop"* sorts loose files into type folders in one pass, leaves your shortcuts and code projects alone, and is reversible with *"undo"*.
 *   🖐️ **Hand-Gesture Control**: Steer the 3D orb with your webcam — move to rotate, pinch to zoom, squeeze to compress. She reacts out loud to deliberate hand signs.
 *   🎯 **Mission Mode**: Give a high-level goal — Freya plans steps, executes them with background agents, verifies each result, and reports back out loud.
 *   🛡️ **Approval Checkpoints**: Sensitive actions pause for your explicit yes — by voice or a dashboard button — with an editable folder sandbox.
@@ -112,7 +123,9 @@ Design notes:
 | 🔎 **Web & News** | Quota-free search/fetch plus live headlines projected into the scene. | `web_search`, `web_fetch`, `get_world_news` |
 | 🖼️ **Show, Don't Say** | Puts what she found on screen, following your attention: a card on the right of your screen when you're heads-down, the dashboard when you're actually looking at it. | `show_info`, `show_image` |
 | 📅 **Day Context** | Knows what today has been about; rotates and summarises the day at 4am, carrying open threads forward. | `note_day_context`, `get_day_context`, `rotate_day_context` |
-| 🔦 **PC Knowledge** | Knows where your apps, projects and documents live, and searches the disk live when they aren't indexed. | `find_on_pc`, `list_installed_apps`, `refresh_pc_knowledge` |
+| 🔦 **PC Knowledge** | Knows where your apps, projects and documents live, and searches the disk live when they aren't indexed. Launches anything installed by name — no path, ever. | `open_app`, `find_on_pc`, `list_installed_apps`, `refresh_pc_knowledge` |
+| 🖥️ **Desktop Awareness** | What programs are open, grouped by app, with the focused window marked; optionally every background process too. | `list_windows`, `get_active_window` |
+| 🧹 **Tidy Up** | Sorts a cluttered folder into type-based subfolders in one pass, skipping shortcuts and code projects. Fully reversible. | `organize_folder`, `undo_organize` |
 | 📁 **File Manager** | Copy, move/rename, recycle, zip/unzip, inspect, reveal in Explorer, find large/recent files. | `copy_item`, `move_item`, `delete_item`, `zip_item`, `find_files_by`, … |
 | 🎬 **Watch Video** | Actually watches a YouTube link or local file and answers questions about it. | `use_skill("watch")` |
 | 💼 **Career Ops** | Bridged [career-ops](https://github.com/santifer/career-ops): scan portals, A–G offer evaluation, CV tailoring, tracking. | `use_career_mode`, `run_career_script` |
@@ -151,7 +164,9 @@ This means third-party agent-standard skills can be dropped into `skills/` and u
 
 ```
 freyav3/
-├── config/                 # Config loading, mode/persona profiles, feature gates
+├── config/
+│   ├── freya_config.example.json  # Tracked template — copied to freya_config.json on first run
+│   └── freya_config.json          # Your local config (gitignored: machine-specific paths)
 ├── core/
 │   ├── events.py           # Typed event bus (+ replay buffer for reconnects)
 │   ├── errors.py           # Shared logger + safe client error payloads
@@ -160,6 +175,8 @@ freyav3/
 │   ├── missions.py         # Plan -> execute -> verify -> report orchestrator
 │   ├── agents.py           # Sub-agents (own thread + event loop each)
 │   ├── file_manager.py     # Copy/move/recycle/zip/inspect file operations
+│   ├── organizer.py        # Tidy a cluttered folder into type buckets, reversibly
+│   ├── machine_index.py    # The PC map: apps, projects, documents (SQLite)
 │   ├── md_skills.py        # SKILL.md packs w/ progressive disclosure
 │   ├── career_ops.py       # career-ops bridge
 │   ├── memory_store.py     # Structured memory (SQLite + FTS5)
@@ -175,15 +192,23 @@ freyav3/
 │       ├── hooks/useHandGestures.ts     # MediaPipe webcam tracking
 │       └── hooks/useGestureOrbBridge.ts # Gesture -> reaction dispatch
 ├── skills/watch/           # Markdown skill pack: video watching
-├── memory/
-│   ├── MEMORY.md           # Who you are (gitignored) — copy MEMORY.example.md
+├── memory/                 # ALL generated at runtime and gitignored — see below
+│   ├── MEMORY.md           # Who you are — copy MEMORY.example.md
 │   ├── freya_memory.db     # Structured memory + day context (SQLite)
+│   ├── machine_index.db    # The PC map
 │   └── rag_db/             # Chroma vector store
+├── test_scripts/           # test_smoke, test_awareness, test_search, test_organizer
 ├── install.ps1             # One-command installer
 ├── main.py                 # CLI entrypoint
 ├── server.py               # FastAPI + WebSocket backend
 └── requirements.txt
 ```
+
+> [!IMPORTANT]
+> **Everything under `memory/` is gitignored, and so is `config/freya_config.json`.** Freya
+> remembers what you tell her, and that memory is a diary — who you are, what you worked on,
+> what you asked for and when. It is rebuilt locally on first run, so a clone loses nothing.
+> If you fork this, keep it that way.
 
 ---
 
@@ -244,14 +269,14 @@ turn, so it costs you on each one and eats into what's left for the conversation
 | model input limit (`gemini-3.1-flash-live-preview`) | 131,072 | Google |
 | `freya.compression_trigger_tokens` | 96,000 | you |
 | `freya.compression_target_tokens` | 32,000 | you |
-| baseline: system prompt + 105 tool declarations | ~11,300 | code |
-| conversation retained after a compression | ~20,700 | result |
+| baseline: system prompt + 108 tool declarations | ~12,200 | code |
+| conversation retained after a compression | ~19,800 | result |
 
 She prints this at startup so it can never drift silently:
 
 ```
-Context budget: baseline ~11,316 tok (prompt 2,599 + 105 tools 8,717)
-                trigger 96,000 / target 32,000 -> ~20,684 tok for conversation
+Context budget: baseline ~12,173 tok (prompt 2,763 + 108 tools 9,410)
+                trigger 96,000 / target 32,000 -> ~19,827 tok for conversation
 ```
 
 If the target ever drops below the baseline she says so loudly — that combination shreds the
@@ -309,6 +334,27 @@ curl -X POST http://localhost:8000/debug/emit -H "Content-Type: application/json
 | **Session recall** | Discuss something, talk for a while, then refer back to it obliquely | She looks it up in the transcript instead of asking you to repeat |
 | **Your name** | Just talk to her | She uses your first name naturally — never a pet name |
 | **Personas** | Click **Night Guardian** | Voice, theme, core speed and avatar posture all change |
+| **What's open** | *"What have I got open?"* | Programs grouped by app, with the one in front marked |
+| **Open anything** | *"Open Blender"* — or any app you've never configured | It launches. She never asks where it is |
+| **Find a file** | *"Where's my CV?"* | The path, from the index or a live disk walk — no questions back |
+| **Tidy the desktop** | *"My desktop is a mess, sort it out"* | Files sorted into type folders; shortcuts and repos untouched; *"undo"* puts it all back |
+
+---
+
+## 🧪 Tests
+
+Offline suites — no mic, no API quota, no network. Run them from the project root:
+
+```powershell
+.\venv\Scripts\python.exe test_scripts\test_smoke.py       # config, skills, gates, safety
+.\venv\Scripts\python.exe test_scripts\test_awareness.py   # windows, focus, declarations
+.\venv\Scripts\python.exe test_scripts\test_search.py      # index ranking + live search
+.\venv\Scripts\python.exe test_scripts\test_organizer.py   # tidy/undo round trip
+```
+
+`test_smoke.py` is the one to run before a release: it proves a fresh clone's config loads,
+every skill imports, every declared tool has a handler, nothing harmless asks for approval,
+and the safety gate still refuses to write into Windows or move a git repo.
 
 ---
 

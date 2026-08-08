@@ -10,7 +10,6 @@ that one tool group rather than crashing the whole assistant.
 """
 
 import os
-import glob as _glob
 import subprocess
 
 from core.registry import register, tool, OBJ, P, STR, INT, BOOL
@@ -103,22 +102,61 @@ def list_dir(args, ctx) -> str:
         return f"Couldn't list {path}: {e}"
 
 
+SEARCH_BUDGET_S = 20.0   # a voice model waiting longer than this has already lost
+SEARCH_MAX_HITS = 40
+
+
 @tool(
     "search_files",
-    "Search a directory tree for files matching a glob pattern (e.g. *.pdf, report*).",
+    "Search a folder and everything under it for files matching a name pattern "
+    "(e.g. *.pdf, report*, *invoice*). Use when he names the folder to look in. To find "
+    "something anywhere on the PC without knowing the folder, use find_on_pc instead.",
     OBJ({"directory": P(STR),
          "pattern": P(STR, "Glob pattern, e.g. *.png")}, ["directory", "pattern"]),
 )
 def search_files(args, ctx) -> str:
     directory = resolve_user_path(args.get("directory", "~"))
     pattern = args.get("pattern", "*")
+    if not os.path.isdir(directory):
+        return f"There's no folder at {directory}."
+
+    # os.walk rather than glob.glob(recursive=True): glob materialises the
+    # ENTIRE match list before any slice, so a 40-hit cap saved the model's
+    # context and nothing else — pointed at a drive it walked node_modules,
+    # AppData and $Recycle.Bin for minutes before returning. This prunes and
+    # stops on a clock.
+    import fnmatch
+    import time
+    from core.machine_index import _SKIP_DIRS
+
+    deadline = time.time() + SEARCH_BUDGET_S
+    hits: list[str] = []
+    ran_out = False
     try:
-        hits = _glob.glob(os.path.join(directory, "**", pattern), recursive=True)[:40]
-        if not hits:
-            return f"No files matching {pattern} under {directory}."
-        return f"Found {len(hits)} match(es): " + "; ".join(hits)
+        for dirpath, dirs, files in os.walk(directory, onerror=lambda e: None):
+            if time.time() > deadline:
+                ran_out = True
+                break
+            dirs[:] = [d for d in dirs if d not in _SKIP_DIRS and not d.startswith(".")]
+            for f in files:
+                if fnmatch.fnmatch(f.lower(), pattern.lower()):
+                    hits.append(os.path.join(dirpath, f))
+                    if len(hits) >= SEARCH_MAX_HITS:
+                        break
+            if len(hits) >= SEARCH_MAX_HITS:
+                break
     except Exception as e:
         return f"Search failed: {e}"
+
+    if not hits:
+        if ran_out:
+            return (f"I searched {directory} for {SEARCH_BUDGET_S:.0f} seconds and found "
+                    f"nothing matching {pattern} before I ran out of time. It might be "
+                    f"deeper in — give me a narrower folder and I'll go again.")
+        return f"No files matching {pattern} under {directory}."
+    tail = " (there may be more — I stopped early)" if ran_out or \
+        len(hits) >= SEARCH_MAX_HITS else ""
+    return f"Found {len(hits)} match(es){tail}: " + "; ".join(hits)
 
 
 # ══════════════════════════════════════════════
@@ -129,15 +167,134 @@ def _windows():
     return gw
 
 
-@tool("list_windows", "List the titles of all open application windows.", OBJ())
+# Shell furniture that owns real top-level windows but is never what a person
+# means by "what's open".
+_SHELL_PROCS = {"explorer.exe", "textinputhost.exe", "applicationframehost.exe",
+                "shellexperiencehost.exe", "searchhost.exe", "startmenuexperiencehost.exe",
+                "systemsettings.exe", "lockapp.exe"}
+
+# Background noise in a full process list — hundreds of these exist and none of
+# them answer "is X running?".
+_NOISE_PROCS = {"svchost.exe", "conhost.exe", "dllhost.exe", "rundll32.exe",
+                "csrss.exe", "wininit.exe", "services.exe", "lsass.exe", "smss.exe",
+                "fontdrvhost.exe", "dwm.exe", "sihost.exe", "taskhostw.exe",
+                "runtimebroker.exe", "wmiprvse.exe", "audiodg.exe", "spoolsv.exe",
+                "registry", "memory compression", "system idle process", "system"}
+
+
+def _visible_windows() -> list[tuple[str, str, bool]]:
+    """(process_name, title, is_focused) for every real top-level window.
+
+    pygetwindow's getAllTitles() is titles-only, which can't answer "what
+    programs are open" — a title like "Untitled - Notepad" is a lucky case, and
+    "Inbox (12)" tells you nothing. So enumerate properly and ask the OS which
+    process owns each HWND. Guarded imports: no pywin32 disables this one tool.
+    """
+    import win32gui
+    import win32process
+    import psutil
+
+    foreground = win32gui.GetForegroundWindow()
+    out: list[tuple[str, str, bool]] = []
+
+    def visit(hwnd, _extra):
+        if not win32gui.IsWindowVisible(hwnd):
+            return
+        title = (win32gui.GetWindowText(hwnd) or "").strip()
+        if not title:
+            return
+        try:  # zero-size windows are invisible shells, not open programs
+            left, top, right, bottom = win32gui.GetWindowRect(hwnd)
+            if right - left <= 1 or bottom - top <= 1:
+                return
+        except Exception:
+            pass
+        proc = ""
+        try:
+            _tid, pid = win32process.GetWindowThreadProcessId(hwnd)
+            proc = psutil.Process(pid).name()
+        except Exception:
+            pass
+        out.append((proc, title, hwnd == foreground))
+
+    win32gui.EnumWindows(visit, None)
+    return out
+
+
+def _pretty(proc: str) -> str:
+    """chrome.exe -> Chrome. Spoken aloud, so drop the extension."""
+    return os.path.splitext(proc)[0].title() if proc else "something"
+
+
+@tool(
+    "list_windows",
+    "What programs the user currently has open, and which one is in front. Use for "
+    "'what have I got open', 'what programs are running', 'what's open right now', and "
+    "'is X running'. Set include_background to also list programs running without a "
+    "window (services, Docker, a game launcher sitting in the tray).",
+    OBJ({"include_background": P(BOOL, "Also list processes that have no window "
+                                       "(default false)")}),
+)
 def list_windows(args, ctx) -> str:
     try:
-        titles = [t for t in _windows().getAllTitles() if t.strip()]
-        if not titles:
-            return "No open windows found."
-        return "Open windows: " + "; ".join(titles[:40])
+        windows = _visible_windows()
     except Exception as e:
-        return f"Couldn't list windows: {e}"
+        # pygetwindow fallback — titles only, but better than nothing.
+        try:
+            titles = [t for t in _windows().getAllTitles() if t.strip()]
+            if not titles:
+                return "No open windows found."
+            return "Open windows: " + "; ".join(titles[:40])
+        except Exception:
+            return f"Couldn't list windows: {e}"
+
+    # Group by program: eleven Chrome windows should read as one line.
+    by_proc: dict[str, list[str]] = {}
+    focused = ""
+    for proc, title, is_focused in windows:
+        if proc.lower() in _SHELL_PROCS and not is_focused:
+            continue
+        by_proc.setdefault(_pretty(proc), []).append(title)
+        if is_focused:
+            focused = _pretty(proc)
+
+    lines = []
+    for app in sorted(by_proc, key=lambda a: (a != focused, a.lower())):
+        titles = by_proc[app]
+        head = titles[0][:70]
+        extra = f" (+{len(titles) - 1} more window{'s' if len(titles) > 2 else ''})" \
+            if len(titles) > 1 else ""
+        mark = " ← in front" if app == focused else ""
+        lines.append(f"{app}: {head}{extra}{mark}")
+
+    if not lines:
+        return "Nothing's open right now apart from the desktop."
+    msg = f"{len(by_proc)} program(s) open:\n" + "\n".join(lines)
+
+    if args.get("include_background"):
+        msg += "\n\nAlso running without a window: " + _background_procs(set(by_proc))
+    return msg
+
+
+def _background_procs(windowed: set[str]) -> str:
+    """Named processes with no visible window, minus the OS's own furniture."""
+    try:
+        import psutil
+    except Exception:
+        return "(couldn't check — psutil unavailable)"
+    names = set()
+    for p in psutil.process_iter(["name"]):
+        name = (p.info.get("name") or "").strip()
+        if not name or name.lower() in _NOISE_PROCS:
+            continue
+        pretty = _pretty(name)
+        if pretty not in windowed:
+            names.add(pretty)
+    if not names:
+        return "nothing noteworthy."
+    shown = sorted(names)[:60]
+    more = f" …and {len(names) - len(shown)} more" if len(names) > len(shown) else ""
+    return ", ".join(shown) + more + "."
 
 
 def _find_window(title: str):

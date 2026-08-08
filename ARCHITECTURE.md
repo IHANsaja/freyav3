@@ -28,7 +28,9 @@ graph TD
     Missions["🎯 core/missions.py<br>(Plan → Execute → Verify → Report)"]
     Avatar["💃 core/avatar.py<br>(Animation Intents)"]
     MemoryStore["🧠 core/memory_store.py<br>(SQLite + FTS5 Items)"]
-    ContextWatch["👁️ core/context_watch.py<br>(Metadata Context Tracker)"]
+    ContextWatch["👁️ core/context_watch.py<br>(Context Tracker + attention)"]
+    MachineIndex["🔦 core/machine_index.py<br>(PC Map: apps · projects · docs)"]
+    Organizer["🧹 core/organizer.py<br>(Tidy folder + undo manifest)"]
     DayContext["📅 core/day_context.py<br>(Rolling Day + Rotation)"]
     Identity["🪪 core/user_identity.py<br>(MEMORY.md → who he is)"]
     Runtime["⚡ core/runtime.py<br>(inject / emit / transcript)"]
@@ -59,7 +61,7 @@ graph TD
     ModelEngine -->|Function Calls| RegDispatcher
     RegDispatcher -->|sensitive?| Approvals
     RegDispatcher --> SkillLoader
-    RegDispatcher -.-> Agents & Screen & BrowserAgent & Ambient & SelfExtend & Scheduler & Avatar & ContextWatch & Missions & DayContext
+    RegDispatcher -.-> Agents & Screen & BrowserAgent & Ambient & SelfExtend & Scheduler & Avatar & ContextWatch & Missions & DayContext & MachineIndex & Organizer
 
     Missions -->|steps| Agents
     Missions -->|verify/report| GeminiText
@@ -94,7 +96,7 @@ graph TD
     class Main,Server,Config,AudioEngine,ModelEngine,RegDispatcher,SkillLoader primary;
     class GeminiLive,GeminiText external;
     class EventBus,Approvals,Missions,Avatar,MemoryStore,ContextWatch,DayContext,Identity,Runtime platform;
-    class Agents,Screen,BrowserAgent,Ambient,SelfExtend,Scheduler superpower;
+    class Agents,Screen,BrowserAgent,Ambient,SelfExtend,Scheduler,MachineIndex,Organizer superpower;
     class UI frontend;
 ```
 
@@ -120,8 +122,8 @@ shrinking it back to `target_tokens`. Both are configurable under `freya.*` and 
 | model input limit | 131,072 | Google |
 | `compression_trigger_tokens` | 96,000 | config |
 | `compression_target_tokens` | 32,000 | config |
-| immovable baseline (system prompt + 105 tool declarations) | ~11,300 | code |
-| conversation retained after a compression | ~20,700 | result |
+| immovable baseline (system prompt + 108 tool declarations) | ~12,200 | code |
+| conversation retained after a compression | ~19,800 | result |
 
 The baseline is re-sent on **every turn**, so it is both a per-turn cost and a permanent
 deduction from the target. `_compression_budget()` measures it from the exact declarations
@@ -129,8 +131,8 @@ being sent (wire JSON, not the pydantic repr, which overstates by ~28%), prints 
 and shouts if `target <= baseline`:
 
 ```
-Context budget: baseline ~11,316 tok (prompt 2,599 + 105 tools 8,717)
-                trigger 96,000 / target 32,000 -> ~20,684 tok for conversation
+Context budget: baseline ~12,173 tok (prompt 2,763 + 108 tools 9,410)
+                trigger 96,000 / target 32,000 -> ~19,827 tok for conversation
 ```
 
 > The original settings were `trigger=16,000` with `target` unset (the server then assumes
@@ -143,7 +145,9 @@ Context budget: baseline ~11,316 tok (prompt 2,599 + 105 tools 8,717)
 Freya uses a dynamic registry instead of static dispatched calls:
 - Skills self-register tools via `@tool(...)` decorators; the skill loader stamps each tool with its owning skill id for the `/skills` catalog.
 - dispatcher handles `async` tools natively and runs synchronous tools in a background executor to guarantee audio thread non-blocking.
-- **Safety**: A safety guard (`core/safety.py`) blocks outright-destructive commands, and `needs_approval()` routes *sensitive* calls through the approval gate (`core/approvals.py`) BEFORE execution — including legacy and MCP tools.
+- **Two gates, both enforced.** A tool may carry its own `gate="a.b.c"`, and the *skill* that owns it may carry one in its manifest. `build_declarations()` checks both. Only the per-tool gate used to be enforced, so the dashboard's skill toggle silently did nothing for any skill whose tools didn't repeat the gate individually — it wrote the flag, reported "applies on next session start", and the tools came back anyway.
+- **Order matters: guard, then approve.** `safety.guard()` runs *before* `needs_approval()`. A hard-refused action must never generate an approval card — asking the user to authorise a write into `C:\Windows` that will then be refused anyway trains him to click yes on prompts that mean nothing.
+- **Safety**: The guard (`core/safety.py`) blocks outright-destructive commands and enforces the zone rules and allow-list; `needs_approval()` routes *sensitive* calls through the approval gate (`core/approvals.py`) before execution — including legacy and MCP tools.
 - `ToolContext.source` ("live" vs "mission:<id>") decides whether an approval defers the work (voice session never blocks) or genuinely awaits the user's decision (background mission step).
 
 ## 🦾 Superpowers Layer (v3.5+)
@@ -268,11 +272,88 @@ gesture blends, and procedural breathing/look-at/tilt applied every frame. A mod
 maps intents → clip names per GLB (`Freya.glb` fallback + Blender-authored `FreyaV2.glb`
 with contract-named clips). Base states follow session state with zero LLM calls.
 
+### Machine Awareness (`core/machine_index.py`, `core/system_tools.py`, `core/context_watch.py`)
+The design goal is that Freya never asks *"where is it installed?"* or *"what are you doing?"* —
+both are questions she can answer herself, and asking makes her feel like a chatbot with a
+keyboard rather than something living on the machine.
+
+**Where things are.** `machine_index.py` keeps a SQLite map of the PC (`memory/machine_index.db`,
+one `entries` table: kind/name/path/detail). Four scanners populate it — Start Menu `.lnk`s, the
+uninstall registry, `Get-StartApps` for Microsoft Store/UWP apps, and a budgeted `os.walk` of the
+user folders and data drives. `lookup()` is token-based, not substring: "vs code" has to find
+"Visual Studio Code", and `LIKE '%vs code%'` never will. Its 4,000-row candidate cap carries an
+explicit `ORDER BY` on kind, because the table is ~87% indexed media and an unordered `LIMIT`
+filled every slot with photographs before scoring ran.
+
+**Launching.** `open_app` resolves in order: config override (only if the path still exists —
+these entries rot), then the index, then a time-boxed live disk walk. Three shapes of path are
+handled: a file (`os.startfile`, which resolves `.lnk` and file associations), a
+`shell:AppsFolder\<AppID>` app-id for Store apps (`explorer.exe`), and a *directory* — the
+uninstall registry stores `InstallLocation`, so 58 indexed apps pointed at a folder and used to
+open Explorer instead of the program. `_exe_in()` picks the real executable out of it.
+
+> The declaration is the feature. `open_app` was first fixed as a handler-only override that
+> kept `model.py`'s static declaration — so the handler could reach 285 apps while the
+> declaration still advertised `"valorant, photoshop, discord, steam, word, edge, vscode"`, the
+> config keys. The model never tried anything else. Tool descriptions are the *only* place the
+> live model learns what it can do; a correct implementation behind a stale contract is invisible.
+
+**What's open.** `list_windows` enumerates via `EnumWindows` + `GetWindowThreadProcessId` +
+psutil, so it reports the owning *program* and marks the foreground one, grouped by process;
+`include_background` adds a filtered `process_iter` pass. `get_active_window` wraps the same
+`attention()` used for card routing. Both read on demand — the context tracker stays off, so
+this is answering when asked, not surveillance.
+
+**Tidying.** `core/organizer.py` sorts a folder into type buckets in a single call rather than
+one `move_item` round-trip per file. It skips shortcuts, hidden files and anything `zone_of()`
+calls protected, and writes an undo manifest (`memory/organize_undo.json`) — it runs without an
+approval prompt, so reversibility *is* the safety mechanism.
+
 ### Personas & Skills (`config/__init__.py`, `core/skills/loader.py`)
 Modes now carry `voice_override`, `speech_style`, `theme` (accent/glow/core params) and
 `avatar_idle`; the server publishes `persona` events that recolor the UI and repose the
 avatar. Every capability module is a skill with a manifest; the loader stamps each tool
 with its owning skill for the `/skills` catalog and per-skill gate toggles.
+
+---
+
+## 🔒 What Never Leaves the Machine
+
+Freya's usefulness comes from remembering things, and everything she remembers is personal.
+The repository is therefore structured so that **the code is shareable and the state is not**.
+
+| Path | Contains | Tracked? |
+| :--- | :--- | :---: |
+| `config/freya_config.example.json` | Template: settings, no paths | ✔ |
+| `config/freya_config.json` | Absolute paths to what's installed here | ✖ |
+| `memory/MEMORY.md` | Your name and profile | ✖ |
+| `memory/freya_memory.db` | Typed memories, session summaries, day log | ✖ |
+| `memory/rag_db/` | Vector embeddings of the above | ✖ |
+| `memory/machine_index.db` | Paths to every app, project and document | ✖ |
+| `memory/browser_profile/` | Chromium cookies, logins, history | ✖ |
+| `core/skills/custom/*.py` | Tools Freya wrote for herself at runtime | ✖ |
+
+`config/__init__.py:ensure_config()` copies the example to `freya_config.json` on first run, so
+a fresh clone is configured without shipping anyone's machine layout. Everything else is rebuilt
+by first use. API keys live in `.env` and are read via `os.getenv` — never in config, never in
+committed files.
+
+> This is an architectural constraint, not housekeeping. An assistant with long-term memory
+> turns a repo into a diary the moment its state directory is tracked, and the failure is silent:
+> the code looks fine, and the leak is in files nobody reads during review.
+
+---
+
+## 🧪 Test Surface
+
+Offline, no mic, no quota, no network — `test_scripts/`:
+
+| Suite | Proves |
+| :--- | :--- |
+| `test_smoke.py` | Config loads from the template; all 23 skills import; every declared tool has a handler; no duplicate declarations; harmless tools need no approval while `delete_item`/`shutdown_computer` still do; the guard refuses writes into Windows and moves of a git repo |
+| `test_awareness.py` | `open_app` is declared exactly once and no longer advertises only config keys; window enumeration reports processes and marks focus |
+| `test_search.py` | Token-based index ranking; `live_search` matches multi-word queries; `search_files` honours its time budget |
+| `test_organizer.py` | Tidy → undo restores the folder byte-for-byte; shortcuts, dotfiles and nested repos untouched; re-running is a no-op |
 
 ---
 

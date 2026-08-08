@@ -94,6 +94,13 @@ def _declarations(spec: dict, config: dict):
     for name, entry in _REGISTRY.items():
         if name in allowed and entry["decl"] is not None:
             decls.append(entry["decl"])
+    # A name in an agent's tool list that the registry can't supply is silently
+    # dropped, and the agent then fails at a task it was configured to do with
+    # no clue why. Legacy tools declared only in model.py (run_terminal_command)
+    # and handler-only overrides both land here. Say so once, loudly.
+    missing = allowed - {d.name for d in decls}
+    if missing:
+        print(f"  [agents] tools not available from the registry, skipped: {sorted(missing)}")
     return decls
 
 

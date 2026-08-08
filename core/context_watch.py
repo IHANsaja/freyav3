@@ -22,6 +22,7 @@ Opt-in: config `ambient.context_tracker.enabled` (default false).
 
 import asyncio
 import itertools
+import os
 import re
 import time
 from collections import deque
@@ -353,6 +354,37 @@ tracker = ContextTracker()
 # ══════════════════════════════════════════════
 #  TOOLS
 # ══════════════════════════════════════════════
+@tool(
+    "get_active_window",
+    "What he's looking at right now — the app and window title of whatever is in the "
+    "foreground. Use for 'what am I looking at', 'what window is this', 'what am I in', "
+    "'what am I doing right now'. This reads the foreground window on demand; it does NOT "
+    "require context awareness to be switched on, and it takes no screenshot.",
+    OBJ(),
+)
+def get_active_window(args, ctx) -> str:
+    state = attention(getattr(ctx, "config", None))
+    if not state.get("known"):
+        return ("I can't see what's in front of you right now — no desktop session, or "
+                "the Windows bits aren't available.")
+
+    # "chrome.exe" is not a word anyone says out loud.
+    raw = (state.get("app") or "").strip()
+    app = os.path.splitext(raw)[0].title() if raw else "something I can't name"
+    title = (state.get("title") or "").strip()
+    if state.get("onDashboard"):
+        return f"You're looking at my dashboard{f' — {title}' if title else ''}."
+
+    msg = f"You're in {app}" + (f", on '{title}'." if title else ".")
+    focus = state.get("focusMinutes") or 0
+    if focus >= 5:  # only non-zero while the tracker loop is running
+        msg += f" You've been there about {focus} minutes."
+    idle = state.get("idleS") or 0
+    if idle >= 120:
+        msg += f" Though you haven't touched anything for {idle // 60} minutes."
+    return msg
+
+
 @tool(
     "enable_context_awareness",
     "Turn on always-on context awareness: Freya quietly tracks the active window and "
