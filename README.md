@@ -77,6 +77,7 @@ leaving them empty is the normal case.
 ## 🌟 Key Capabilities
 
 *   🔊 **Zero-Latency Live Conversation**: 16 kHz input / 24 kHz output on a dedicated audio thread pool, so background agents can never stutter her voice.
+*   ✳️ **Real GLSL Desktop Overlay**: You watch her work. Six fragment-shader effects — target lock-on, click impact, capture scan, cursor trail, scroll flow, typing — rendered over the live desktop with noise fields, chromatic aberration, hex lattices and glitch displacement. Colour follows your active persona, so switching mode re-skins your whole screen.
 *   🖥️ **She Knows Your Desktop**: What programs are open, which window is in front, where any file lives, and how to launch anything installed — Start Menu, registry, Microsoft Store apps and portable exes all indexed. You never give her a path.
 *   🧹 **Tidy Up**: *"Organise my desktop"* sorts loose files into type folders in one pass, leaves your shortcuts and code projects alone, and is reversible with *"undo"*.
 *   🖐️ **Hand-Gesture Control**: Steer the 3D orb with your webcam — move to rotate, pinch to zoom, squeeze to compress. She reacts out loud to deliberate hand signs.
@@ -176,6 +177,8 @@ freyav3/
 │   ├── agents.py           # Sub-agents (own thread + event loop each)
 │   ├── file_manager.py     # Copy/move/recycle/zip/inspect file operations
 │   ├── organizer.py        # Tidy a cluttered folder into type buckets, reversibly
+│   ├── shader_overlay.py   # GLSL desktop overlay host (loads core/shaders/)
+│   ├── shaders/            # Real .glsl — lib/ helpers + fx/ per effect
 │   ├── machine_index.py    # The PC map: apps, projects, documents (SQLite)
 │   ├── md_skills.py        # SKILL.md packs w/ progressive disclosure
 │   ├── career_ops.py       # career-ops bridge
@@ -346,6 +349,7 @@ curl -X POST http://localhost:8000/debug/emit -H "Content-Type: application/json
 Offline suites — no mic, no API quota, no network. Run them from the project root:
 
 ```powershell
+.\venv\Scripts\python.exe test_scripts\test_shaders.py     # GLSL compiles + every effect draws
 .\venv\Scripts\python.exe test_scripts\test_smoke.py       # config, skills, gates, safety
 .\venv\Scripts\python.exe test_scripts\test_awareness.py   # windows, focus, declarations
 .\venv\Scripts\python.exe test_scripts\test_search.py      # index ranking + live search

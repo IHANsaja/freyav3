@@ -26,5 +26,4 @@ comtypes
 psutil
 numpy
 chromadb            # local vector store for semantic RAG memory
-pygame              # GPU shader overlay window (Crimson Core Sync screen-control FX)
-moderngl            # GLSL fragment-shader rendering for the overlay
+moderngl            # GLSL rendering for the desktop overlay (core/shaders/*.glsl)

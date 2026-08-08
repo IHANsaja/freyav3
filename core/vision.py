@@ -72,11 +72,15 @@ def get_capture_grid() -> tuple[int, int]:
 # ══════════════════════════════════════════════
 #  SCREEN CAPTURE
 # ══════════════════════════════════════════════
-def capture_screen(quality: int = 60) -> str:
+def capture_screen(quality: int = 60, show_effect: bool = True) -> str:
     """
     Capture the full screen and return as base64 encoded JPEG.
     Lower quality = smaller payload = faster to send to Gemini.
     Also records the capture geometry used by grid_to_screen().
+
+    `show_effect=False` suppresses the on-screen scan animation. The ambient watcher
+    captures on a timer for the whole duration of a watch, and firing the full-screen
+    capture frame every few seconds reads as a fault rather than as feedback.
     """
     with mss.mss() as sct:
         # Capture primary monitor
@@ -109,11 +113,12 @@ def capture_screen(quality: int = 60) -> str:
         b64 = base64.b64encode(buffer.read()).decode("utf-8")
 
         # Show scan effect AFTER capture so it doesn't appear in the screenshot
-        try:
-            from core.overlay import show_scan_effect
-            show_scan_effect()
-        except Exception:
-            pass
+        if show_effect:
+            try:
+                from core.overlay import show_scan_effect
+                show_scan_effect()
+            except Exception:
+                pass
 
         return b64
 

@@ -147,6 +147,20 @@
   "screen": {
     "engine": "uia_ocr"
   },
+  "overlay": {
+    "enabled": true,
+    "fps": 60,
+    "intensity": 1.0,
+    "palette": "mode",
+    "effects": {
+      "scan": true,
+      "element": true,
+      "click": true,
+      "move": true,
+      "scroll": true,
+      "type": true
+    }
+  },
   "desktop_popup": {
     "enabled": true,
     "width": 340,
