@@ -105,7 +105,7 @@ export interface FreyaConfig {
 }
 
 // ── Hook ──
-export function useFreyaSocket() {
+export function useFreyaSocketConnection() {
     const ws = useRef<WebSocket | null>(null);
     const counter = useRef(0);
     const freyaBuffer = useRef<string>("");
@@ -199,7 +199,10 @@ export function useFreyaSocket() {
 
     // ── WebSocket connection ──
     useEffect(() => {
+        let disposed = false;
+        let reconnectTimer: ReturnType<typeof setTimeout>;
         const connect = () => {
+            if (disposed) return;
             const socket = new WebSocket("ws://localhost:8000/ws");
 
             socket.onopen = () => {
@@ -213,7 +216,7 @@ export function useFreyaSocket() {
             socket.onclose = () => {
                 setConnected(false);
                 console.log("Freya backend offline (is server.py running?) — retrying in 2s...");
-                setTimeout(connect, 2000); // auto-reconnect
+                reconnectTimer = setTimeout(connect, 2000); // auto-reconnect
             };
 
             // Expected while the backend is down (we retry via onclose) —
@@ -249,6 +252,12 @@ export function useFreyaSocket() {
                 let msg: any;
                 try {
                     msg = JSON.parse(event.data);
+                    if (msg.type === "trading") window.dispatchEvent(new CustomEvent("freya-trading", {detail: msg.payload}));
+                    if (msg.type === "authoritative") {
+                        setMissions(Object.fromEntries((msg.payload.missions as MissionPayload[]).map(m => [m.id,m])));
+                        setApprovals(msg.payload.approvals);
+                        return;
+                    }
                 } catch {
                     console.warn("Freya: dropped an unparseable WebSocket frame.");
                     return;
@@ -443,7 +452,7 @@ export function useFreyaSocket() {
         };
 
         connect();
-        return () => ws.current?.close();
+        return () => { disposed = true; clearTimeout(reconnectTimer); ws.current?.close(); };
         // Intentionally empty: the socket must be opened exactly once. Config
         // reloading goes through loadConfigRef so it never becomes a dependency.
     }, []);

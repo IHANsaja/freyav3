@@ -350,7 +350,16 @@ class FreyaModel:
                 )
             ),
             system_instruction=types.Content(
-                parts=[types.Part(text=self.personality)]
+                parts=[types.Part(text=self.personality + "\n\n" +
+                    "MISSION ROUTING: When the user asks to start a mission, retain that intent "
+                    "while asking for its goal. Once they supply the goal, call start_mission "
+                    "with all constraints, even if the goal concerns web research. Do not substitute "
+                    "browser_task or dispatch_agent for an explicitly requested mission. "
+                    "A request to compare current products, prices and recommendations needs "
+                    "research and verification; use start_mission for that multi-step goal. "
+                    "Only say a mission started after start_mission returns its id. "
+                    "When a research method fails, use available search/fetch alternatives within "
+                    "the authorized read-only task instead of asking permission to keep researching.")]
             ),
             input_audio_transcription=types.AudioTranscriptionConfig(),
             output_audio_transcription=types.AudioTranscriptionConfig(),
@@ -582,6 +591,8 @@ class FreyaModel:
             vad_cfg = (self.config or {}).get("vad", {})
             barge_in = freya_cfg.get("barge_in", True)
             rms_threshold = int(vad_cfg.get("barge_in_rms_threshold", 1200))
+            from core.echo_gate import EchoGate
+            echo_gate = EchoGate(enabled=freya_cfg.get("speaker_echo_protection", True))
 
             def _rms(chunk: bytes) -> int:
                 """Energy of a 16-bit PCM chunk — used to gate barge-in."""
@@ -598,6 +609,8 @@ class FreyaModel:
             async def send_audio():
                 last_paused = False
                 while True:
+                    # Reject a chunk captured across the playback/listening boundary too.
+                    echo_at_capture = echo_gate.blocks(model_speaking.is_set())
                     data = await loop.run_in_executor(audio_pool, mic_stream.read)
                     # Pause-listening: drain the mic but DON'T forward it, so movie /
                     # ambient audio never reaches Gemini and can't trigger her.
@@ -608,11 +621,10 @@ class FreyaModel:
                         await runtime.emit("mic", {"paused": paused})
                     if paused:
                         continue
+                    if echo_at_capture or echo_gate.blocks(model_speaking.is_set()):
+                        continue
                     if model_speaking.is_set():
-                        # While Freya speaks, only let *intentional* speech
-                        # through. The energy gate filters out her own voice
-                        # bleeding from the speakers, which previously caused
-                        # false barge-ins (she kept interrupting herself).
+                        # Headphone opt-in only: energy cannot distinguish voice from echo.
                         if not barge_in or _rms(data) < rms_threshold:
                             continue
                     await session.send_realtime_input(
@@ -837,7 +849,11 @@ class FreyaModel:
                 nonlocal pending_playback_chunks
                 while True:
                     data = await audio_queue.get()
-                    await loop.run_in_executor(audio_pool, speaker_stream.write, data)
+                    echo_gate.begin_playback()
+                    try:
+                        await loop.run_in_executor(audio_pool, speaker_stream.write, data)
+                    finally:
+                        echo_gate.end_playback()
                     audio_queue.task_done()
                     pending_playback_chunks = max(0, pending_playback_chunks - 1)
                     if pending_playback_chunks == 0 and model_turn_complete:
@@ -845,7 +861,8 @@ class FreyaModel:
                         await self.on_state("listening")
 
             try:
-                await asyncio.gather(
+                from core.voice_tasks import run_voice_tasks
+                await run_voice_tasks(
                     send_audio(),
                     receive_audio(),
                     play_audio()

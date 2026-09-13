@@ -251,3 +251,7 @@ _*.py
 # Env files beyond the ignored .env — keys must never arrive by clone.
 .env.*
 !.env.example
+
+# Trading accounts and third-party inspection checkout
+memory/trading_lab.db*
+.tmp-gptheist/

@@ -14,6 +14,23 @@ If nothing is live, calls are silently dropped.
 """
 
 import time
+import asyncio
+
+_announcements = set()
+
+
+def announce(text: str):
+    """Best-effort speech, bounded independently of execution and approvals."""
+    if _inject_fn is None or len(_announcements) >= 16:
+        return
+    async def deliver():
+        try:
+            await asyncio.wait_for(inject(text), 30)
+        except (asyncio.TimeoutError, asyncio.CancelledError):
+            pass
+    task = asyncio.create_task(deliver())
+    _announcements.add(task)
+    task.add_done_callback(_announcements.discard)
 
 _inject_fn = None
 _emit_fn = None
@@ -109,6 +126,8 @@ def clear_channels():
     _inject_fn = None
     _emit_fn = None
     _transcript = None
+    for task in tuple(_announcements):
+        task.cancel()
 
 
 def is_live() -> bool:

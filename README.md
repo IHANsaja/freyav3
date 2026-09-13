@@ -1,5 +1,8 @@
 # 🌌 Freya v3.0
 
+**Trading Lab:** open `/trading` for simulation-only BTC/ETH practice, replay,
+decision journaling and chart explanations. See [setup, execution rules and tests](docs/TRADING_LAB.md).
+
 🚀 **The Cybernetic Voice Assistant & Agent Interface**
 
 [![Python Version](https://img.shields.io/badge/Python-3.10%2B-blue?style=for-the-badge&logo=python&logoColor=white)](https://www.python.org/)

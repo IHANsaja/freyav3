@@ -93,7 +93,7 @@ def _tools() -> list[types.Tool]:
         fn("go_back", "Go back to the previous page."),
         fn("finish", "You have the answer. Write it out in full.",
            {"answer": p(S, "The complete answer, with the facts and the sources you used"),
-            "success": p(B, "False if you could not complete the task")}, ["answer"]),
+            "success": p(B, "True only if the requested task was completed; false if blocked or incomplete")}, ["answer", "success"]),
     ])]
 
 
@@ -132,8 +132,8 @@ class BrowserAgent:
         self.bcfg = self.config.get("browser", {})
         self.on_step = on_step          # async (step:int, action:str, detail:str)
         self.client = genai.Client(api_key=get_agent_api_key())
-        self.model = self.bcfg.get("llm_model", "gemini-flash-latest")
-        self.fallback = self.bcfg.get("fallback_model", "gemini-flash-lite-latest")
+        self.model = self.bcfg.get("llm_model", "gemini-3.5-flash")
+        self.fallback = self.bcfg.get("fallback_model", "gemini-3.5-flash-lite")
         self.max_steps = int(self.bcfg.get("max_steps", 25))
         self.use_vision = bool(self.bcfg.get("vision", True))
         self.history: list[types.Content] = []
@@ -156,18 +156,16 @@ class BrowserAgent:
             resp = await self._generate(cfg)
             cand = (resp.candidates or [None])[0]
             if cand is None or cand.content is None:
-                return self._salvage("The model returned nothing.")
+                from core.execution import ExecutionError
+                raise ExecutionError(self._salvage("The model returned nothing."))
 
             parts = cand.content.parts or []
             calls = [p.function_call for p in parts if getattr(p, "function_call", None)]
             if not calls:
-                # No action chosen — treat any prose as the answer.
-                text = (resp.text or "").strip()
-                if text:
-                    return text
+                # Prose can describe an obstacle; it is not proof of completion.
                 self.history.append(cand.content)
                 self.history.append(types.Content(role="user", parts=[types.Part(
-                    text="Choose an action — call one of your tools.")]))
+                    text="Continue with a tool, or call finish with success=false if blocked. Do not claim completion without the requested findings.")]))
                 continue
 
             self.history.append(cand.content)
@@ -177,7 +175,13 @@ class BrowserAgent:
 
             if name == "finish":
                 answer = str(args.get("answer") or "").strip()
-                return answer or self._salvage("The agent finished without an answer.")
+                if args.get("success") is not True:
+                    from core.execution import ExecutionError
+                    raise ExecutionError(answer or "Browser could not complete the task")
+                if not answer:
+                    from core.execution import ExecutionError
+                    raise ExecutionError("Browser finished without an answer")
+                return answer
 
             result = await self._act(browser, name, args)
             if self.on_step:
@@ -187,6 +191,13 @@ class BrowserAgent:
                     pass
 
             observation = await self._observe(browser, result)
+            # Preserve the model's thought signatures and answer every function call.
+            responses = [types.Part(function_response=types.FunctionResponse(
+                name=name, id=call.id, response={"result":result}))]
+            responses.extend(types.Part(function_response=types.FunctionResponse(
+                name=extra.name, id=extra.id,
+                response={"error":"Not executed: choose one browser action per turn."})) for extra in calls[1:])
+            observation = responses + observation
             self.history.append(types.Content(role="user", parts=observation))
             self._trim()
 
@@ -194,7 +205,8 @@ class BrowserAgent:
         # the answer from what it already saw rather than returning nothing;
         # a run that hits the cap one step short of `finish` otherwise throws
         # away everything it learned.
-        return await self._final_answer()
+        from core.execution import Exhausted
+        raise Exhausted(self._salvage("Browser exhausted its action budget."))
 
     # ── acting ─────────────────────────────────────────────────────────────
     async def _act(self, browser, name: str, args: dict) -> str:

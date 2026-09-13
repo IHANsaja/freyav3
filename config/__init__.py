@@ -31,6 +31,8 @@ def load_config():
     ensure_config()
     with open(CONFIG_PATH, "r", encoding="utf-8") as f:
         config = json.load(f)
+    # New simulation-only capability defaults without rewriting existing installs.
+    config.setdefault("trading", {"enabled": True})
     
     if "modes" not in config:
         config["modes"] = {}
@@ -62,7 +64,11 @@ def load_config():
     except Exception as e:
         print(f"Error listing config directory: {e}")
         
-    return config
+    from config.models import LIVE_MODEL, TEXT_MODEL, normalize_models
+    config.setdefault("active_provider", "gemini")
+    config.setdefault("active_model", LIVE_MODEL)
+    config["trading"].setdefault("gemini_model", TEXT_MODEL)
+    return normalize_models(config)
 
 def get_api_key():
     key = os.getenv("GEMINI_API_KEY")

@@ -145,6 +145,7 @@ export default function MissionPanel({ mission, onCancel }: MissionPanelProps) {
                                     waiting for your approval
                                 </p>
                             )}
+                            {step.outcome && step.outcome !== "success" && <p className="text-xs text-red-300">{step.outcome.replaceAll("_", " ")}</p>}
                             {step.verification && step.status !== "done" && (
                                 <p className="text-[10px] text-outline mt-0.5 line-clamp-2">
                                     {step.verification}

@@ -54,7 +54,10 @@ async def _run_task(task: str, config: dict, on_step=None) -> str:
     """One browsing task on the browser loop. Returns the agent's answer."""
     from core.browser.agent import BrowserAgent
     agent = BrowserAgent(task, config, on_step=on_step)
-    return await agent.run()
+    try:
+        return await asyncio.wait_for(agent.run(), (config or {}).get('missions',{}).get('tool_timeout_s',180))
+    finally:
+        await agent.client.aio.aclose()
 
 
 def _run_job(job_id: str, task: str, config: dict, main_loop: asyncio.AbstractEventLoop):
@@ -79,12 +82,15 @@ def _run_job(job_id: str, task: str, config: dict, main_loop: asyncio.AbstractEv
 
     try:
         future = BrowserLoop.get().submit(_run_task(task, config, on_step))
-        result = future.result()
+        result = future.result(timeout=(config or {}).get('missions',{}).get('tool_timeout_s',180))
+        status = "done"
     except Exception as e:
+        if 'future' in locals(): future.cancel()
+        status = getattr(e, "outcome", "failed")
         result = _QUOTA if _is_quota(e) else f"The browser hit an error: {e}"
 
-    _jobs[job_id].update(status="done", result=result, step=None)
-    _emit_threadsafe(main_loop, runtime.emit("browser", {"id": job_id, "status": "done"}))
+    _jobs[job_id].update(status=status, result=result, step=None)
+    _emit_threadsafe(main_loop, runtime.emit("browser", {"id": job_id, "status": status}))
 
     if result == _QUOTA:
         _emit_threadsafe(main_loop, runtime.inject(
@@ -94,7 +100,8 @@ def _run_job(job_id: str, task: str, config: dict, main_loop: asyncio.AbstractEv
         ))
     else:
         _emit_threadsafe(main_loop, runtime.inject(
-            f"The browser finished your task '{task}'. Result: {str(result)[:1500]}"
+            f"Browser task '{task}' status: {status}. Result: {str(result)[:1500]}. "
+            "Report the actual status; failed or incomplete work is not success."
         ))
 
 
@@ -115,6 +122,12 @@ async def browser_task(args, ctx) -> str:
     task = (args.get("task") or "").strip()
     if not task:
         return "Give me a web task to do."
+    if ctx.source != "live":
+        from core.browser.driver import BrowserLoop
+        from core.execution import bounded
+        future = BrowserLoop.get().submit(_run_task(task, ctx.config))
+        return await bounded(asyncio.wrap_future(future),
+            (ctx.config or {}).get("missions", {}).get("tool_timeout_s", 180))
     job_id = f"web-{next(_counter)}"
     # `started` feeds the dashboard's live job list (GET /agents), which sorts
     # by start time and shows how long each worker has been going.
@@ -158,17 +171,24 @@ async def browser_research(args, ctx) -> str:
             "Open and read at least two different pages before answering.")
 
     await ctx.emit("browser", {"id": "research", "status": "running", "task": topic})
+    status = "failed"
     try:
         future = BrowserLoop.get().submit(_run_task(task, config))
         # Don't block the calling event loop while the browser thread works.
         result = await asyncio.wrap_future(future)
+        status = "done"
+    except asyncio.CancelledError:
+        status = "cancelled"
+        raise
     except Exception as e:
+        if ctx.source != "live":
+            raise
         if _is_quota(e):
             return ("I hit the Gemini free-tier quota while browsing. Try web_search instead, "
                     "or come back to this later.")
         return f"The browser research failed: {e}"
     finally:
-        await ctx.emit("browser", {"id": "research", "status": "done"})
+        await ctx.emit("browser", {"id": "research", "status": status})
 
     return f"Research findings on '{topic}':\n{result}"
 

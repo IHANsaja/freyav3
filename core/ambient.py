@@ -42,7 +42,7 @@ class Ambient:
     async def _watch(self, wid, config, instruction, interval, max_minutes):
         from google import genai
         from google.genai import types
-        model = (config or {}).get("ambient", {}).get("vision_model", "gemini-flash-latest")
+        model = (config or {}).get("ambient", {}).get("vision_model", "gemini-3.5-flash")
         client = genai.Client(api_key=get_agent_api_key())
         loop = asyncio.get_running_loop()
         deadline = loop.time() + max_minutes * 60

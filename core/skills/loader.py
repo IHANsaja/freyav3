@@ -28,6 +28,8 @@ class SkillManifest:
 # Built-in skills: (module path, fallback manifest). The fallback is used when
 # the module doesn't define its own SKILL constant.
 BUILTIN_SKILLS: list[tuple[str, SkillManifest]] = [
+    ("core.trading.tools", SkillManifest("trading", "Freya Trading Lab",
+     "Simulated spot practice, replay and educational chart analysis", gate="trading.enabled")),
     ("core.approvals", SkillManifest("approvals", "Approval Gate",
      "Human-in-the-loop confirmation for sensitive actions")),
     ("core.avatar", SkillManifest("avatar", "Avatar Animator",

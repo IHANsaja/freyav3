@@ -1,5 +1,7 @@
 # ── Core (Gemini Live voice assistant) ──
 google-genai
+httpx>=0.27,<1
+pydantic>=2,<3
 python-dotenv
 pyaudio
 keyboard

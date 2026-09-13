@@ -80,6 +80,8 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(lifespan=lifespan)
+from core.trading.api import router as trading_router
+app.include_router(trading_router)
 
 # Defense-in-depth rate limit for "gesture_touch" WS messages — the frontend
 # already debounces gesture reactions, but the server shouldn't trust a
@@ -135,17 +137,33 @@ connected_clients: list[WebSocket] = []
 #  BROADCAST  — send a message to all UI clients
 # ══════════════════════════════════════════════
 async def broadcast(message: dict):
-    disconnected = []
-    for client in connected_clients:
+    for client, queue in list(_client_queues.items()):
         try:
-            await client.send_json(message)
+            queue.put_nowait(message)
+        except asyncio.QueueFull:
+            _client_queues.pop(client, None)
+            writer = _client_writers.pop(client, None)
+            if writer:
+                writer.cancel()
+            asyncio.create_task(client.close(code=1013))
+
+
+_client_queues: dict[WebSocket, asyncio.Queue] = {}
+_client_writers: dict[WebSocket, asyncio.Task] = {}
+
+
+async def _write_client(client, queue):
+    try:
+        while True:
+            await asyncio.wait_for(client.send_json(await queue.get()), 5)
+    except (Exception, asyncio.CancelledError):
+        _client_queues.pop(client, None)
+        if client in connected_clients:
+            connected_clients.remove(client)
+        try:
+            await asyncio.wait_for(client.close(code=1013),1)
         except Exception:
-            disconnected.append(client)
-    for c in disconnected:
-        # Guarded: the /ws finally block may already have removed a client that
-        # also failed to send here — a bare .remove() would raise ValueError.
-        if c in connected_clients:
-            connected_clients.remove(c)
+            pass
 
 
 # ══════════════════════════════════════════════
@@ -287,17 +305,33 @@ async def run_freya():
         await update_memory(api_key, transcript.get(), memory)
 
 
+_voice_lifecycle_lock = asyncio.Lock()
+
+
+async def _stop_voice_task():
+    """Caller holds the lifecycle lock until the old session releases audio."""
+    global freya_task, freya_running, freya_started_at
+    freya_running = False
+    task = freya_task
+    if task is not None:
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+    freya_task = None
+    freya_started_at = None
+
+
 async def restart_freya():
     """Hot-restart the live session (used when switching modes so the
     mode's model_override and personality_override take effect)."""
-    global freya_task, freya_running
-    if freya_task:
-        freya_task.cancel()
-        freya_task = None
-    freya_running = False
-    await asyncio.sleep(0.8)  # let audio devices fully release
-    freya_running = True
-    freya_task = asyncio.create_task(run_freya())
+    global freya_task, freya_running, freya_started_at
+    async with _voice_lifecycle_lock:
+        # A queued mode change must not resurrect a stopped session.
+        if not freya_running:
+            return
+        await _stop_voice_task()
+        freya_running = True
+        freya_started_at = time.time()
+        freya_task = asyncio.create_task(run_freya())
 
 
 # ══════════════════════════════════════════════
@@ -306,11 +340,12 @@ async def restart_freya():
 @app.post("/start")
 async def start_freya():
     global freya_task, freya_running, freya_started_at
-    if freya_running:
-        return JSONResponse({"status": "already running"})
-    freya_running = True
-    freya_started_at = time.time()
-    freya_task = asyncio.create_task(run_freya())
+    async with _voice_lifecycle_lock:
+        if freya_task is not None and not freya_task.done():
+            return JSONResponse({"status": "already running"})
+        freya_running = True
+        freya_started_at = time.time()
+        freya_task = asyncio.create_task(run_freya())
     await broadcast({"type": "session", "payload": _session_payload()})
     return JSONResponse({"status": "started"})
 
@@ -318,11 +353,8 @@ async def start_freya():
 @app.post("/stop")
 async def stop_freya():
     global freya_task, freya_running, freya_started_at
-    if freya_task:
-        freya_task.cancel()
-        freya_task = None
-    freya_running = False
-    freya_started_at = None
+    async with _voice_lifecycle_lock:
+        await _stop_voice_task()
     await broadcast({"type": "state", "value": "idle"})
     await broadcast({"type": "session", "payload": _session_payload()})
     return JSONResponse({"status": "stopped"})
@@ -671,6 +703,14 @@ async def websocket_endpoint(websocket: WebSocket):
     except Exception:
         pass
 
+    from core.missions import missions
+    from core.approvals import approvals
+    queue = asyncio.Queue(maxsize=64)
+    _client_queues[websocket] = queue
+    await websocket.send_json({"type": "authoritative", "payload": {
+        "missions": [m.to_payload() for m in missions.all()],
+        "approvals": [a.to_payload() for a in approvals.pending()]}})
+    _client_writers[websocket] = asyncio.create_task(_write_client(websocket, queue))
     try:
         while True:
             # Malformed JSON used to escape as an unhandled exception and drop
@@ -705,6 +745,11 @@ async def websocket_endpoint(websocket: WebSocket):
         # Always drop the client, exactly once. `.remove` raised ValueError if
         # the client was already gone (e.g. removed by a failed broadcast),
         # which then masked the real disconnect.
+        _client_queues.pop(websocket, None)
+        writer = _client_writers.pop(websocket, None)
+        if writer:
+            writer.cancel()
+            await asyncio.gather(writer, return_exceptions=True)
         if websocket in connected_clients:
             connected_clients.remove(websocket)
 
