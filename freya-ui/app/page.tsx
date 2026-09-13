@@ -1,7 +1,8 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useFreyaSocket, type ToolEntry, type NewsItem } from "./hooks/useFreyaSocket";
+import { type ToolEntry, type NewsItem } from "./hooks/useFreyaSocket";
+import { useSharedFreyaSocket as useFreyaSocket } from "./components/FreyaSocketProvider";
 import SceneStage from "./components/SceneStage";
 import { useEngineStatus } from "./hooks/useEngineStatus";
 import SettingsModal from "./components/SettingsModal";

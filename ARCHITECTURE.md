@@ -272,6 +272,46 @@ gesture blends, and procedural breathing/look-at/tilt applied every frame. A mod
 maps intents → clip names per GLB (`Freya.glb` fallback + Blender-authored `FreyaV2.glb`
 with contract-named clips). Base states follow session state with zero LLM calls.
 
+### Desktop Shader Overlay (`core/shader_overlay.py` + `core/shaders/*.glsl`)
+A transparent, click-through, always-on-top layer that renders real GLSL over the live
+desktop, so you can see Freya operating the machine. Six effects — element lock-on, click
+impact, cursor move, scroll flow, capture scan, typing — each a fragment-shader field in
+its own file under `core/shaders/fx/`, sharing noise/SDF helpers from `lib/`.
+
+**Shaders are files, not string literals.** GLSL 330 has no `#include`, so `_shader_sources()`
+resolves them host-side and injects `MAX_FX` and `FX_LIFE` as `#define`s — which is what
+stops the shader's array bounds drifting from the Python constants (they were previously
+hardcoded four separate times). The render thread watches mtimes and recompiles on save,
+keeping the last good program if a compile fails.
+
+**Transparency**: rendered offscreen into an FBO with a moderngl standalone context, then
+presented via `UpdateLayeredWindow` with a per-pixel-alpha DIB. Color-key and DWM-extend
+both fail with OpenGL — they produce an opaque black sheet.
+
+**The present path is the frame budget.** The framebuffer is read back to the CPU every
+frame, so the shader emits *premultiplied BGRA in DIB row order* and we `read_into` a
+preallocated buffer: one readback, one `memmove`. It previously did a readback plus three
+full-frame numpy passes (channel swizzle, vertical flip, a redundant `.copy()`) — roughly
+1.1 GB/s at 1080p, which was the real ceiling on shader complexity. Measured cost is now
+~6-21 ms/frame at 1920x1080 depending on effect.
+
+> Three effects — click, move, scroll — had **never rendered once**. `POINT` was defined as
+> the kind constant `1.0` and then rebound in the same module to a ctypes struct, so
+> `float(kind)` raised and a bare `except` swallowed it. The kinds are `K_*` now and the
+> struct is `WinPoint`. The lesson is the swallowing handler, not the collision: a failure
+> nothing reports is a failure nobody finds.
+
+Colour follows the active persona — `modes.<mode>.theme.accent`, re-read through the same
+mtime-cached config pattern as `core/safety.py:_live_safety`, so `switch_mode` re-skins the
+overlay with no wiring. The accent is renormalised to full brightness first: UI accents are
+picked to sit calmly behind text (`#0f9c6e` peaks at 0.61) and output alpha is derived from
+luminance, so feeding one in raw caps every line at 61% opacity.
+
+Coordinates span the **virtual desktop** (`SM_XVIRTUALSCREEN` etc.), so effects land on
+secondary monitors; the capture scan still brackets the primary monitor only, because
+`capture_screen` grabs `sct.monitors[1]`. Config lives under `overlay` — `enabled`, `fps`,
+`intensity`, `palette`, and per-effect toggles.
+
 ### Machine Awareness (`core/machine_index.py`, `core/system_tools.py`, `core/context_watch.py`)
 The design goal is that Freya never asks *"where is it installed?"* or *"what are you doing?"* —
 both are questions she can answer herself, and asking makes her feel like a chatbot with a

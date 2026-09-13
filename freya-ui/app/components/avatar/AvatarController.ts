@@ -200,6 +200,26 @@ export class AvatarController {
 
     // ── Layer 2: procedural (every frame, after mixer.update) ─────────────
 
+    private frozen = false;
+
+    /** Hold the figure on a single still pose.
+     *
+     *  Everything above the visual layer in `update()` still runs — expressions
+     *  are still raised and still decay — because the orb subscribes to those
+     *  events for its mood colour. Only the motion stops.
+     *
+     *  Two halves are needed. Stopping the mixer alone would leave the
+     *  procedural layer (breathing, look-at, sway) still writing bone offsets
+     *  every frame; skipping `update()` alone would not stop the clips, because
+     *  drei's `useAnimations` advances the mixer in its own `useFrame`
+     *  regardless of us. This owns both, so callers never have to reach for the
+     *  mixer themselves. */
+    setFrozen(frozen: boolean) {
+        this.frozen = frozen;
+        this.mixer.timeScale = frozen ? 0 : 1;
+        if (frozen) this.mixer.update(0); // sample the pose once, then hold it
+    }
+
     update(dt: number, camera?: THREE.Camera) {
         this.time += dt;
 
@@ -220,6 +240,9 @@ export class AvatarController {
             this.scheduleTalkSwitch();
             this.playBaseClip(this.pickBaseClip("speaking"));
         }
+
+        // ── Everything below is motion. Held still while frozen. ───────────
+        if (this.frozen) return;
 
         const accent = this.expression ? EXPRESSION_ACCENTS[this.expression.name] : null;
         const breathScale = accent?.breathScale ?? 1;

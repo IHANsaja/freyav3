@@ -1,14 +1,16 @@
 """
 Visual overlay effects for Freya's screen control actions.
-Renders transparent, always-on-top animations using tkinter
-to give real-time visual feedback when Freya interacts with the screen.
 
-Effects:
-  - Click ripple with crosshair
-  - Screen scan border flash + sweep line
-  - Mouse-move pulse dot
-  - Scroll direction arrow
-  - Typing indicator badge
+This module is the front door: everything in the codebase calls the functions here, and
+they route to whichever backend is available.
+
+  1. core/shader_overlay.py — real GLSL from core/shaders/, rendered offscreen and
+     presented through a layered window. This is what you actually see.
+  2. The tkinter effects further down this file — plain Canvas drawing, used only when a
+     GL context cannot be created. Deliberately not kept in visual parity with the
+     shaders; it exists so a machine without working OpenGL still gets *something*.
+
+Effects: element lock-on, click impact, screen scan, cursor move, scroll flow, typing.
 """
 
 import threading
@@ -38,28 +40,48 @@ def _get():
 
 # ══════════════════════════════════════════════
 #  BACKEND SELECTION
-#  Prefer the GPU shader overlay ("Crimson Core Sync"); fall back to the tkinter
-#  effects below if the GPU/transparent window can't initialize.
+#  Prefer the GPU shader overlay; fall back to the tkinter effects below if the
+#  GPU/transparent window can't initialize.
 # ══════════════════════════════════════════════
 _gpu = None  # None = not probed yet, False = unavailable, module = available
+_gpu_lock = threading.Lock()
 
 
 def _gpu_backend():
+    """Probe once. Locked because the first effect can arrive from several threads at
+    once (a tool handler in the executor and the vision path), and a double probe means
+    two GL init attempts racing for the same standalone context."""
     global _gpu
-    if _gpu is None:
-        try:
-            from core import shader_overlay
-            _gpu = shader_overlay if shader_overlay.start() else False
-        except Exception:
-            _gpu = False
+    if _gpu is not None:
+        return _gpu
+    with _gpu_lock:
+        if _gpu is None:
+            try:
+                from core import shader_overlay
+                _gpu = shader_overlay if shader_overlay.start() else False
+            except Exception as e:
+                print(f"  [overlay] GPU backend unavailable, using tkinter: {e}")
+                _gpu = False
     return _gpu
+
+
+def _enabled(name: str) -> bool:
+    """Config gate, applied to BOTH backends. shader_overlay owns the config reader
+    because it is the module that has one; these helpers touch no GL."""
+    try:
+        from core.shader_overlay import effect_enabled
+        return effect_enabled(name)
+    except Exception:
+        return True
 
 
 # ══════════════════════════════════════════════
 #  PUBLIC API  (safe to call from any thread)
 # ══════════════════════════════════════════════
 def show_element_effect(rect, label: str = ""):
-    """Lock the crimson energy field onto a real UI element's rectangle (l, t, r, b)."""
+    """Lock onto a real UI element's rectangle (l, t, r, b)."""
+    if not _enabled('element'):
+        return
     g = _gpu_backend()
     if g:
         try: g.show_element_effect(rect, label); return
@@ -68,6 +90,8 @@ def show_element_effect(rect, label: str = ""):
     except Exception: pass
 
 def show_click_effect(x: int, y: int):
+    if not _enabled('click'):
+        return
     g = _gpu_backend()
     if g:
         try: g.show_click_effect(x, y); return
@@ -76,6 +100,8 @@ def show_click_effect(x: int, y: int):
     except Exception: pass
 
 def show_scan_effect():
+    if not _enabled('scan'):
+        return
     g = _gpu_backend()
     if g:
         try: g.show_scan_effect(); return
@@ -84,6 +110,8 @@ def show_scan_effect():
     except Exception: pass
 
 def show_move_effect(x: int, y: int):
+    if not _enabled('move'):
+        return
     g = _gpu_backend()
     if g:
         try: g.show_move_effect(x, y); return
@@ -92,6 +120,8 @@ def show_move_effect(x: int, y: int):
     except Exception: pass
 
 def show_scroll_effect(x: int, y: int, direction: str):
+    if not _enabled('scroll'):
+        return
     g = _gpu_backend()
     if g:
         try: g.show_scroll_effect(x, y, direction); return
@@ -99,10 +129,14 @@ def show_scroll_effect(x: int, y: int, direction: str):
     try: _get().enqueue({'type': 'scroll', 'x': x, 'y': y, 'direction': direction})
     except Exception: pass
 
-def show_type_effect():
+def show_type_effect(x: int | None = None, y: int | None = None):
+    """Typing indicator. Coordinates place the caret; without them the shader falls
+    back to the cursor position, which is where the text is going anyway."""
+    if not _enabled('type'):
+        return
     g = _gpu_backend()
     if g:
-        try: g.show_type_effect(); return
+        try: g.show_type_effect(x, y); return
         except Exception: pass
     try: _get().enqueue({'type': 'type'})
     except Exception: pass

@@ -79,7 +79,7 @@ class ApprovalManager:
         future: asyncio.Future = asyncio.get_running_loop().create_future()
         action = self._add(summary, tool_name, args, source, timeout, future=future)
         # Ask out loud too — the user may be away from the dashboard.
-        await runtime.inject(
+        runtime.announce(
             f"[APPROVAL NEEDED] A background mission wants to: {summary}. "
             f"Ask the user briefly whether to go ahead, and call approve_action or "
             f"reject_action with action_id '{action.id}' based on his answer."
@@ -88,6 +88,10 @@ class ApprovalManager:
             return await future
         except asyncio.CancelledError:
             self._pending.pop(action.id, None)
+            if action.timeout_task:
+                action.timeout_task.cancel()
+            bus.publish_soon("approval", {"event": "resolved", "id": action.id,
+                "approved": False, "via": "cancelled"})
             raise
 
     def _add(self, summary, tool_name, args, source, timeout, thunk=None, future=None) -> PendingAction:

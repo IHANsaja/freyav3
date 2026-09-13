@@ -14,6 +14,7 @@ Gated behind config `ambient.enabled`.
 """
 
 import asyncio
+import functools
 import itertools
 
 from config import get_agent_api_key
@@ -41,7 +42,7 @@ class Ambient:
     async def _watch(self, wid, config, instruction, interval, max_minutes):
         from google import genai
         from google.genai import types
-        model = (config or {}).get("ambient", {}).get("vision_model", "gemini-2.5-flash")
+        model = (config or {}).get("ambient", {}).get("vision_model", "gemini-3.5-flash")
         client = genai.Client(api_key=get_agent_api_key())
         loop = asyncio.get_running_loop()
         deadline = loop.time() + max_minutes * 60
@@ -50,7 +51,11 @@ class Ambient:
                 await asyncio.sleep(interval)
                 from core.vision import capture_screen
                 import base64
-                b64 = await loop.run_in_executor(None, capture_screen)
+                # No scan animation: this loop captures every `interval` seconds for as
+                # long as the watch runs, and flashing the capture frame on a timer looks
+                # like a malfunction rather than feedback.
+                b64 = await loop.run_in_executor(
+                    None, functools.partial(capture_screen, show_effect=False))
                 prompt = (
                     f"You are monitoring a screen for this condition: '{instruction}'. "
                     "Answer strictly 'YES: <one short reason>' if the condition is now true, "

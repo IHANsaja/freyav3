@@ -1,6 +1,7 @@
 from asyncio import selector_events
 import asyncio
 import json
+import re
 import time
 from concurrent.futures import ThreadPoolExecutor
 from google import genai
@@ -13,6 +14,31 @@ import base64
 # ─────────────────────────────────────────────
 #  TOOL DEFINITIONS  (Gemini function calling)
 # ─────────────────────────────────────────────
+# Protocol debris that occasionally lands in the OUTPUT TRANSCRIPTION stream —
+# the model narrating its own function call rather than speaking. Observed live:
+#
+#   Freya: response:trigger_emphasis{}It is now Saturday, August 8th...
+#
+# The system prompt already tells her never to speak tool names, but this is not
+# something she chose to say — it arrives in the transcription channel, so no
+# amount of prompting removes it. Left alone it is spoken aloud, printed, shown
+# in the dashboard, and then written into memory and day context, where it comes
+# back as context on the next turn.
+_SPEECH_NOISE = re.compile(
+    r"""(?xi)
+    response:\s*\w+\s*\{[^{}]*\}   # response:trigger_emphasis{}
+    | ^\s*tool_(?:code|outputs?)\s*:? # stray tool_code / tool_output markers
+    | \[SILENT[^\]]*\]             # our own silent-note marker, if it ever echoes
+    """
+)
+
+
+def _clean_speech(text: str) -> str:
+    """Strip protocol debris out of a spoken-transcription fragment."""
+    cleaned = _SPEECH_NOISE.sub(" ", text)
+    return re.sub(r"\s{2,}", " ", cleaned).strip()
+
+
 TOOL_DECLARATIONS = [
     # NOTE: `open_app` is deliberately NOT declared here. It lives in
     # core/machine_index.py as a real @tool, because the declaration is the
@@ -103,18 +129,10 @@ TOOL_DECLARATIONS = [
             required=["city"]
         )
     ),
-    types.FunctionDeclaration(
-        name="open_project",
-        description="Open a project folder in VS Code by project name.",
-        parameters=types.Schema(
-            type=types.Type.OBJECT,
-            properties={
-                "project_name": types.Schema(type=types.Type.STRING,
-                    description="Project name configured in config e.g. freyav3")
-            },
-            required=["project_name"]
-        )
-    ),
+    # NOTE: `open_project` is declared in core/machine_index.py alongside
+    # `open_app`, for the same reason — this declaration said "configured in
+    # config e.g. freyav3", so the model only ever tried the config keys and
+    # the handler behind it could only answer "add it to freya_config.json".
     types.FunctionDeclaration(
         name="run_terminal_command",
         description="Run a terminal or shell command and read back the output. Good for git status, pip list, directory listing etc.",
@@ -332,7 +350,16 @@ class FreyaModel:
                 )
             ),
             system_instruction=types.Content(
-                parts=[types.Part(text=self.personality)]
+                parts=[types.Part(text=self.personality + "\n\n" +
+                    "MISSION ROUTING: When the user asks to start a mission, retain that intent "
+                    "while asking for its goal. Once they supply the goal, call start_mission "
+                    "with all constraints, even if the goal concerns web research. Do not substitute "
+                    "browser_task or dispatch_agent for an explicitly requested mission. "
+                    "A request to compare current products, prices and recommendations needs "
+                    "research and verification; use start_mission for that multi-step goal. "
+                    "Only say a mission started after start_mission returns its id. "
+                    "When a research method fails, use available search/fetch alternatives within "
+                    "the authorized read-only task instead of asking permission to keep researching.")]
             ),
             input_audio_transcription=types.AudioTranscriptionConfig(),
             output_audio_transcription=types.AudioTranscriptionConfig(),
@@ -564,6 +591,8 @@ class FreyaModel:
             vad_cfg = (self.config or {}).get("vad", {})
             barge_in = freya_cfg.get("barge_in", True)
             rms_threshold = int(vad_cfg.get("barge_in_rms_threshold", 1200))
+            from core.echo_gate import EchoGate
+            echo_gate = EchoGate(enabled=freya_cfg.get("speaker_echo_protection", True))
 
             def _rms(chunk: bytes) -> int:
                 """Energy of a 16-bit PCM chunk — used to gate barge-in."""
@@ -580,6 +609,8 @@ class FreyaModel:
             async def send_audio():
                 last_paused = False
                 while True:
+                    # Reject a chunk captured across the playback/listening boundary too.
+                    echo_at_capture = echo_gate.blocks(model_speaking.is_set())
                     data = await loop.run_in_executor(audio_pool, mic_stream.read)
                     # Pause-listening: drain the mic but DON'T forward it, so movie /
                     # ambient audio never reaches Gemini and can't trigger her.
@@ -590,11 +621,10 @@ class FreyaModel:
                         await runtime.emit("mic", {"paused": paused})
                     if paused:
                         continue
+                    if echo_at_capture or echo_gate.blocks(model_speaking.is_set()):
+                        continue
                     if model_speaking.is_set():
-                        # While Freya speaks, only let *intentional* speech
-                        # through. The energy gate filters out her own voice
-                        # bleeding from the speakers, which previously caused
-                        # false barge-ins (she kept interrupting herself).
+                        # Headphone opt-in only: energy cannot distinguish voice from echo.
                         if not barge_in or _rms(data) < rms_threshold:
                             continue
                     await session.send_realtime_input(
@@ -696,8 +726,16 @@ class FreyaModel:
                                         # later. Client content is appended to the conversation
                                         # context deterministically and in order; turn_complete=
                                         # False adds the image WITHOUT triggering generation, so
-                                        # the tool response that follows is what resumes the model
-                                        # — with the image guaranteed already in context.
+                                        # the tool response that follows lands after it — with the
+                                        # image guaranteed already in context.
+                                        #
+                                        # The turn is then closed explicitly below. It has to be:
+                                        # per the SDK, turn_complete=False means "the model will
+                                        # wait for you to send additional client_content, and will
+                                        # not return until you send turn_complete=True". A tool
+                                        # response does NOT close a client-content turn, so she sat
+                                        # silent after taking the screenshot and only answered once
+                                        # the user spoke again and that utterance closed the turn.
                                         await session.send_client_content(
                                             turns=types.Content(
                                                 role="user",
@@ -727,6 +765,9 @@ class FreyaModel:
                                                 )}
                                             )]
                                         )
+                                        # Close the turn opened above. Without this she never
+                                        # replies to "look at my screen" — she just waits.
+                                        await session.send_client_content(turn_complete=True)
                                         print("  Screen sent to Gemini (client_content).")
                                     else:
                                         await session.send_tool_response(
@@ -772,7 +813,7 @@ class FreyaModel:
                         # Buffer Freya's words — don't emit yet
                         out = getattr(sc, 'output_transcription', None)
                         if out:
-                            text = getattr(out, 'text', str(out)).strip()
+                            text = _clean_speech(getattr(out, 'text', str(out)) or "")
                             if text:
                                 # Model started answering → the user's turn is over
                                 await flush_user()
@@ -808,7 +849,11 @@ class FreyaModel:
                 nonlocal pending_playback_chunks
                 while True:
                     data = await audio_queue.get()
-                    await loop.run_in_executor(audio_pool, speaker_stream.write, data)
+                    echo_gate.begin_playback()
+                    try:
+                        await loop.run_in_executor(audio_pool, speaker_stream.write, data)
+                    finally:
+                        echo_gate.end_playback()
                     audio_queue.task_done()
                     pending_playback_chunks = max(0, pending_playback_chunks - 1)
                     if pending_playback_chunks == 0 and model_turn_complete:
@@ -816,7 +861,8 @@ class FreyaModel:
                         await self.on_state("listening")
 
             try:
-                await asyncio.gather(
+                from core.voice_tasks import run_voice_tasks
+                await run_voice_tasks(
                     send_audio(),
                     receive_audio(),
                     play_audio()

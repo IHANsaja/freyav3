@@ -31,7 +31,7 @@ _PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".
 if _PROJECT_ROOT not in sys.path:
     sys.path.insert(0, _PROJECT_ROOT)
 
-MODEL = "gemini-2.5-flash"
+MODEL = "gemini-3.5-flash"
 UPLOAD_TIMEOUT = 600  # seconds to wait for the Files API to finish processing
 _YT = re.compile(r"(youtube\.com/|youtu\.be/)", re.I)
 

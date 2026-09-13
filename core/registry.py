@@ -205,6 +205,9 @@ async def _execute(name: str, args: dict, ctx: ToolContext, entry: dict | None) 
         from core.safety import guard
         ok, msg = guard(name, args, ctx.config)
         if not ok:
+            if ctx.source != "live":
+                from core.execution import ExecutionError
+                raise ExecutionError("Tool refused by safety policy")
             return msg
 
     handler = entry["handler"]
@@ -214,6 +217,9 @@ async def _execute(name: str, args: dict, ctx: ToolContext, entry: dict | None) 
         loop = asyncio.get_running_loop()
         return await loop.run_in_executor(None, lambda: handler(args, ctx))
     except Exception as e:
+        if ctx.source != "live":
+            from core.execution import ExecutionError
+            raise ExecutionError(f"Tool failed: {name} ({type(e).__name__})") from e
         return f"Tool error in {name}: {e}"
 
 
@@ -225,6 +231,13 @@ async def dispatch(name: str, args: dict, ctx: ToolContext) -> str:
     """
     _load_skills()
     entry = _REGISTRY.get(name)
+    if entry is not None:
+        from core.skills.loader import load_all
+        manifest = load_all().get(entry.get("skill"))
+        if not _gate_open(entry.get("gate"), ctx.config) or not _gate_open(
+                manifest.gate if manifest else None, ctx.config):
+            from core.execution import ExecutionError
+            raise ExecutionError(f"Tool disabled: {name}")
 
     # Hard refusals come BEFORE the approval gate. Otherwise a write into
     # C:\Windows asked the user to approve it, waited for a yes, and only then
@@ -235,6 +248,9 @@ async def dispatch(name: str, args: dict, ctx: ToolContext) -> str:
             from core.safety import guard
             ok, msg = guard(name, args, ctx.config)
             if not ok:
+                if ctx.source != "live":
+                    from core.execution import ExecutionError
+                    raise ExecutionError("Tool refused by safety policy")
                 return msg
         except Exception:
             pass  # a broken guard must not become a bypass — _execute re-checks
@@ -242,8 +258,9 @@ async def dispatch(name: str, args: dict, ctx: ToolContext) -> str:
     try:
         from core.safety import needs_approval, describe_action
         gated = needs_approval(name, args, entry, ctx.config)
-    except Exception:
-        gated = False
+    except Exception as exc:
+        from core.execution import ExecutionError
+        raise ExecutionError("Unable to evaluate tool approval policy") from exc
 
     if gated:
         from core.approvals import approvals
@@ -264,7 +281,8 @@ async def dispatch(name: str, args: dict, ctx: ToolContext) -> str:
 
         approved = await approvals.wait(summary, name, args, source=ctx.source, timeout=timeout)
         if not approved:
-            return f"the user declined this action ({summary}). Do not retry it; adapt or skip."
+            from core.execution import ApprovalDenied
+            raise ApprovalDenied("Action denied or approval expired; no automatic retry")
 
     return await _execute(name, args, ctx, entry)
 

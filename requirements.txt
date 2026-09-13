@@ -1,5 +1,7 @@
 # ── Core (Gemini Live voice assistant) ──
 google-genai
+httpx>=0.27,<1
+pydantic>=2,<3
 python-dotenv
 pyaudio
 keyboard
@@ -26,5 +28,4 @@ comtypes
 psutil
 numpy
 chromadb            # local vector store for semantic RAG memory
-pygame              # GPU shader overlay window (Crimson Core Sync screen-control FX)
-moderngl            # GLSL fragment-shader rendering for the overlay
+moderngl            # GLSL rendering for the desktop overlay (core/shaders/*.glsl)

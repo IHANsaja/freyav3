@@ -27,11 +27,12 @@ from google.genai import types
 from config import get_agent_api_key
 from core import runtime
 from core.registry import register, tool, dispatch as registry_dispatch, ToolContext, OBJ, P, STR
+from core.execution import ExecutionError, Exhausted, bounded
 
 # Built-in agent specs (config `sub_agents.<type>` may override model/system/tools).
 DEFAULT_AGENTS = {
     "researcher": {
-        "model": "gemini-2.5-flash",
+        "model": "gemini-3.5-flash",
         "system": (
             "You are Freya's research sub-agent. Investigate the task properly — do not answer "
             "from what you already know.\n"
@@ -42,6 +43,10 @@ DEFAULT_AGENTS = {
             "URL for. Reach for the browser first and web_search only when the question is "
             "genuinely one line long.\n"
             "Corroborate anything important across two sources. Then write a tight, "
+            "If the browser is blocked, try web_search and web_fetch for the same authorized "
+            "read-only research. A retailer name alone does not complete product comparison: "
+            "report actual model/specification, price/currency, availability and source URL, "
+            "or clearly state which requested facts could not be verified. "
             "spoken-friendly briefing — facts first, sources named naturally, no fluff, no "
             "markdown."
         ),
@@ -49,7 +54,7 @@ DEFAULT_AGENTS = {
                   "get_world_news", "recall", "read_file", "search_files"],
     },
     "coder": {
-        "model": "gemini-2.5-flash",
+        "model": "gemini-3.5-flash",
         "system": (
             "You are Freya's coding sub-agent. Complete the engineering task end to end: read the "
             "relevant files, make the change, run code/tests to verify. Be precise. Finish with a "
@@ -59,7 +64,7 @@ DEFAULT_AGENTS = {
                   "search_files", "run_terminal_command"],
     },
     "operator": {
-        "model": "gemini-2.5-flash",
+        "model": "gemini-3.5-flash",
         "system": (
             "You are Freya's desktop-operator sub-agent. Drive the Windows GUI through the "
             "accessibility API — never guess coordinates. Workflow: focus_window to bring the "
@@ -87,13 +92,19 @@ def _spec(agent_type: str, config: dict) -> dict:
 
 def _declarations(spec: dict, config: dict):
     """The FunctionDeclarations for this agent's allowed tools, pulled from the registry."""
-    from core.registry import _REGISTRY, build_declarations
-    build_declarations(config)  # ensure skills are loaded
+    from core.registry import build_declarations
+    available = build_declarations(config)
     allowed = set(spec.get("tools", []))
     decls = []
-    for name, entry in _REGISTRY.items():
-        if name in allowed and entry["decl"] is not None:
-            decls.append(entry["decl"])
+    for declaration in available:
+        if declaration.name in allowed:
+            decls.append(declaration)
+    # Legacy terminal handler keeps its existing safety/approval dispatch path.
+    from core.registry import _REGISTRY
+    if "run_terminal_command" in allowed and "run_terminal_command" not in _REGISTRY:
+        decls.append(types.FunctionDeclaration(name="run_terminal_command",
+            description="Run a shell command through Freya's safety and approval gate.",
+            parameters=OBJ({"command": P(STR)}, ["command"])))
     # A name in an agent's tool list that the registry can't supply is silently
     # dropped, and the agent then fails at a task it was configured to do with
     # no clue why. Legacy tools declared only in model.py (run_terminal_command)
@@ -115,39 +126,56 @@ async def react_loop(system: str, task: str, tool_names: list[str], model: str,
     Raises on API errors — callers decide how to phrase failures.
     """
     client = genai.Client(api_key=get_agent_api_key())
-    decls = _declarations({"tools": tool_names}, config)
-    cfg = types.GenerateContentConfig(
-        system_instruction=system,
-        tools=[types.Tool(function_declarations=decls)] if decls else None,
-        temperature=0.4,
-    )
-    contents = [types.Content(role="user", parts=[types.Part(text=task)])]
-
-    for _step in range(max_steps):
-        resp = await client.aio.models.generate_content(
-            model=model, contents=contents, config=cfg
+    try:
+        decls = _declarations({"tools": tool_names}, config)
+        allowed = {d.name for d in decls}
+        cfg = types.GenerateContentConfig(
+            system_instruction=system,
+            tools=[types.Tool(function_declarations=decls)] if decls else None,
+            temperature=0.4,
         )
-        cand = (resp.candidates or [None])[0]
-        if cand is None or cand.content is None:
-            return resp.text or "(empty response)"
-        parts = cand.content.parts or []
-        fcalls = [p.function_call for p in parts if getattr(p, "function_call", None)]
-        if not fcalls:
-            return resp.text or "Done."
-        contents.append(cand.content)
-        tool_parts = []
-        for fc in fcalls:
-            args = dict(fc.args or {})
-            result = await registry_dispatch(fc.name, args, ctx)
-            if on_tool is not None:
-                try:
-                    await on_tool(fc.name, args, str(result))
-                except Exception:
-                    pass
-            tool_parts.append(types.Part(function_response=types.FunctionResponse(
-                name=fc.name, response={"result": str(result)[:4000]})))
-        contents.append(types.Content(role="user", parts=tool_parts))
-    return "I ran out of steps before fully finishing that."
+        contents = [types.Content(role="user", parts=[types.Part(text=task)])]
+
+        for _step in range(max_steps):
+            resp = await bounded(client.aio.models.generate_content(
+                model=model, contents=contents, config=cfg
+            ), (config or {}).get("missions", {}).get("model_timeout_s", 90))
+            cand = (resp.candidates or [None])[0]
+            if cand is None or cand.content is None:
+                raise ExecutionError("Model returned no candidate")
+            parts = cand.content.parts or []
+            fcalls = [p.function_call for p in parts if getattr(p, "function_call", None)]
+            if not fcalls:
+                if not resp.text or not resp.text.strip():
+                    raise ExecutionError("Model returned no completion summary")
+                return resp.text
+            contents.append(cand.content)
+            tool_parts = []
+            for fc in fcalls:
+                args = dict(fc.args or {})
+                if fc.name not in allowed:
+                    raise ExecutionError(f"Tool unavailable to this agent: {fc.name}")
+                call = registry_dispatch(fc.name, args, ctx)
+                owner = getattr(ctx, "owner_loop", None)
+                if owner is not None and owner is not asyncio.get_running_loop():
+                    call = asyncio.wrap_future(asyncio.run_coroutine_threadsafe(call, owner))
+                result = await bounded(call,
+                    (config or {}).get("missions", {}).get("tool_timeout_s", 180))
+                if str(result).lower().startswith(("command failed", "command timed out", "tool error", "unknown tool", "mcp call failed")):
+                    raise ExecutionError(f"{fc.name} failed; inspect tool output before retrying")
+                if on_tool is not None:
+                    try:
+                        await on_tool(fc.name, args, str(result))
+                    except Exception:
+                        pass
+                tool_parts.append(types.Part(function_response=types.FunctionResponse(
+                    name=fc.name, response={"result": str(result)[:4000]})))
+            contents.append(types.Content(role="user", parts=tool_parts))
+        raise Exhausted("Agent exhausted its step budget before completion")
+    finally:
+        close = getattr(client.aio, "aclose", None)
+        if close is not None:
+            await close()
 
 
 def quota_hit(e: Exception) -> bool:
@@ -184,7 +212,8 @@ def _run_agent_thread(job_id: str, agent_type: str, task: str, config: dict,
     voice path no longer share a scheduler. Same isolation core/browser_agent.py
     already uses, and for exactly the same reason.
     """
-    ctx = ToolContext(config, session=None)  # background: no realtime session
+    ctx = ToolContext(config, session=None, source=f"agent:{job_id}")
+    ctx.owner_loop = main_loop
 
     async def _do_run():
         spec = _spec(agent_type, config)
@@ -205,17 +234,19 @@ def _run_agent_thread(job_id: str, agent_type: str, task: str, config: dict,
 
     try:
         final = asyncio.run(_do_run())
+        status = "done"
     except Exception as e:
+        status = getattr(e, "outcome", "failed")
         if quota_hit(e):
             final = ("I hit the daily free-tier Gemini quota, so I couldn't finish. Try again "
                      "later, or add billing / a second API key to lift the limit.")
         else:
             final = f"My {agent_type} agent hit an error: {e}"
 
-    _jobs[job_id].update(status="done", result=final, step=None)
+    _jobs[job_id].update(status=status, result=final, step=None)
     _emit_threadsafe(main_loop, runtime.emit(
         "agent", {"id": job_id, "agent": agent_type, "task": task,
-                  "status": "done", "result": str(final)[:400]}))
+                  "status": status, "result": str(final)[:400]}))
     _emit_threadsafe(main_loop, runtime.inject(
         f"Your {agent_type} agent finished the task '{task}'. Here's the result: {final}"))
 

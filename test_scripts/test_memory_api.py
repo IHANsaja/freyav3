@@ -10,7 +10,7 @@ print("GEMINI_MEMORY_API_KEY loaded:", api_key is not None)
 client = genai.Client(api_key=api_key)
 try:
     response = client.models.generate_content(
-        model="gemini-2.5-flash-lite",
+        model="gemini-flash-lite-latest",
         contents="Say hello"
     )
     print("Response text:", response.text)

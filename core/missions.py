@@ -29,7 +29,8 @@ from google.genai import types
 
 from config import get_agent_api_key
 from core import runtime
-from core.agents import DEFAULT_AGENTS, _spec, react_loop, quota_hit
+from core.agents import DEFAULT_AGENTS, _spec, _declarations, react_loop, quota_hit
+from core.execution import VerificationError, bounded
 from core.registry import tool, ToolContext, OBJ, P, STR
 
 StepStatus = Literal["pending", "running", "verifying", "awaiting_approval",
@@ -37,10 +38,10 @@ StepStatus = Literal["pending", "running", "verifying", "awaiting_approval",
 MissionStatus = Literal["planning", "running", "awaiting_approval", "verifying",
                         "done", "failed", "cancelled"]
 
-PLANNER_MODEL_DEFAULT = "gemini-2.5-flash"
-VERIFIER_MODEL_DEFAULT = "gemini-2.5-flash-lite"
+PLANNER_MODEL_DEFAULT = "gemini-3.5-flash"
+VERIFIER_MODEL_DEFAULT = "gemini-3.5-flash-lite"
 MAX_PLAN_STEPS = 6
-MAX_STEP_ATTEMPTS = 2
+MAX_STEP_ATTEMPTS = 1  # Never repeat completed side effects after verification failure.
 
 _counter = itertools.count(1)
 
@@ -56,13 +57,16 @@ class MissionStep:
     attempts: int = 0
     result: Optional[str] = None
     verification: Optional[str] = None
+    outcome: Optional[str] = None
+    evidence: list[str] = field(default_factory=list)
 
     def to_payload(self) -> dict:
         return {
             "id": self.id, "title": self.title, "detail": self.detail,
             "status": self.status, "sensitive": self.sensitive,
             "result": (self.result or "")[:400] or None,
-            "verification": self.verification,
+            "verification": self.verification, "outcome": self.outcome,
+            "evidence": self.evidence,
         }
 
 
@@ -89,7 +93,7 @@ def _agent_menu(config: dict) -> str:
     lines = []
     for name in DEFAULT_AGENTS:
         spec = _spec(name, config)
-        lines.append(f"- {name}: tools {', '.join(spec.get('tools', []))}")
+        lines.append(f"- {name}: tools {', '.join(d.name for d in _declarations(spec, config))}")
     return "\n".join(lines)
 
 
@@ -112,6 +116,13 @@ _PLAN_SCHEMA = types.Schema(
 )
 
 
+async def _generate(client, **kwargs):
+    try:
+        return await client.aio.models.generate_content(**kwargs)
+    finally:
+        await client.aio.aclose()
+
+
 class MissionOrchestrator:
     def __init__(self):
         self._missions: dict[str, Mission] = {}
@@ -129,6 +140,12 @@ class MissionOrchestrator:
         mission = self._missions.get(mission_id)
         if mission is None or mission.status in ("done", "failed", "cancelled"):
             return None
+        mission.status = "cancelled"
+        for step in mission.steps:
+            if step.status not in ("done", "failed"):
+                step.status = "skipped"
+                step.outcome = "cancelled"
+        asyncio.create_task(self._publish(mission, "status"))
         if mission.task:
             mission.task.cancel()
         return mission
@@ -148,17 +165,17 @@ class MissionOrchestrator:
 
     async def _run(self, mission: Mission, config: dict):
         try:
-            await self._plan(mission, config)
+            await bounded(self._plan(mission, config), config.get("missions", {}).get("model_timeout_s", 90))
             if not mission.steps:
                 mission.status = "failed"
                 mission.report = "I couldn't break that goal into steps."
                 await self._publish(mission, "status")
-                await runtime.inject(
+                runtime.announce(
                     f"[Mission '{mission.goal}' failed: you couldn't form a plan. Tell the user briefly.]"
                 )
                 return
 
-            await runtime.inject(
+            runtime.announce(
                 f"[Mission plan ready for '{mission.goal}': "
                 + "; ".join(f"{s.id}. {s.title}" for s in mission.steps)
                 + ". Give the user a one-sentence heads-up that you're starting.]"
@@ -174,7 +191,7 @@ class MissionOrchestrator:
             else:
                 mission.status = "done"
 
-            await self._report(mission, config)
+            await bounded(self._report(mission, config), config.get("missions", {}).get("model_timeout_s", 90))
 
         except asyncio.CancelledError:
             mission.status = "cancelled"
@@ -182,13 +199,13 @@ class MissionOrchestrator:
                 if step.status in ("pending", "running", "verifying", "awaiting_approval"):
                     step.status = "skipped"
             await self._publish(mission, "status")
-            await runtime.inject(f"[Mission '{mission.goal}' was cancelled. Acknowledge briefly.]")
+            runtime.announce(f"[Mission '{mission.goal}' was cancelled. Acknowledge briefly.]")
         except Exception as e:
             mission.status = "failed"
             mission.report = ("I hit the Gemini quota mid-mission." if quota_hit(e)
-                              else f"The mission hit an error: {e}")
+                              else f"The mission hit an error: {type(e).__name__}")
             await self._publish(mission, "status")
-            await runtime.inject(
+            runtime.announce(
                 f"[Mission '{mission.goal}' failed: {mission.report}. Tell the user briefly.]"
             )
         finally:
@@ -211,7 +228,7 @@ class MissionOrchestrator:
             f"Mark a step sensitive if it sends, submits, deletes or changes anything outside this "
             f"machine's Freya project.\n\nGOAL: {mission.goal}"
         )
-        resp = await client.aio.models.generate_content(
+        resp = await _generate(client,
             model=mcfg.get("planner_model", PLANNER_MODEL_DEFAULT),
             contents=prompt,
             config=types.GenerateContentConfig(
@@ -221,6 +238,10 @@ class MissionOrchestrator:
             ),
         )
         raw = json.loads(resp.text or "[]")
+        if not isinstance(raw, list) or not raw or any(
+                not isinstance(x, dict) or not isinstance(x.get("detail"), str)
+                or not x["detail"].strip() or x.get("agent_type") not in DEFAULT_AGENTS for x in raw):
+            raise ValueError("Malformed mission plan")
         for i, item in enumerate(raw[: mcfg.get("max_plan_steps", MAX_PLAN_STEPS)], start=1):
             agent = str(item.get("agent_type", "researcher")).lower()
             mission.steps.append(MissionStep(
@@ -236,14 +257,15 @@ class MissionOrchestrator:
     async def _execute_step(self, mission: Mission, step: MissionStep, config: dict) -> bool:
         spec = _spec(step.agent_type, config)
         ctx = ToolContext(config, session=None, source=f"mission:{mission.id}")
-        evidence: list[str] = []
+        evidence = step.evidence
 
         async def on_tool(name, args, result):
-            evidence.append(f"{name}({json.dumps(args, default=str)[:120]}) -> {result[:300]}")
+            evidence.append(f"{name}({json.dumps(args, default=str)[:120]}) -> {result[:4000]}")
             await self._publish(mission, "step")
 
         prior = "\n".join(
-            f"Step {s.id} ({s.title}): {(s.result or '')[:300]}"
+            f"Step {s.id} ({s.title}): {(s.result or '')[:4000]}\n"
+            + "TOOL EVIDENCE / ARTIFACT PATHS:\n" + "\n".join(s.evidence[-6:])
             for s in mission.steps if s.status == "done"
         )
         feedback = ""
@@ -269,20 +291,30 @@ class MissionOrchestrator:
                     )
                 finally:
                     waiter.cancel()
+                    await asyncio.gather(waiter, return_exceptions=True)
             except asyncio.CancelledError:
                 raise
             except Exception as e:
                 if quota_hit(e):
                     raise
-                step.result = f"Step error: {e}"
+                step.result = f"Step error: {type(e).__name__}"
+                step.outcome = getattr(e, "outcome", "failed")
+                step.status = "failed"
+                await self._publish(mission, "step")
+                return False
 
             step.status = "verifying"
             mission.status = "verifying"
             await self._publish(mission, "step")
-            verified, reason = await self._verify_step(mission, step, evidence, config)
+            try:
+                verified, reason = await bounded(self._verify_step(mission, step, evidence, config), config.get("missions", {}).get("model_timeout_s", 90))
+            except Exception as exc:
+                verified, reason = False, f"Verification error: {type(exc).__name__}"
+                step.outcome = "verification_error"
             step.verification = reason
             if verified:
                 step.status = "done"
+                step.outcome = "success"
                 mission.status = "running"
                 await self._publish(mission, "step")
                 return True
@@ -329,7 +361,7 @@ class MissionOrchestrator:
         )
         try:
             client = genai.Client(api_key=get_agent_api_key())
-            resp = await client.aio.models.generate_content(
+            resp = await _generate(client,
                 model=mcfg.get("verifier_model", VERIFIER_MODEL_DEFAULT),
                 contents=prompt,
                 config=types.GenerateContentConfig(
@@ -339,10 +371,11 @@ class MissionOrchestrator:
                 ),
             )
             data = json.loads(resp.text or "{}")
-            return bool(data.get("verified")), str(data.get("reason", ""))[:300]
+            if type(data.get("verified")) is not bool or not isinstance(data.get("reason"), str):
+                raise ValueError("Invalid verifier output")
+            return data["verified"], data["reason"][:300]
         except Exception as e:
-            # Verifier unavailable → don't block the mission on it.
-            return True, f"(verification skipped: {e})"
+            raise VerificationError("Verifier unavailable or invalid output") from e
 
     async def _report(self, mission: Mission, config: dict):
         done = [s for s in mission.steps if s.status == "done"]
@@ -352,7 +385,7 @@ class MissionOrchestrator:
         try:
             mcfg = (config or {}).get("missions", {})
             client = genai.Client(api_key=get_agent_api_key())
-            resp = await client.aio.models.generate_content(
+            resp = await _generate(client,
                 model=mcfg.get("verifier_model", VERIFIER_MODEL_DEFAULT),
                 contents=(
                     "Summarize this mission outcome in 2-3 spoken-friendly sentences, "
@@ -368,7 +401,7 @@ class MissionOrchestrator:
             + (f"; failed on: {failed[0].title}" if failed else "") + "."
         )
         await self._publish(mission, "report")
-        await runtime.inject(
+        runtime.announce(
             f"[Mission '{mission.goal}' {mission.status}. Report to the user naturally: {mission.report}]"
         )
 
@@ -385,6 +418,8 @@ missions = MissionOrchestrator()
 
 @tool(
     "start_mission",
+    "Always use this when the user explicitly asks for a mission, including when they give "
+    "the goal in their next message. Use for product/price comparison research with constraints. "
     "Start a mission for a big goal needing several planned steps ('prepare my presentation'). "
     "It plans, executes, verifies and reports back, pausing for approval on sensitive steps. "
     "For a single task use dispatch_agent.",

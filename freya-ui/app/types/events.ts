@@ -22,6 +22,8 @@ export type MissionStepStatus =
     | "done" | "failed" | "skipped";
 
 export interface MissionStepPayload {
+    outcome?: "success" | "failed" | "exhausted" | "denied" | "verification_error" | "timeout" | "cancelled";
+    evidence?: string[];
     id: number;
     title: string;
     detail: string;
@@ -29,6 +31,13 @@ export interface MissionStepPayload {
     sensitive: boolean;
     result: string | null;
     verification: string | null;
+}
+
+export interface TradingEventPayload {
+    session_id: string;
+    sequence: number;
+    revision: number;
+    event: "changed" | "analysis";
 }
 
 export type MissionStatus =

@@ -16,6 +16,12 @@ interface PortraitCardProps {
   onExpressionChange: (e: ExpressionEvent | null) => void;
 }
 
+/** Animation is held back for now: the figure renders on a still portrait pose
+ *  and the ANIMATION SOON badge says so, rather than leaving a motionless model
+ *  that just looks broken. Expressions still travel through to the orb, so the
+ *  scene keeps reacting. Flip this to false to bring the body back. */
+const ANIMATION_FROZEN = true;
+
 /** Live 3D Freya portrait — the "surveillance feed" card, top-left. */
 export default function PortraitCard({ state, avatarIntent, engine, onExpressionChange }: PortraitCardProps) {
   const [loading, setLoading] = useState(true);
@@ -51,6 +57,7 @@ export default function PortraitCard({ state, avatarIntent, engine, onExpression
             onLoading={handleLoading}
             onError={handleError}
             onExpressionChange={onExpressionChange}
+            frozen={ANIMATION_FROZEN}
           />
         ) : (
           // Graceful degradation: dark animated gradient + silhouette, same chrome.
@@ -113,6 +120,32 @@ export default function PortraitCard({ state, avatarIntent, engine, onExpression
               />
             )}
           </>
+        )}
+
+        {/* Animation-pending badge. Small and top-right so it reads as status
+            chrome, not an error — the figure below is deliberately still. */}
+        {ANIMATION_FROZEN && !failed && !loading && (
+          <div
+            className="absolute top-2 right-2 flex items-center gap-1.5 px-2 py-1 pointer-events-none"
+            style={{
+              background: "rgba(7,5,10,0.55)",
+              border: "1px solid var(--accent-red-dim)",
+              borderRadius: "3px",
+              backdropFilter: "blur(2px)",
+            }}
+          >
+            <span
+              aria-hidden
+              className="block w-1 h-1 rounded-full hud-flicker"
+              style={{ background: "var(--accent-red)" }}
+            />
+            <span
+              className="text-[7px] tracking-[0.18em] font-mono uppercase whitespace-nowrap"
+              style={{ color: "var(--text-secondary)" }}
+            >
+              Animation soon
+            </span>
+          </div>
         )}
 
         {/* Footer chrome — layered above the viewport, never clipped by 3D */}

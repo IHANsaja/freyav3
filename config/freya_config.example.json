@@ -6,6 +6,7 @@
     "hotkey": "alt",
     "pause_hotkey": "ctrl+alt+space",
     "barge_in": true,
+    "speaker_echo_protection": true,
     "compression_trigger_tokens": 96000,
     "compression_target_tokens": 32000
   },
@@ -53,7 +54,7 @@
       "label": "Night Guardian",
       "model_override": null,
       "voice_override": "Kore",
-      "speech_style": "It's late. Speak slowly, softly and briefly â€” a calm, low-energy presence. No exclamation, minimal chatter, longer pauses.",
+      "speech_style": "It's late. Speak slowly, softly and briefly \u00e2\u20ac\u201d a calm, low-energy presence. No exclamation, minimal chatter, longer pauses.",
       "theme": {
         "accent": "#123a2c",
         "glow": 0.35,
@@ -84,12 +85,12 @@
     "brainstorming": {
       "label": "Brainstorming",
       "model_override": null,
-      "speech_style": "Energetic and exploratory â€” riff quickly, build on tangents, don't over-explain any single idea before moving to the next.",
+      "speech_style": "Energetic and exploratory \u00e2\u20ac\u201d riff quickly, build on tangents, don't over-explain any single idea before moving to the next.",
       "theme": {
         "accent": "#f2b705",
         "glow": 0.9
       },
-      "personality_override": "You are Freya in Brainstorming Mode: an energetic creative ideation partner. Help the user generate, expand, and riff on ideas rapidly â€” favor quantity and range over polish, offer unexpected angles, ask provocative 'what if' questions, and build on his ideas rather than just critiquing them. Ground the session in reality whenever it helps: proactively use get_world_news or get_news (for a specific topic) to pull in the latest real headlines and trends, and web_search or web_fetch to check what already exists or find fresh inspiration, rather than guessing from stale knowledge. Weave what you find naturally into the brainstorm â€” don't just recite headlines at him. Keep the energy up and the ideas flowing."
+      "personality_override": "You are Freya in Brainstorming Mode: an energetic creative ideation partner. Help the user generate, expand, and riff on ideas rapidly \u00e2\u20ac\u201d favor quantity and range over polish, offer unexpected angles, ask provocative 'what if' questions, and build on his ideas rather than just critiquing them. Ground the session in reality whenever it helps: proactively use get_world_news or get_news (for a specific topic) to pull in the latest real headlines and trends, and web_search or web_fetch to check what already exists or find fresh inspiration, rather than guessing from stale knowledge. Weave what you find naturally into the brainstorm \u00e2\u20ac\u201d don't just recite headlines at him. Keep the energy up and the ideas flowing."
     }
   },
   "apps": {},
@@ -107,7 +108,7 @@
   },
   "ambient": {
     "enabled": true,
-    "vision_model": "gemini-2.5-flash",
+    "vision_model": "gemini-3.5-flash",
     "context_tracker": {
       "enabled": false,
       "stuck_minutes": 10,
@@ -118,7 +119,7 @@
         "08:00"
       ],
       "voice_suggestions": false,
-      "draft_model": "gemini-2.5-flash-lite"
+      "draft_model": "gemini-3.5-flash-lite"
     }
   },
   "context": {
@@ -129,8 +130,8 @@
   },
   "browser": {
     "enabled": true,
-    "llm_model": "gemini-2.5-flash",
-    "fallback_model": "gemini-2.5-flash-lite",
+    "llm_model": "gemini-3.5-flash",
+    "fallback_model": "gemini-3.5-flash-lite",
     "headless": false,
     "max_steps": 25,
     "vision": true,
@@ -146,6 +147,20 @@
   },
   "screen": {
     "engine": "uia_ocr"
+  },
+  "overlay": {
+    "enabled": true,
+    "fps": 60,
+    "intensity": 1.0,
+    "palette": "mode",
+    "effects": {
+      "scan": true,
+      "element": true,
+      "click": true,
+      "move": true,
+      "scroll": true,
+      "type": true
+    }
   },
   "desktop_popup": {
     "enabled": true,
@@ -178,19 +193,21 @@
     "refresh_days": 7
   },
   "missions": {
-    "planner_model": "gemini-2.5-flash",
-    "verifier_model": "gemini-2.5-flash-lite",
-    "max_plan_steps": 6
+    "planner_model": "gemini-3.5-flash",
+    "verifier_model": "gemini-3.5-flash-lite",
+    "max_plan_steps": 6,
+    "model_timeout_s": 90,
+    "tool_timeout_s": 180
   },
   "sub_agents": {
     "researcher": {
-      "model": "gemini-2.5-flash"
+      "model": "gemini-3.5-flash"
     },
     "coder": {
-      "model": "gemini-2.5-flash"
+      "model": "gemini-3.5-flash"
     },
     "operator": {
-      "model": "gemini-2.5-flash"
+      "model": "gemini-3.5-flash"
     }
   },
   "mcp_servers": {
@@ -210,5 +227,14 @@
         "mcp-server-fetch"
       ]
     }
+  },
+  "trading": {
+    "enabled": true,
+    "fee_rate": "0.001",
+    "slippage_rate": "0.0005",
+    "gemini_model": "gemini-3.5-flash",
+    "openai_model": "",
+    "analysis_timeout_s": 45,
+    "max_analyses_per_session": 20
   }
 }

@@ -278,6 +278,8 @@ def run_terminal_command(command: str) -> str:
             timeout=15
         )
         output = result.stdout.strip() or result.stderr.strip()
+        if result.returncode:
+            return f"Command failed (exit {result.returncode}): {output[:2000]}"
         if not output:
             return "Command ran successfully with no output."
         # Trim output so Freya doesn't read 500 lines

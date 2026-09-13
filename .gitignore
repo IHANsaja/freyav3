@@ -14,8 +14,8 @@ dist/
 downloads/
 eggs/
 .eggs/
-lib/
-lib64/
+/lib/
+/lib64/
 parts/
 sdist/
 var/
@@ -216,6 +216,9 @@ memory/freya_memory.imported.md
 # Vector embeddings of the same memory (core/rag_memory.py).
 memory/rag_db/
 
+# Undo record for organize_folder — real paths from a real machine.
+memory/organize_undo.json
+
 # Local config: fills up with absolute paths to whatever is installed on THIS
 # machine. config/freya_config.example.json is the tracked template; the loader
 # copies it here on first run (config/__init__.py: ensure_config).
@@ -248,3 +251,7 @@ _*.py
 # Env files beyond the ignored .env — keys must never arrive by clone.
 .env.*
 !.env.example
+
+# Trading accounts and third-party inspection checkout
+memory/trading_lab.db*
+.tmp-gptheist/

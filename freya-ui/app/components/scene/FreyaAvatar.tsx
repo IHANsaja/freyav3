@@ -13,6 +13,9 @@ interface FreyaAvatarProps {
     avatarIntent: AvatarIntent | null;
     modelKey?: string;
     onExpression: (e: ExpressionEvent | null) => void;
+    /** Hold the figure on a still pose. Expressions are still raised — the orb
+     *  reads them for its mood — but nothing on the body moves. */
+    frozen?: boolean;
 }
 
 /** Socket session states map to animation base states; richer states
@@ -34,7 +37,7 @@ function socketToBase(state: string): BaseState {
  * AvatarController wiring (3-layer mixer, intent handling, look-at) keeps
  * working unchanged inside the unified HoloScene canvas.
  */
-export default function FreyaAvatar({ state, avatarIntent, modelKey, onExpression }: FreyaAvatarProps) {
+export default function FreyaAvatar({ state, avatarIntent, modelKey, onExpression, frozen = false }: FreyaAvatarProps) {
     const manifest = AVATAR_MODELS[modelKey ?? DEFAULT_AVATAR];
     const group = useRef<THREE.Group>(null!);
     const { scene, animations } = useGLTF(manifest.url);
@@ -57,22 +60,35 @@ export default function FreyaAvatar({ state, avatarIntent, modelKey, onExpressio
 
     // Session state drives the base layer (free — no LLM involved). Dance and
     // other intent-driven states own the base layer while they're active.
+    // Skipped while frozen: a base-state change starts a crossfade, and with
+    // the mixer stopped that fade can never finish, leaving her stuck halfway
+    // between two clips.
     useEffect(() => {
         const c = controllerRef.current;
-        if (!c) return;
+        if (!c || frozen) return;
         const keep = ["dance", "thinking", "working", "seated"];
         if (state === "speaking" || !keep.includes(c.getBaseState())) {
             c.setBaseState(socketToBase(state));
         }
-    }, [state, actions]);
+    }, [state, actions, frozen]);
 
-    // LLM intents layer on top.
+    // LLM intents layer on top. While frozen only expressions are let through:
+    // they move nothing on the body, they just raise the event the orb colours
+    // itself from. Gestures and idle/state changes would start clips.
     useEffect(() => {
         const c = controllerRef.current;
         if (!c || !avatarIntent || avatarIntent.seq === lastIntentSeq.current) return;
         lastIntentSeq.current = avatarIntent.seq;
+        if (frozen && avatarIntent.intent !== "expression") return;
         c.applyIntent(avatarIntent);
-    }, [avatarIntent]);
+    }, [avatarIntent, frozen]);
+
+    // Hold the body still. The clips stay *selected* rather than stopped, so
+    // the pose she holds is the first frame of her idle animation (played at
+    // full weight by the controller's constructor) and not the bind T-pose.
+    useEffect(() => {
+        controllerRef.current?.setFrozen(frozen);
+    }, [frozen, actions, state]);
 
     useFrame((rootState, delta) => {
         controllerRef.current?.update(delta, rootState.camera);
