@@ -51,11 +51,15 @@ export interface Session {
     side: string;
     kind: string;
     status: string;
+    price?: string | null;
+    target?: string | null;
+    reason?: string;
     quantity: string;
   }[];
   fills: Fill[];
 }
 export interface Report {
+  snapshot?: { id: string };
   id: string;
   revision: number;
   snapshot_id: string;
@@ -83,4 +87,15 @@ export interface Report {
     invalidation: string;
     lesson: string;
   } | null;
+}
+
+export interface GuideReply {
+  session_id: string;
+  revision: number;
+  snapshot_id: string;
+  as_of: number;
+  candle_id: string;
+  provider: string;
+  tokens: number | null;
+  answer: string;
 }

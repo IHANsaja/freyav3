@@ -137,6 +137,38 @@ async def poll(sid:str):
     return result
 
 
+from core.trading.guide import Workspace, GuideRequest
+
+@router.post('/workspace')
+def workspace(body:Workspace):
+    from core.trading.guide import set_workspace
+    service,_=services()
+    return checked(set_workspace,service,body)
+
+@router.get('/context')
+def workspace_context(session_id:str|None=None):
+    from core.trading.guide import context
+    service,_=services()
+    return checked(context,service,session_id)
+
+@router.post('/guide/{sid}')
+async def guide(sid:str,body:GuideRequest,request:Request):
+    from core.trading.guide import answer
+    service,desk=services()
+    task=asyncio.create_task(answer(service,desk.config,sid,body.model_dump()))
+    try:
+        while not task.done():
+            if await request.is_disconnected():
+                task.cancel();raise HTTPException(499,'Guide request cancelled')
+            await asyncio.wait({task},timeout=.2)
+        return await task
+    except ValueError as exc: raise HTTPException(422,str(exc)) from exc
+    except HTTPException: raise
+    except Exception as exc: raise HTTPException(503,'Guide provider unavailable; use Quick help or try later') from exc
+    finally:
+        if not task.done():task.cancel()
+        await asyncio.gather(task,return_exceptions=True)
+
 # Offline launch without importing audio, desktop automation or Gemini Live.
 app=FastAPI(title='Freya Trading Lab (simulation only)')
 app.add_middleware(CORSMiddleware,allow_origins=['http://localhost:3000'],allow_methods=['*'],allow_headers=['*'])
