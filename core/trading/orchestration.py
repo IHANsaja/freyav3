@@ -2,6 +2,7 @@ import asyncio
 import hashlib
 import json
 import time
+import uuid
 from core.trading.providers import explain, image_data, PROMPT_VERSION
 from core.trading.schemas import Analysis, AnalysisRequest
 from core.trading.persistence import encode
@@ -21,11 +22,11 @@ class AnalystDesk:
             hashlib.sha256(image[0]).hexdigest() if image else None]).encode()).hexdigest()
         async with self.lock:
             with self.service.store.transaction() as db:
-                old=db.execute('SELECT data FROM analyses WHERE id=?',(identity,)).fetchone()
+                old=db.execute("SELECT data FROM analyses WHERE session=? AND (id=? OR id LIKE ?) ORDER BY CASE WHEN json_extract(data,'$.status')='done' THEN 0 ELSE 1 END, rowid DESC LIMIT 1",(sid,identity,identity+':%')).fetchone()
                 if old:
                     result=json.loads(old[0])
                 used=db.execute('SELECT COUNT(*) FROM analyses WHERE session=?',(sid,)).fetchone()[0]
-            if old:
+            if old and result.get('status')=='done':
                 result['stale']=snapshot['revision']!=self.service.get(sid)['revision']
                 return result
             if used>=self.config.get('max_analyses_per_session',20): raise ValueError('Analysis budget exhausted')
@@ -60,13 +61,16 @@ class AnalystDesk:
                 'Veto retained: incomplete data or analysis error' if veto else 'Explanation only. Orders independently validate cash, reservations and long-only quantity.',start)
             start=time.perf_counter(); stage('Coach','skipped' if analysis is None else 'done',analysis.lesson if analysis else 'No lesson from invalid analysis',start)
             start=time.perf_counter(); stage('Recorder','done','Immutable snapshot and stage audit saved',start)
-            result=dict(id=identity,snapshot_id=snapshot['snapshot_id'],snapshot=snapshot,as_of=snapshot['as_of'],
+            # Only validated successes occupy the reusable cache key. Failed attempts
+            # retain separate immutable audit IDs and still count against the budget.
+            record_id=identity if status=='done' and not old else identity+':'+uuid.uuid4().hex
+            result=dict(id=record_id,snapshot_id=snapshot['snapshot_id'],snapshot=snapshot,as_of=snapshot['as_of'],
                 revision=snapshot['revision'],provider=req.provider,prompt_version=PROMPT_VERSION,usage=usage,
                 status=status,error=error,veto=veto,stages=stages,image_levels_approximate=bool(image),
                 analysis=analysis.model_dump(mode='json') if analysis else None)
             with self.service.store.transaction() as db:
-                db.execute('INSERT INTO analyses VALUES (?,?,?)',(identity,sid,encode(result)))
-                db.execute('INSERT INTO journal(session,entry) VALUES (?,?)',(sid,encode({'action':'analysis','analysis_id':identity,'as_of':snapshot['as_of'],'status':status})))
+                db.execute('INSERT INTO analyses VALUES (?,?,?)',(record_id,sid,encode(result)))
+                db.execute('INSERT INTO journal(session,entry) VALUES (?,?)',(sid,encode({'action':'analysis','analysis_id':record_id,'as_of':snapshot['as_of'],'status':status})))
             result['stale']=self.service.get(sid)['revision']!=snapshot['revision']
             if cancelled: raise asyncio.CancelledError()
             return result

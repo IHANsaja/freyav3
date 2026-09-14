@@ -101,6 +101,7 @@ export default function MissionPanel({ mission, onCancel }: MissionPanelProps) {
                     </div>
                 </div>
                 <p className="text-sm text-parchment leading-snug">{mission.goal}</p>
+                {mission.usage && <p className="text-xs text-outline mt-2">Local usage: {mission.usage.requests} requests · {mission.usage.tokens} reported tokens</p>}
 
                 {/* Progress bar */}
                 <div className="mt-3 h-px bg-outline-variant/30 overflow-hidden">

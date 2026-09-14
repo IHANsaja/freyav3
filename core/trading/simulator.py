@@ -153,13 +153,18 @@ class TradingService:
         if r.side=='sell' and r.quantity>D(s['quantity'])-qty: raise ValueError("Insufficient unreserved position")
         s['orders'].append(dict(id=uuid.uuid4().hex,side=r.side,kind=r.kind,quantity=str(r.quantity),
             price=str(r.price) if r.price else None,target=str(r.target) if r.target else None,
-            submitted=s['cursor'],status='pending',reserved=str(reserve) if r.side=='buy' else '0',thesis=s['thesis']))
+            submitted=s['cursor'],submitted_at=time.time() if s.get('environment')=='observation' else None,status='pending',reserved=str(reserve) if r.side=='buy' else '0',thesis=s['thesis']))
 
     def _fill_bar(self,s):
         bar=s['candles'][s['cursor']]
         op,hi,lo=(D(bar[k]) for k in ('open','high','low'))
         for order in s['orders']:
             if order['status']!='pending' or order['submitted']>=s['cursor']: continue
+            if s.get('environment')=='observation' and (order.get('submitted_at') is None or bar['time'] < order['submitted_at']):
+                # Never infer pre-submission execution from a partially observed candle.
+                if order.get('submitted_at') is None:
+                    order['status']='rejected';order['reason']='Legacy observation order lacks submission time'
+                continue
             if s['cursor'] and bar['time']-s['candles'][s['cursor']-1]['time']!=s['interval']:
                 order['status']='rejected';order['reason']='Missing candle interval; execution cannot be reconstructed';continue
             buy=order['side']=='buy'; kind=order['kind']; price=None; ambiguous=False

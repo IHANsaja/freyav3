@@ -43,7 +43,7 @@ class Ambient:
         from google import genai
         from google.genai import types
         model = (config or {}).get("ambient", {}).get("vision_model", "gemini-3.5-flash")
-        client = genai.Client(api_key=get_agent_api_key())
+        client = genai.Client(api_key=get_agent_api_key(), http_options=types.HttpOptions(retry_options=types.HttpRetryOptions(attempts=1)))
         loop = asyncio.get_running_loop()
         deadline = loop.time() + max_minutes * 60
         try:
@@ -61,7 +61,8 @@ class Ambient:
                     "Answer strictly 'YES: <one short reason>' if the condition is now true, "
                     "otherwise answer exactly 'NO'."
                 )
-                resp = await client.aio.models.generate_content(
+                from core.quota import generate
+                resp = await generate(client, quota_config=config,
                     model=model,
                     contents=[types.Content(role="user", parts=[
                         types.Part(text=prompt),

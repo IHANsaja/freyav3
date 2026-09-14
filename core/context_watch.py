@@ -309,8 +309,10 @@ class ContextTracker:
         try:
             from google import genai
             from config import get_agent_api_key
-            client = genai.Client(api_key=get_agent_api_key())
-            resp = await client.aio.models.generate_content(
+            from google.genai import types
+            client = genai.Client(api_key=get_agent_api_key(), http_options=types.HttpOptions(retry_options=types.HttpRetryOptions(attempts=1)))
+            from core.quota import generate
+            resp = await generate(client,
                 model=self._cfg().get("draft_model", "gemini-3.5-flash-lite"),
                 contents=(
                     "You are Freya, a proactive assistant. Based on this observation, write ONE "

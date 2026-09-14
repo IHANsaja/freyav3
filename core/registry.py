@@ -219,6 +219,7 @@ async def _execute(name: str, args: dict, ctx: ToolContext, entry: dict | None) 
     except Exception as e:
         if ctx.source != "live":
             from core.execution import ExecutionError
+            if isinstance(e, ExecutionError): raise
             raise ExecutionError(f"Tool failed: {name} ({type(e).__name__})") from e
         return f"Tool error in {name}: {e}"
 
