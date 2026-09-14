@@ -54,7 +54,8 @@ class TradingGuideTests(unittest.TestCase):
         set_workspace(self.svc, Workspace(client_id='one', session_id=self.s['id']))
         second = self.svc.create({'key': 'second'})
         set_workspace(self.svc, Workspace(client_id='two', session_id=second['id']))
-        with self.assertRaisesRegex(ValueError, 'Multiple'): context(self.svc)
+        # Several open tabs never block Freya: the most recently used one wins.
+        self.assertEqual(context(self.svc)['id'], second['id'])
         self.assertEqual(context(self.svc, self.s['id'])['id'], self.s['id'])
         set_workspace(self.svc, Workspace(client_id='two', session_id=second['id'], active=False))
         self.assertEqual(context(self.svc)['id'], self.s['id'])
@@ -66,6 +67,25 @@ class TradingGuideTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, 'thesis'):
                 self.ask('Evaluate the current market structure', provider='gemini')
             generate.assert_not_called()
+
+    def test_focused_chart_and_yellow_line_without_thesis(self):
+        other = self.svc.create({'key': 'background'})
+        set_workspace(self.svc, Workspace(client_id='front', session_id=self.s['id'], focused=True, ema=True))
+        set_workspace(self.svc, Workspace(client_id='back', session_id=other['id']))
+        facts = context(self.svc)
+        self.assertEqual(facts['id'], self.s['id'])
+        self.assertEqual(facts['chart_legend']['yellow_gold_line']['name'], 'EMA 20')
+        self.assertTrue(facts['chart_legend']['yellow_gold_line']['visible'])
+        reply = self.ask('What is this yellow line on the chart?', provider='gemini')
+        self.assertEqual(reply['provider'], 'local')
+        self.assertIn('EMA(20)', reply['answer'])
+
+    def test_workspace_sync_does_not_interrupt_voice(self):
+        with patch.object(api, 'services', return_value=(self.svc, SimpleNamespace(config={}))), patch('core.runtime.announce') as announce, TestClient(api.app) as client:
+            response = client.post('/trading/workspace', json={'client_id':'front', 'session_id':self.s['id'], 'focused':True, 'ema':False})
+            self.assertEqual(response.status_code, 200)
+            announce.assert_not_called()
+            self.assertFalse(client.get('/trading/context').json()['chart_legend']['yellow_gold_line']['visible'])
 
     def test_custom_cache_and_budget(self):
         self.s = self.svc.mutate(self.s['id'], 'thesis', {'key': 'thesis', 'revision': 0, 'thesis': 'Range may break higher', 'invalidation': 'Below the range'})

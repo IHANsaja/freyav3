@@ -28,6 +28,7 @@ import base64
 _SPEECH_NOISE = re.compile(
     r"""(?xi)
     response:\s*\w+\s*\{[^{}]*\}   # response:trigger_emphasis{}
+    | \btrigger_[a-z_]+\b(?:\s*\{[^{}]*\})?  # bare trigger_thinking / trigger_x{}
     | ^\s*tool_(?:code|outputs?)\s*:? # stray tool_code / tool_output markers
     | \[SILENT[^\]]*\]             # our own silent-note marker, if it ever echoes
     """
@@ -352,7 +353,14 @@ class FreyaModel:
             ),
             system_instruction=types.Content(
                 parts=[types.Part(text=self.personality + "\n\n" + TOOLS_FIRST + "\n" +
-                    "TRADING LAB: Call get_trading_lab_context before answering questions about the active chart or paper account. Use its structured facts instead of screenshots. Respect analysis_locked; ask which session if ambiguous. "
+                    "TRADING LAB: Call get_trading_lab_context with no session_id first before answering questions about the active chart or paper account. It resolves the focused workspace automatically; do not ask the user for a session before trying it. Use its structured facts (chart_legend, recent_candles, market_summary, live_price, indicators, orders) instead of screenshots; never capture_screen for the Trading Lab. For questions about colored lines, use chart_legend and answer the original question directly. Explaining indicator mechanics does not require a thesis. Do not replace the answer with an acknowledgment or offer to explain. "
+                    "TRADING TEACHER: In the Trading Lab you are the user's patient, warm trading teacher. Assume they know NOTHING about trading unless get_trading_learner_profile says otherwise; call it at the start of any trading conversation. "
+                    "Speak in plain everyday words. Avoid jargon; if a term is unavoidable (candle, EMA, RSI, support, stop loss...), explain it simply with an everyday analogy the first time, and only use terms the profile says they already understand. "
+                    "Teach ONE small idea at a time in two to four short sentences, point at something real on their chart (use draw_on_chart when a picture helps, then describe what you drew), and finish with one quick question that checks understanding. "
+                    "Whenever they show they understood a concept, struggle with one, or you move on to a new topic, call update_trading_learner_profile, so their knowledge level grows over time and future lessons build on it. Raise the level gradually. "
+                    "You can see their drawings in get_trading_lab_context; comment on them kindly and correct misunderstandings. "
+                    "DRAWING HONESTY: to draw you MUST call draw_on_chart; saying you drew is not drawing. Only say something is on their chart after draw_on_chart returns visible=true. If it returns visible=false or an error, tell them plainly that the drawing did not appear. Your drawings are violet; the yellow/gold line is the EMA 20 indicator, never yours. "
+                    "Never promise profits or give personal financial advice; it is paper trading practice. Respect analysis_locked. The tool already knows which chart the user is on; never ask which session they mean. Answer each question once. "
                     "MISSION ROUTING: When the user asks to start a mission, retain that intent "
                     "while asking for its goal. Once they supply the goal, call start_mission "
                     "with all constraints, even if the goal concerns web research. Do not substitute "

@@ -109,6 +109,45 @@ class ExtendedTradingTests(test_trading.TradingTests):
         with patch('core.trading.data.httpx.AsyncClient',return_value=Client()):
             data=asyncio.run(coinbase('BTC-USD',900,rows[0]['time'],rows[-1]['time']+900))
         self.assertEqual(len(calls),3);self.assertEqual(len(data['candles']),620);self.assertFalse(data['flags'])
+    def test_live_markets_schema_and_stats(self):
+        from core.trading import data
+        state=self.svc.create({'key':'sol','symbol':'SOL-USD','interval':60})
+        self.assertEqual(state['symbol'],'SOL-USD')
+        with self.assertRaises(Exception):self.svc.create({'key':'bad','symbol':'FAKE-USD'})
+        class Client:
+            async def __aenter__(self):return self
+            async def __aexit__(self,*a):pass
+            async def get(self,url):
+                return type('Response',(),{'raise_for_status':lambda self:None,
+                    'json':lambda self:{'last':'110','open':'100','high':'111','low':'99','volume':'5'}})()
+        data._stats_cache.clear()
+        with patch('core.trading.data.httpx.AsyncClient',return_value=Client()):
+            prices=asyncio.run(data.live_stats(['SOL-USD','FAKE-USD']))
+        self.assertEqual([p['symbol'] for p in prices],['SOL-USD']);self.assertEqual(prices[0]['change_24h'],'10.00')
+    def test_voice_briefing_once_per_session_without_vision(self):
+        from core.trading import guide
+        from core import runtime
+        guide._views.clear();guide._briefed.clear();guide._last_brief=0.0
+        body=guide.Workspace(client_id='c1',session_id=self.s['id'],focused=True)
+        guide.set_workspace(self.svc,body)
+        other=self.svc.create({'key':'other-tab'})
+        background=guide.Workspace(client_id='c2',session_id=other['id'])
+        guide.set_workspace(self.svc,background)
+        with patch.object(runtime,'is_live',return_value=False):
+            self.assertIsNone(guide.voice_briefing(self.svc,body))
+        with patch.object(runtime,'is_live',return_value=True):
+            # A background tab syncing must not brief Freya about the wrong chart.
+            self.assertIsNone(guide.voice_briefing(self.svc,background))
+            note=guide.voice_briefing(self.svc,body)
+            self.assertIn('market_summary',note);self.assertIn('capture_screen',note)
+            # Repeated syncs never make her repeat the briefing.
+            for _ in range(3):
+                self.assertIsNone(guide.voice_briefing(self.svc,body))
+                self.assertIsNone(guide.voice_briefing(self.svc,background))
+        self.assertEqual(guide.context(self.svc)['id'],self.s['id'])
+        guide._views.clear()
+        facts=guide.context(self.svc,self.s['id'])
+        self.assertEqual(len(facts['recent_candles']),30);self.assertIn('change_pct',facts['market_summary'])
 
 
 if __name__=='__main__':unittest.main()

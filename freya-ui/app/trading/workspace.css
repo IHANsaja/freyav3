@@ -413,13 +413,90 @@
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 8px;
-  padding: 10px 4px;
+  gap: 2px;
+  padding: 8px 4px;
+  position: relative;
+  z-index: 5;
+  overflow: visible;
 }
 .trading-workspace .drawing-toolbar button {
-  font-size: 23px;
-  padding: 3px 7px;
-  line-height: 1.2;
+  font-size: 17px;
+  width: 32px;
+  height: 30px;
+  padding: 0;
+  line-height: 1;
+  position: relative;
+}
+.trading-workspace .tool-group {
+  position: relative;
+}
+.trading-workspace .tool-caret {
+  position: absolute;
+  right: 2px;
+  bottom: 3px;
+  border: 3px solid transparent;
+  border-right-color: var(--muted);
+  border-bottom-color: var(--muted);
+}
+.trading-workspace .tool-flyout {
+  position: absolute;
+  left: 38px;
+  top: 0;
+  min-width: 210px;
+  display: grid;
+  gap: 2px;
+  padding: 6px;
+  background: #151c29;
+  border: 1px solid var(--edge);
+  border-radius: 6px;
+  box-shadow: 0 10px 30px #0008;
+}
+.trading-workspace .tool-flyout small {
+  color: var(--muted);
+  font-size: 9px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  padding: 4px 6px;
+}
+.trading-workspace .drawing-toolbar .tool-flyout button {
+  width: auto;
+  height: 30px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 0 8px;
+  font-size: 12px;
+  text-align: left;
+}
+.trading-workspace .tool-flyout button span {
+  width: 20px;
+  font-size: 16px;
+  text-align: center;
+}
+.trading-workspace .chart-canvas-wrap {
+  flex: 1;
+  min-height: 0;
+  position: relative;
+}
+.trading-workspace .chart-canvas-wrap .chart-canvas {
+  position: absolute;
+  inset: 0;
+}
+.trading-workspace .drawing-layer {
+  position: absolute;
+  left: 0;
+  top: 0;
+  overflow: hidden;
+  z-index: 3;
+}
+.trading-workspace .drawing-layer .erasable {
+  cursor: pointer;
+}
+.trading-workspace .drawing-layer .erasable:hover {
+  opacity: 0.45;
+}
+.trading-workspace .chart-canvas:not(.tool-cursor):not(.tool-eraser) {
+  cursor: crosshair;
 }
 .trading-workspace .drawing-toolbar > span {
   width: 22px;
@@ -534,7 +611,7 @@
 }
 .trading-workspace .account-strip {
   display: grid;
-  grid-template-columns: repeat(5, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(128px, 1fr));
   padding: 20px 14px;
   border-bottom: 1px solid var(--edge);
   gap: 14px;
@@ -547,7 +624,7 @@
   margin-bottom: 9px;
 }
 .trading-workspace .account-strip strong {
-  font-size: 17px;
+  font-size: 15px;
   font-weight: 500;
   font-variant-numeric: tabular-nums;
 }
@@ -788,6 +865,46 @@
   color: #8094b8;
   font-size: 9px;
   margin-top: 8px;
+}
+.trading-workspace .freya-actions {
+  border: 1px solid var(--edge);
+  border-radius: 6px;
+  padding: 8px 10px;
+  margin-bottom: 12px;
+  font-size: 11px;
+}
+.trading-workspace .freya-actions small {
+  display: block;
+  color: var(--muted);
+  font-size: 9px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  margin-bottom: 4px;
+}
+.trading-workspace .freya-actions p {
+  margin: 2px 0;
+}
+.trading-workspace .voice-controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  margin: 14px 0;
+}
+.trading-workspace .voice-state {
+  flex: 1 1 100%;
+  font-size: 11px;
+  color: var(--muted);
+}
+.trading-workspace .voice-state.listening {
+  color: #21baa0;
+}
+.trading-workspace .voice-state.speaking {
+  color: #a7c3ff;
+}
+.trading-workspace .voice-toggle.on {
+  border-color: #ef6474;
+  color: #ef6474;
 }
 .trading-workspace .guide-compose {
   display: grid;

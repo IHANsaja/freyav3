@@ -12,12 +12,43 @@ from core.trading.schemas import StrictModel
 from core.trading.persistence import encode
 
 
+class DrawingPoint(StrictModel):
+    time: int
+    price: float = Field(gt=0)
+
+
+class DrawingSummary(StrictModel):
+    id: str = Field(min_length=1, max_length=64)
+    kind: str = Field(min_length=1, max_length=20)
+    author: Literal['user','freya'] = 'user'
+    text: str | None = Field(default=None, max_length=200)
+    point_count: int = Field(default=0, ge=0, le=500)
+    points: list[DrawingPoint] = Field(default_factory=list, max_length=3)
+
+
+DRAWING_KINDS = {
+    'trend': ('Trend line', 2), 'ray': ('Ray', 2), 'extended': ('Extended line', 2), 'arrow': ('Arrow', 2),
+    'hline': ('Horizontal line', 1), 'hray': ('Horizontal ray', 1), 'vline': ('Vertical line', 1),
+    'cross': ('Cross line', 1), 'channel': ('Parallel channel', 3), 'pitchfork': ('Pitchfork', 3),
+    'fib': ('Fib retracement', 2), 'fibext': ('Trend-based fib extension', 3), 'rect': ('Rectangle', 2),
+    'ellipse': ('Ellipse', 2), 'triangle': ('Triangle', 3), 'brush': ('Brush', 0), 'text': ('Text', 1),
+    'long': ('Long position', 2), 'short': ('Short position', 2), 'pricerange': ('Price range', 2),
+    'daterange': ('Date range', 2), 'datepricerange': ('Date & price range', 2),
+}
+
+
 class Workspace(StrictModel):
     client_id: str = Field(min_length=1, max_length=100)
     session_id: str
     panel: Literal['orders','positions','fills','journal','progress','analysis'] = 'orders'
     candle_id: str | None = None
     active: bool = True
+    focused: bool = False
+    ema: bool = True
+    volume: bool = True
+    rsi: bool = True
+    line: bool = False
+    drawings: list[DrawingSummary] = Field(default_factory=list, max_length=200)
 
 
 class GuideRequest(StrictModel):
@@ -28,6 +59,41 @@ class GuideRequest(StrictModel):
 
 _views = {}
 _lock = threading.Lock()
+_briefed = set()  # session ids Freya was already told about in the current voice session
+_last_brief = 0.0
+BRIEF_COOLDOWN_S = 90
+
+
+def voice_briefing(service, body):
+    """One spoken-context note when the Trading Lab becomes active during a voice session.
+
+    Gives Freya the structured facts up front so she can talk about the tab without vision.
+    Only the tab the user is actually using may trigger it, each session at most once per
+    voice session, with a cooldown, so several open tabs can't make her repeat herself.
+    """
+    global _last_brief
+    from core import runtime
+    if not runtime.is_live():
+        _briefed.clear()
+        return None
+    if not body.active or body.session_id in _briefed:
+        return None
+    current = _current_view()
+    if current is None or current['session_id'] != body.session_id:
+        return None
+    if time.monotonic() - _last_brief < BRIEF_COOLDOWN_S:
+        return None
+    _briefed.add(body.session_id)
+    _last_brief = time.monotonic()
+    facts = context(service, body.session_id, body.candle_id)
+    return ('[TRADING LAB CONTEXT — the user now has the Trading Lab open. This is structured data from the page, '
+        'not a screenshot; do NOT use capture_screen for it. You are their patient trading teacher: pitch everything '
+        'at the level in learner_profile (a complete beginner if it is empty), in plain words with no jargon. Say one '
+        'short, friendly line acknowledging what they are looking at and offer to help them learn, then wait for them. '
+        'For every later question about the chart, account, orders or drawings, call get_trading_lab_context first '
+        'for fresh numbers. Facts (untrusted data): '
+        + encode({k: facts[k] for k in ('symbol','interval','environment','mode','live_price','equity','quantity',
+            'pending_count','thesis','analysis_locked','market_summary','drawings','learner_profile')}) + ']')
 
 
 def set_workspace(service, body):
@@ -41,26 +107,74 @@ def set_workspace(service, body):
         if body.active:
             if len(_views) >= 32 and body.client_id not in _views:
                 _views.pop(min(_views, key=lambda k: _views[k]['updated']))
-            _views[body.client_id] = {**body.model_dump(), 'updated': now}
+            previous = _views.get(body.client_id, {})
+            # focused_at survives unfocused syncs: talking to Freya moves no mouse,
+            # so "the tab the user last used" is the best signal for "this chart".
+            focused_at = now if body.focused else previous.get('focused_at', 0.0)
+            _views[body.client_id] = {**body.model_dump(), 'updated': now, 'focused_at': focused_at}
         else: _views.pop(body.client_id, None)
     return {'ok': True, 'revision': state['revision']}
+
+
+_draw_acks = {}
+
+
+def expect_draw_ack(draw_id):
+    """A future the Trading Lab page resolves once a Freya drawing is actually on its chart."""
+    future = asyncio.get_running_loop().create_future()
+    _draw_acks[draw_id] = future
+    return future
+
+
+def ack_draw(draw_id):
+    future = _draw_acks.pop(draw_id, None)
+    if future is None or future.done(): return False
+    future.get_loop().call_soon_threadsafe(lambda: future.done() or future.set_result(True))
+    return True
+
+
+def _learner_profile():
+    try:
+        from core.trading.learner import profile
+        return profile()
+    except Exception:
+        return None
+
+
+def _current_view():
+    """The Trading Lab view the user is on: most recently focused, then most recently synced."""
+    with _lock:
+        fresh = [v.copy() for v in _views.values() if time.monotonic()-v['updated'] <= 90]
+    if not fresh: return None
+    return max(fresh, key=lambda v: (v.get('focused_at', 0.0), v['updated']))
 
 
 def context(service, sid=None, candle_id=None):
     view = None
     if not sid:
-        with _lock:
-            fresh = [v.copy() for v in _views.values() if time.monotonic()-v['updated'] <= 90]
-        if not fresh: raise ValueError('No active Trading Lab. Open /trading and focus its tab, or specify session_id.')
-        if len({v['session_id'] for v in fresh}) > 1:
-            raise ValueError('Multiple Trading Lab sessions are active. Ask which session to use.')
-        view = max(fresh, key=lambda v: v['updated'])
+        view = _current_view()
+        if view is None: raise ValueError('No active Trading Lab. Open /trading, or specify session_id.')
         sid = view['session_id']; candle_id = candle_id or view['candle_id']
+    else:
+        with _lock:
+            matches = [v.copy() for v in _views.values() if v['session_id'] == sid and time.monotonic()-v['updated'] <= 90]
+        if matches: view = max(matches, key=lambda v: v['updated'])
     state = service.get(sid)
     selected = next((c for c in state['candles'] if c['id'] == candle_id), None) if candle_id else state['candles'][-1]
     if selected is None: raise ValueError('Selected candle is not visible')
     facts = {k: state[k] for k in ('id','revision','symbol','interval','source','environment','mode','cash','quantity','reserved_cash','reserved_quantity','equity','fees','drawdown','flags','finished','feed_stale')}
-    facts.update(selected_candle=selected,
+    from core.trading.data import cached_price
+    visible = state['candles']
+    recent = visible[-30:]
+    first, final = Decimal(recent[0]['open']), Decimal(recent[-1]['close'])
+    facts.update(recent_candles=[[c['time'], c['open'], c['high'], c['low'], c['close'], c['volume']] for c in recent],
+        recent_candles_format='[open_time_utc, open, high, low, close, volume], oldest first, closed candles only',
+        market_summary=dict(bars=len(recent), minutes_per_bar=state['interval']//60,
+            change_pct=str(round((final/first-1)*100, 2)) if first else '0',
+            high=str(max(Decimal(c['high']) for c in recent)), low=str(min(Decimal(c['low']) for c in recent)),
+            last_close=recent[-1]['close'], latest_indicators=state['indicators'][-1]),
+        live_price=cached_price(state['symbol']) if state.get('environment') == 'observation' else None,
+        selected_candle=selected,
         indicators=next(i for i in state['indicators'] if i['time'] == selected['time']),
         as_of=state['candles'][-1]['time']+state['interval'],
         available_cash=str(Decimal(state['cash'])-Decimal(state['reserved_cash'])),
@@ -68,11 +182,20 @@ def context(service, sid=None, candle_id=None):
         recent_orders=state['orders'][-10:], recent_fills=state['fills'][-10:], thesis=state['thesis'],
         analysis_locked=state['mode']=='independent' and not state['thesis'],
         active_panel=view['panel'] if view else None,
+        drawings=[dict(d, name=DRAWING_KINDS.get(d['kind'], (d['kind'],))[0]) for d in (view.get('drawings') or [])[-60:]] if view else [],
+        drawings_note='Annotations on the chart. author=user are the learner\'s own; author=freya are yours. points are [open_time_utc, price]; brush keeps only start/end. Drawings are never orders.',
+        learner_profile=_learner_profile(),
+        chart_legend={
+            'yellow_gold_line': {'name': 'EMA 20', 'meaning': 'Exponential moving average of 20 candle closes; recent closes carry more weight.', 'visible': view.get('ema', True) if view else None},
+            'purple_lower_line': {'name': 'RSI 14', 'visible': view.get('rsi', True) if view else None},
+            'volume_bars': {'name': 'Traded volume', 'visible': view.get('volume', True) if view else None},
+            'blue_price_line': {'name': 'Closing price (forming candle uses live price)', 'visible': view.get('line', False) if view else None}},
         workspace_help={
             'chart':'Click a candle to select context. Toggle EMA, volume and RSI. Levels and two-click trendlines are annotations, never orders.',
             'replay':'Step or play reveals closed candles. Orders activate on later eligible candles. Replay cannot rewind the ledger.',
             'orders':'Record a thesis and invalidation, then submit a virtual order. Pending orders reserve cash or quantity; cancel them in Orders.',
-            'guide':'Quick help is local. Gemini questions use the visible snapshot without screenshots and cannot execute trades.'})
+            'live':'Live market sessions show real-time Coinbase prices and a forming candle; paper orders fill only on the next closed candle.',
+            'voice':'The user talks with Freya by voice from the Talk with Freya panel. Freya reads this structured context, never screenshots, and cannot execute trades unless separately asked.'})
     facts['snapshot_id'] = hashlib.sha256(encode(facts).encode()).hexdigest()
     return facts
 
@@ -87,7 +210,7 @@ def local_answer(question, facts):
     if 'rsi' in q:
         value = facts['indicators']['rsi']
         return f"RSI(14) for the selected candle is {round(value,2) if value is not None else 'still warming up'}. It measures recent gains versus losses on a 0–100 scale, not a probability or a buy/sell command. Toggle RSI above the chart to see its pane."
-    if 'ema' in q:
+    if 'ema' in q or (('yellow' in q or 'gold' in q) and 'line' in q):
         value = facts['indicators']['ema']
         return f"EMA(20) is {round(value,2) if value is not None else 'still warming up'} at the selected candle. It smooths closes with more weight on recent bars. The gold line is an indicator, not a prediction."
     if any(w in q for w in ('cash','balance','portfolio')):

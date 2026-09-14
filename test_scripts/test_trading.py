@@ -19,6 +19,14 @@ class TradingTests(unittest.TestCase):
         self.s=self.svc.mutate(self.s['id'],action,{'key':str(self.s['revision'])+action,'revision':self.s['revision'],**body})
         return self.s
     def thesis(self): self.command('thesis',thesis='Range breakout test',invalidation='Close below range')
+    def test_live_account_cannot_fall_back_to_sample(self):
+        with self.assertRaisesRegex(ValueError, 'require exchange candles'):
+            self.svc.create({'key':'live-missing', 'environment':'observation'})
+        state = self.svc.create({'key':'live-import', 'environment':'observation'}, sample(count=40))
+        self.assertEqual(len(state['candles']), 40)
+        self.assertEqual(state['cash'], '10000')
+        self.assertEqual(state['source'], 'Coinbase Exchange · live market')
+
     def test_no_future_or_early_fill(self):
         self.assertEqual(len(self.s['candles']),30)
         with self.assertRaises(ValueError): self.svc.snapshot(self.s['id'])

@@ -22,6 +22,8 @@ class TradingService:
 
     def create(self, request, candles=None):
         req = NewSession.model_validate(request)
+        if req.environment == 'observation' and candles is None:
+            raise ValueError('Live paper accounts require exchange candles; synthetic data is not allowed')
         signature = encode({"create":req.model_dump(),"candles":candles})
         with self.store.transaction() as db:
             old = self._duplicate(db, req.key, signature)
@@ -30,7 +32,7 @@ class TradingService:
             if len(rows)<30: raise ValueError("At least 30 candles required")
             quality(rows,req.interval)
             s = dict(id=uuid.uuid4().hex,symbol=req.symbol,interval=req.interval,mode=req.mode,
-                source="Deterministic sample data (synthetic)" if candles is None else "Imported historical candles",
+                source="Deterministic sample data (synthetic)" if candles is None else ("Coinbase Exchange · live market" if req.environment == 'observation' else "Imported historical candles"),
                 environment=req.environment,revision=0,sequence=0,cursor=len(rows)-1 if req.environment=='observation' else 29,candles=rows,cash="10000",quantity="0",
                 fee=str(self.fee),slippage=str(self.slippage),orders=[],fills=[],ledger=[],
                 thesis=None,equity_history=["10000"])

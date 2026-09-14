@@ -1,7 +1,7 @@
 import json
 import asyncio
 from core import runtime
-from core.registry import tool, OBJ, P, STR, INT
+from core.registry import tool, OBJ, P, STR, INT, NUM, ARR
 from core.trading.api import services, command
 
 SESSION={'session_id':P(STR,'Session returned by open_trading_lab')}
@@ -73,8 +73,98 @@ async def record_trading_thesis(args,ctx):
     return json.dumps(await command(sid,'thesis',body),default=str)
 
 
+@tool('get_trading_learner_profile',
+    "Read what the user already knows about trading (level, concepts understood, struggles, current topic). "
+    "Call at the start of any trading lesson and pitch explanations at that level; empty means a complete beginner.",
+    OBJ(),gate='trading.enabled')
+def get_trading_learner_profile(args,ctx):
+    from core.trading.learner import profile
+    return json.dumps(profile())
+
+
+@tool('update_trading_learner_profile',
+    "Save the user's trading learning progress into long-term memory so future lessons build on it. Call when they "
+    "show they understood a concept, struggle with one, or you start a new topic. Raise level gradually.",
+    OBJ({'level':P(STR,'One of: complete beginner, beginner, developing, intermediate, advanced. Omit to keep.'),
+         'understood':P(ARR,'Concepts they just showed they understand, in plain words e.g. "what a candle is"',items=P(STR)),
+         'struggling':P(ARR,'Concepts they found confusing',items=P(STR)),
+         'learning_now':P(STR,'The topic you are teaching next'),
+         'note':P(STR,'Short teaching note, e.g. "learns best with food analogies"')}),gate='trading.enabled')
+def update_trading_learner_profile(args,ctx):
+    from core.trading.learner import update
+    return json.dumps(update(args.get('level'),args.get('understood'),args.get('struggling'),
+        args.get('learning_now'),args.get('note')))
+
+
+FREYA_DRAW_LIMIT=30
+
+
+@tool('draw_on_chart',
+    "Draw on the user's active Trading Lab chart to teach visually (shown in violet as Freya's drawing). "
+    "Use candle open times and prices from get_trading_lab_context (recent_candles). Kinds and points needed: "
+    "hline/hray/vline/cross/text=1; trend/ray/extended/arrow/rect/ellipse/fib/long/short/pricerange/daterange/datepricerange=2; "
+    "channel/pitchfork/triangle/fibext=3. After drawing, say in plain words what you drew and why. Never an order.",
+    OBJ({'kind':P(STR,'Drawing kind, e.g. hline, trend, rect, fib, text, arrow'),
+         'points':P(ARR,'Anchor points in order',items=OBJ({'time':P(INT,'Candle open time, unix seconds UTC'),
+                                                            'price':P(NUM,'Price level')},['time','price'])),
+         'text':P(STR,'Label text; required for kind=text'),
+         'session_id':P(STR,'Optional; defaults to the chart the user is on')},['kind','points']),gate='trading.enabled')
+async def draw_on_chart(args,ctx):
+    from core.trading.guide import DRAWING_KINDS, _current_view
+    service,_=services()
+    view=_current_view()
+    sid=args.get('session_id') or (view or {}).get('session_id')
+    if not sid: return 'No Trading Lab chart is open. Ask the user to open the Trading Lab first.'
+    state=service.get(sid)
+    kind=str(args.get('kind','')).strip().lower()
+    if kind not in DRAWING_KINDS or kind=='brush': return f'Unknown drawing kind {kind!r}. Use one of: {", ".join(k for k in DRAWING_KINDS if k!="brush")}.'
+    need=DRAWING_KINDS[kind][1]
+    raw=args.get('points') or []
+    if len(raw)!=need: return f'{kind} needs exactly {need} point(s); got {len(raw)}.'
+    iv=state['interval']; points=[]
+    for p in raw:
+        try: t=int(p['time']); price=float(p['price'])
+        except (KeyError,TypeError,ValueError): return 'Each point needs numeric time (unix seconds) and price.'
+        if price<=0: return 'Prices must be positive.'
+        if t>10**11: t//=1000  # tolerate milliseconds
+        points.append({'time':t//iv*iv,'price':price})
+    text=str(args.get('text') or '').strip()[:200]
+    if kind=='text' and not text: return 'kind=text needs text.'
+    if view and view.get('session_id')==sid and sum(d.get('author')=='freya' for d in view.get('drawings') or [])>=FREYA_DRAW_LIMIT:
+        return f'You already have {FREYA_DRAW_LIMIT} drawings on this chart; call clear_my_drawings first.'
+    from core.trading.guide import expect_draw_ack, _draw_acks
+    import uuid
+    drawing={'kind':kind,'points':points,**({'text':text} if text else {})}
+    draw_id=uuid.uuid4().hex
+    delivered=expect_draw_ack(draw_id)
+    await runtime.emit('trading',{'session_id':sid,'event':'draw','draw_id':draw_id,'drawing':drawing})
+    try:
+        await asyncio.wait_for(delivered,DRAW_ACK_TIMEOUT_S)
+        visible=True
+    except asyncio.TimeoutError:
+        _draw_acks.pop(draw_id,None); visible=False
+    result={'drawn':DRAWING_KINDS[kind][0],'visible':visible,'color':'violet','session_id':sid,'drawing':drawing}
+    if not visible:
+        result['problem']=('The Trading Lab page did not confirm the drawing, so the user cannot see it. Tell them it did '
+            'not appear; they may need to reload the Trading Lab page.')
+    return json.dumps(result)
+
+
+DRAW_ACK_TIMEOUT_S=4
+
+
+@tool('clear_my_drawings',"Remove all of Freya's own drawings from the active Trading Lab chart. The user's drawings stay.",
+    OBJ({'session_id':P(STR,'Optional; defaults to the chart the user is on')}),gate='trading.enabled')
+async def clear_my_drawings(args,ctx):
+    from core.trading.guide import _current_view
+    sid=args.get('session_id') or (_current_view() or {}).get('session_id')
+    if not sid: return 'No Trading Lab chart is open.'
+    await runtime.emit('trading',{'session_id':sid,'event':'clear_freya'})
+    return 'Cleared your drawings from the chart.'
+
+
 @tool('get_trading_lab_context',
-    "Read the active Trading Lab's selected candle, indicators, portfolio, recent orders and UI help WITHOUT screenshots. Call before answering questions about this workspace. If multiple sessions are active, ask which one. Read-only; never place orders unless separately requested. If analysis_locked=true, explain mechanics only until the user records a thesis.",
+    "Read the active Trading Lab's selected candle, indicators, portfolio, recent orders, the user's and your drawings, the learner profile and UI help WITHOUT screenshots. Call before answering questions about this workspace. It automatically resolves the chart the user is currently using, so never ask which session or chart they mean. Read-only; never place orders unless separately requested. If analysis_locked=true, explain mechanics only until the user records a thesis.",
     OBJ({'session_id':P(STR,'Optional explicit session; otherwise use the active workspace')}),gate='trading.enabled')
 def get_trading_lab_context(args,ctx):
     from core.trading.guide import context

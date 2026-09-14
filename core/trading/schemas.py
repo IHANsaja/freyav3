@@ -1,6 +1,10 @@
 from decimal import Decimal
 from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field
+from core.trading.data import MARKETS, INTERVALS
+
+Symbol = Literal[tuple(MARKETS)]
+Interval = Literal[INTERVALS]
 
 
 class StrictModel(BaseModel):
@@ -20,8 +24,8 @@ class Command(StrictModel):
 
 class NewSession(StrictModel):
     key: str = Field(min_length=1, max_length=128)
-    symbol: Literal["BTC-USD", "ETH-USD"] = "BTC-USD"
-    interval: Literal[900, 3600] = 900
+    symbol: Symbol = "BTC-USD"
+    interval: Interval = 900
     mode: Literal["independent", "coached"] = "independent"
     environment: Literal["replay", "observation"] = "replay"
 

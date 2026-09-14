@@ -123,9 +123,47 @@ read-only Exchange adapter paginates at 299 intervals (within the 300-candle lim
 sorts and deduplicates timestamps, and reports missing intervals. It never invents
 traded candles for empty intervals.
 
-Current market observation creates a **separate** virtual account using closed
-Coinbase candles. Click Poll / reconnect and backfill to retrieve subsequent
-closed candles. This is manual polling, not streaming. After two candle intervals
+Markets: BTC, ETH, SOL, XRP, DOGE, ADA, AVAX, LINK and LTC against USD, on
+1m, 5m, 15m or 1h candles. All data is Coinbase's public API; no key is needed.
+
+The sidebar and header stream tick-by-tick prices from Coinbase's public
+WebSocket feed in the browser; `GET /trading/live` is polled every 5 s as a
+fallback and so the backend (and Freya) know the price. Live sessions draw the
+still-forming candle from `GET /trading/live/candle`, updated with each tick.
+Live prices and the forming candle are display only and never drive fills.
+
+## Freya as a teacher
+
+Freya teaches in plain words and assumes no prior knowledge. Her progress notes
+about the learner live in long-term memory as one `fact` item, "Trading knowledge
+profile" (level, concepts understood, struggles, current topic, notes), managed by
+`core/trading/learner.py`. Voice tools: `get_trading_learner_profile` and
+`update_trading_learner_profile`; she updates it as understanding grows, so later
+lessons build on earlier ones. Edit or delete it in the Memory panel.
+
+The page includes a compact copy of the chart drawings in each workspace sync
+(brush strokes keep only start/end), so `get_trading_lab_context` lists the
+user's drawings and hers. `draw_on_chart` validates kind and point count, snaps
+times to the candle interval and emits a `trading` `draw` event; the page adds it
+in violet as Freya's drawing and saves it with the session's drawings.
+`clear_my_drawings` removes only hers (limit 30 on a chart).
+
+## Talking with Freya
+
+Talk to Freya (header) or Talk with Freya (right panel) starts the normal voice
+session; the microphone and speakers are those of the machine running server.py.
+The page reports its workspace every 20 s and whenever voice starts. The first
+report during a voice session injects a one-time briefing, so Freya acknowledges
+the open chart, then answers later questions via `get_trading_lab_context`
+(recent candles, market summary, indicators, live price, orders). No screenshots
+are used. The typed Ask Freya guide was replaced by this voice panel; the
+`/trading/guide` HTTP route remains for API use.
+
+Live market (observation) creates a **separate** virtual account using closed
+Coinbase candles. The page polls for newly closed candles every 15 s while
+visible; Refresh now polls immediately. A poll before the next candle closes is a
+no-op. Low-volume markets can have 1m intervals with no trades, which fail closed
+as gaps; prefer BTC/ETH or a longer timeframe there. After two candle intervals
 without fresh data, new orders are refused as stale. Backfill is deduplicated;
 missing intervals fail closed without simulated executions across unknown time.
 Observation accounts cannot advance with replay controls. A long outage beyond

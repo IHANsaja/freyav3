@@ -267,7 +267,7 @@ export function useFreyaSocketConnection() {
                 if (msg.type === "state") {
                     setState(msg.value as FreyaState);
                     // Turn complete or barge-in → flush Freya's buffered words
-                    if (msg.value === "listening" || msg.value === "interrupted") {
+                    if (msg.value === "interrupted") {
                         flushFreyaBuffer();
                     }
                 } else if (msg.type === "mode") {
@@ -292,7 +292,12 @@ export function useFreyaSocketConnection() {
                             },
                         ]);
                     }
-                    // Freya's full transcript ignored here — already streamed via "speech".
+                    else if (msg.speaker === "Freya") {
+                        // The completed server transcript is authoritative. Playback
+                        // state can change between chunks and must not split a reply.
+                        freyaBuffer.current = msg.text;
+                        flushFreyaBuffer();
+                    }
                 } else if (msg.type === "tool") {
                     setToolLog((prev) => [
                         ...prev,

@@ -13,14 +13,20 @@ import {
   type ISeriesApi,
   type IPriceLine,
   type UTCTimestamp,
+  type Logical,
 } from "lightweight-charts";
 import type { Session, Report, Candle } from "./types";
-export type Drawing = {
-  id: string;
-  kind: "level" | "trend";
-  points: { time: number; price: number }[];
-};
-export type ChartTool = "cursor" | "level" | "trend";
+import DrawingLayer, { type Frame } from "./DrawingLayer";
+import {
+  TOOLS,
+  MAX_BRUSH_POINTS,
+  toolLabel,
+  type ChartTool,
+  type Drawing,
+  type DrawingKind,
+  type Point,
+} from "./drawingTools";
+export type { ChartTool, Drawing } from "./drawingTools";
 export type ChartOptions = {
   ema: boolean;
   volume: boolean;
@@ -34,9 +40,12 @@ type Props = {
   tool: ChartTool;
   drawings: Drawing[];
   onDraw: (d: Drawing) => void;
+  onErase: (id: string) => void;
   onSelect: (id: string) => void;
   selected: string | null;
   fit: number;
+  /** Still-forming live candle; drawn after the closed candles, never persisted. */
+  liveCandle?: Candle | null;
 };
 export default function Chart(props: Props) {
   const root = useRef<HTMLDivElement>(null);
@@ -49,16 +58,20 @@ export default function Chart(props: Props) {
     volume: ISeriesApi<"Histogram">;
     rsi: ISeriesApi<"Line">;
     markers: ISeriesMarkersPluginApi<Time>;
+    redraw: () => void;
   } | null>(null);
   const [hover, setHover] = useState<Candle | null>(null);
-  const [hint, setHint] = useState("");
-  const pending = useRef<{ time: number; price: number } | null>(null);
+  const [frame, setFrame] = useState<Frame | null>(null);
+  type Draft = { kind: DrawingKind; points: Point[] };
+  const draft = useRef<Draft | null>(null);
+  const [draftView, setDraftView] = useState<Draft | null>(null);
   useEffect(() => {
     latest.current = props;
   }, [props]);
   useEffect(() => {
-    pending.current = null;
-  }, [props.tool, props.session.id]);
+    const nav = props.tool === "cursor" || props.tool === "eraser";
+    api.current?.chart.applyOptions({ handleScroll: nav, handleScale: nav });
+  }, [props.tool]);
   useEffect(() => {
     const el = root.current;
     if (!el) return;
@@ -126,6 +139,58 @@ export default function Chart(props: Props) {
     chart.panes()[0].setStretchFactor(5);
     chart.panes()[1].setStretchFactor(1);
     chart.panes()[2].setStretchFactor(1);
+    // Drawings are stored as (time, price). Times beyond the loaded candles are
+    // extrapolated on the candle interval so tools can extend into the future.
+    const geometry = () => {
+      const s = latest.current.session;
+      const cs = s.candles;
+      const last = cs.length - 1;
+      return {
+        cs,
+        iv: s.interval,
+        last,
+        index: new Map(cs.map((c, i) => [c.time, i])),
+        firstT: cs[0]?.time ?? 0,
+        lastT: cs[last]?.time ?? 0,
+      };
+    };
+    const toLogical = (t: number) => {
+      const g = geometry();
+      return (
+        g.index.get(t) ??
+        (t > g.lastT ? g.last + (t - g.lastT) / g.iv : (t - g.firstT) / g.iv)
+      );
+    };
+    const pointAt = (x: number, y: number): Point | null => {
+      const l = chart.timeScale().coordinateToLogical(x);
+      const price = candles.coordinateToPrice(y);
+      if (l === null || price === null || price <= 0) return null;
+      const g = geometry();
+      const i = Math.round(l);
+      const time =
+        i >= 0 && i <= g.last
+          ? g.cs[i].time
+          : i > g.last
+            ? g.lastT + (i - g.last) * g.iv
+            : g.firstT + i * g.iv;
+      return { time, price: Number(price) };
+    };
+    let frameRequest = 0;
+    const redraw = () => {
+      cancelAnimationFrame(frameRequest);
+      frameRequest = requestAnimationFrame(() => {
+        const size = chart.paneSize(0);
+        setFrame({
+          w: size.width,
+          h: size.height,
+          interval: latest.current.session.interval,
+          toX: (t) => chart.timeScale().logicalToCoordinate(toLogical(t) as Logical),
+          toY: (p) => candles.priceToCoordinate(p),
+        });
+      });
+    };
+    chart.timeScale().subscribeVisibleLogicalRangeChange(redraw);
+    chart.timeScale().subscribeSizeChange(redraw);
     api.current = {
       chart,
       candles,
@@ -134,6 +199,7 @@ export default function Chart(props: Props) {
       volume,
       rsi,
       markers: createSeriesMarkers(candles, []),
+      redraw,
     };
     chart.subscribeCrosshairMove((param) =>
       setHover(
@@ -144,6 +210,11 @@ export default function Chart(props: Props) {
     // Native pointer-up handles quick consecutive anchors that the chart's double-click filter suppresses.
     let down: { x: number; y: number; id: number } | null = null;
     let dragged = false;
+    let brush: { points: Point[]; x: number; y: number } | null = null;
+    const local = (e: PointerEvent) => {
+      const bounds = el.getBoundingClientRect();
+      return [e.clientX - bounds.left, e.clientY - bounds.top] as const;
+    };
     const start = (e: PointerEvent) => {
       if (!e.isPrimary || e.button !== 0) {
         down = null;
@@ -151,14 +222,43 @@ export default function Chart(props: Props) {
       }
       down = { x: e.clientX, y: e.clientY, id: e.pointerId };
       dragged = false;
+      if (latest.current.tool === "brush") {
+        const [x, y] = local(e);
+        const pt = pointAt(x, y);
+        brush = pt ? { points: [pt], x, y } : null;
+      }
     };
     const move = (e: PointerEvent) => {
       if (down && Math.hypot(e.clientX - down.x, e.clientY - down.y) > 5)
         dragged = true;
+      const [x, y] = local(e);
+      if (brush) {
+        if (Math.hypot(x - brush.x, y - brush.y) < 3) return;
+        const pt = pointAt(x, y);
+        if (!pt || brush.points.length >= MAX_BRUSH_POINTS) return;
+        brush = { points: [...brush.points, pt], x, y };
+        setDraftView({ kind: "brush", points: brush.points });
+        return;
+      }
+      if (down && latest.current.tool === "cursor") redraw();
+      const d = draft.current;
+      if (d && d.kind === latest.current.tool) {
+        const pt = pointAt(x, y);
+        if (pt) setDraftView({ kind: d.kind, points: [...d.points, pt] });
+      }
     };
     const finish = (e: PointerEvent) => {
       const anchor = down;
       down = null;
+      const p = latest.current;
+      if (brush) {
+        const stroke = brush.points;
+        brush = null;
+        setDraftView(null);
+        if (stroke.length >= 2)
+          p.onDraw({ id: crypto.randomUUID(), kind: "brush", points: stroke });
+        return;
+      }
       if (
         !anchor ||
         anchor.id !== e.pointerId ||
@@ -166,50 +266,62 @@ export default function Chart(props: Props) {
         Math.hypot(e.clientX - anchor.x, e.clientY - anchor.y) > 5
       )
         return;
-      const bounds = el.getBoundingClientRect();
-      const x = e.clientX - bounds.left,
-        y = e.clientY - bounds.top;
+      const [x, y] = local(e);
       const size = chart.paneSize(0);
       if (x < 0 || y < 0 || x >= size.width || y >= size.height) return;
-      const time = chart.timeScale().coordinateToTime(x);
-      if (typeof time !== "number") return;
-      const p = latest.current;
-      const candle = p.session.candles.find((c) => c.time === time);
-      if (!candle) return;
-      p.onSelect(candle.id);
-      if (p.tool === "cursor") return;
-      const price = candles.coordinateToPrice(y);
-      if (price === null || price <= 0) return;
-      const point = { time: Number(time), price: Number(price) };
-      if (p.tool === "level")
-        p.onDraw({ id: crypto.randomUUID(), kind: "level", points: [point] });
-      else if (!pending.current) {
-        pending.current = point;
-        setHint("Select a second candle to finish the trendline");
-      } else if (pending.current.time === point.time)
-        setHint("Choose a different candle for the second point");
-      else {
-        p.onDraw({
-          id: crypto.randomUUID(),
-          kind: "trend",
-          points: [pending.current, point].sort((a, b) => a.time - b.time),
-        });
-        pending.current = null;
-        setHint("");
+      const point = pointAt(x, y);
+      if (!point) return;
+      const candle = p.session.candles.find((c) => c.time === point.time);
+      if (candle) p.onSelect(candle.id);
+      if (p.tool === "cursor" || p.tool === "eraser" || p.tool === "brush")
+        return;
+      const kind = p.tool;
+      if (kind === "text") {
+        const text = window.prompt("Text label")?.trim();
+        if (text)
+          p.onDraw({
+            id: crypto.randomUUID(),
+            kind,
+            points: [point],
+            text: text.slice(0, 500),
+          });
+        return;
+      }
+      const points = [
+        ...(draft.current?.kind === kind ? draft.current.points : []),
+        point,
+      ];
+      if (points.length >= TOOLS[kind].points) {
+        p.onDraw({ id: crypto.randomUUID(), kind, points });
+        draft.current = null;
+        setDraftView(null);
+      } else {
+        draft.current = { kind, points };
+        setDraftView({ kind, points });
       }
     };
     const cancel = () => {
       down = null;
+      brush = null;
+    };
+    const escape = (e: KeyboardEvent) => {
+      if (e.key !== "Escape") return;
+      draft.current = null;
+      brush = null;
+      setDraftView(null);
     };
     el.addEventListener("pointerdown", start);
     el.addEventListener("pointermove", move);
     el.addEventListener("pointerup", finish);
     el.addEventListener("pointercancel", cancel);
+    window.addEventListener("keydown", escape);
     return () => {
       el.removeEventListener("pointerdown", start);
       el.removeEventListener("pointermove", move);
       el.removeEventListener("pointerup", finish);
       el.removeEventListener("pointercancel", cancel);
+      window.removeEventListener("keydown", escape);
+      cancelAnimationFrame(frameRequest);
       chart.remove();
       api.current = null;
     };
@@ -249,6 +361,7 @@ export default function Chart(props: Props) {
         .filter((i) => i.rsi !== null)
         .map((i) => ({ time: i.time as UTCTimestamp, value: i.rsi! })),
     );
+    a.redraw();
     a.markers.setMarkers(
       props.session.fills.map((f) => ({
         time: f.time as UTCTimestamp,
@@ -259,6 +372,20 @@ export default function Chart(props: Props) {
       })),
     );
   }, [props.session]);
+  useEffect(() => {
+    const a = api.current;
+    const c = props.liveCandle;
+    const lastClosed = props.session.candles.at(-1);
+    if (!a || !c || (lastClosed && c.time <= lastClosed.time)) return;
+    const time = c.time as UTCTimestamp;
+    a.candles.update({ time, open: +c.open, high: +c.high, low: +c.low, close: +c.close });
+    a.close.update({ time, value: +c.close });
+    a.volume.update({
+      time,
+      value: +c.volume,
+      color: +c.close >= +c.open ? "#21baa066" : "#ef647466",
+    });
+  }, [props.liveCandle, props.session]);
   useEffect(() => {
     const a = api.current;
     if (!a) return;
@@ -277,39 +404,6 @@ export default function Chart(props: Props) {
     const a = api.current;
     if (!a) return;
     const lines: IPriceLine[] = [];
-    const trends: ISeriesApi<"Line">[] = [];
-    const times = new Set(props.session.candles.map((c) => c.time));
-    props.drawings
-      .filter((d) => d.points.every((p) => times.has(p.time)))
-      .forEach((d) => {
-        if (d.kind === "level")
-          lines.push(
-            a.candles.createPriceLine({
-              price: d.points[0].price,
-              color: "#759aff",
-              lineWidth: 1,
-              lineStyle: 2,
-              axisLabelVisible: true,
-              title: "My level",
-            }),
-          );
-        else {
-          const line = a.chart.addSeries(LineSeries, {
-            color: "#759aff",
-            lineWidth: 2,
-            priceLineVisible: false,
-            lastValueVisible: false,
-            autoscaleInfoProvider: () => null,
-          });
-          line.setData(
-            d.points.map((p) => ({
-              time: p.time as UTCTimestamp,
-              value: p.price,
-            })),
-          );
-          trends.push(line);
-        }
-      });
     if (
       props.report?.revision === props.session.revision &&
       props.report.snapshot?.id === props.session.id
@@ -331,12 +425,30 @@ export default function Chart(props: Props) {
     return () => {
       if (api.current !== a) return;
       lines.forEach((l) => a.candles.removePriceLine(l));
-      trends.forEach((l) => a.chart.removeSeries(l));
     };
-  }, [props.drawings, props.report, props.session]);
+  }, [props.report, props.session]);
+  const activeDraft =
+    draftView && draftView.kind === props.tool ? draftView : null;
+  const need =
+    props.tool === "cursor" || props.tool === "eraser"
+      ? 0
+      : TOOLS[props.tool].points;
+  const hint =
+    props.tool === "cursor"
+      ? "Click a candle to give Freya its context"
+      : props.tool === "eraser"
+        ? "Eraser · click a drawing to remove it"
+        : props.tool === "brush"
+          ? "Brush · drag on the chart to draw"
+          : `${toolLabel(props.tool)} · ${
+              need > 1
+                ? `click point ${Math.min((activeDraft?.points.length ?? 1), need)} of ${need}`
+                : "click to place"
+            } · Esc cancels`;
   const candle =
     hover ??
     props.session.candles.find((c) => c.id === props.selected) ??
+    props.liveCandle ??
     props.session.candles.at(-1)!;
   return (
     <div className="chart-wrap">
@@ -361,13 +473,23 @@ export default function Chart(props: Props) {
           UTC
         </span>
       </div>
-      <div className="chart-canvas" ref={root} />
+      <div className="chart-canvas-wrap">
+        <div
+          className={`chart-canvas tool-${props.tool}`}
+          ref={root}
+        />
+        {frame && (
+          <DrawingLayer
+            frame={frame}
+            drawings={props.drawings}
+            draft={activeDraft}
+            eraser={props.tool === "eraser"}
+            onErase={props.onErase}
+          />
+        )}
+      </div>
       <div className="chart-caption">
-        <span>
-          {props.tool === "trend" && hint
-            ? hint
-            : "Click a candle to give Freya its context"}
-        </span>
+        <span>{hint}</span>
         <a href="https://www.tradingview.com/" target="_blank" rel="noreferrer">
           TradingView Lightweight Charts™ ↗
         </a>

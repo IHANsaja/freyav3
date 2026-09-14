@@ -6,9 +6,10 @@ from core.trading.simulator import TradingService, Conflict
 from core.trading.orchestration import AnalystDesk
 from core.trading.schemas import NewSession, AnalysisRequest
 from core import runtime
-from core.trading.data import coinbase
+from core.trading.data import coinbase, live_stats, live_candle, MARKETS, INTERVALS
 import time
 import asyncio
+import httpx
 
 router=APIRouter(prefix='/trading',tags=['trading'])
 _service=None
@@ -121,7 +122,12 @@ async def historical(body:dict):
 async def observe(body:NewSession):
     service,_=services()
     end=int(time.time())//body.interval*body.interval
-    data=await coinbase(body.symbol,body.interval,end-body.interval*100,end)
+    try:
+        data=await coinbase(body.symbol,body.interval,end-body.interval*300,end)
+    except httpx.HTTPError as exc:
+        raise HTTPException(503,'Coinbase market data unavailable. Retry to open a live paper account.') from exc
+    except ValueError as exc:
+        raise HTTPException(422,str(exc)) from exc
     return checked(service.create,{**body.model_dump(),'environment':'observation'},data['candles'])
 
 
@@ -131,19 +137,51 @@ async def poll(sid:str):
     if state.get('environment')!='observation': raise HTTPException(422,'Not an observation account')
     end=int(time.time())//state['interval']*state['interval']
     start=state['candles'][-1]['time']
-    data=await coinbase(state['symbol'],state['interval'],start,end)
+    if end-start<=state['interval']: return state  # the next candle has not closed yet
+    try: data=await coinbase(state['symbol'],state['interval'],start,end)
+    except ValueError as exc: raise HTTPException(422,str(exc)) from exc
+    except httpx.HTTPError as exc: raise HTTPException(503,'Coinbase market data unavailable; retrying') from exc
     result=checked(service.ingest,sid,data['candles'],state['revision'])
-    await runtime.emit('trading',{'session_id':sid,'sequence':result['sequence'],'revision':result['revision'],'event':'changed'})
+    if result['revision']!=state['revision']:
+        await runtime.emit('trading',{'session_id':sid,'sequence':result['sequence'],'revision':result['revision'],'event':'changed'})
     return result
+
+
+@router.get('/markets')
+def markets():
+    return {'markets':[{'symbol':k,'name':v[0]} for k,v in MARKETS.items()],'intervals':list(INTERVALS)}
+
+
+@router.get('/live/candle')
+async def forming_candle(symbol:str,interval:int):
+    """The in-progress candle for the chart. Display only."""
+    try: return {'candle':await live_candle(symbol,interval)}
+    except ValueError as exc: raise HTTPException(422,str(exc)) from exc
+    except httpx.HTTPError as exc: raise HTTPException(503,'Coinbase market data unavailable') from exc
+
+
+@router.get('/live')
+async def live(symbols:str=''):
+    """Real-time last-trade prices for display. Paper fills still use closed candles."""
+    wanted=[x.strip() for x in symbols.split(',') if x.strip()] or list(MARKETS)
+    if len(wanted)>len(MARKETS) or any(x not in MARKETS for x in wanted): raise HTTPException(422,'Unknown market')
+    return {'prices':await live_stats(wanted),'server_time':time.time()}
 
 
 from core.trading.guide import Workspace, GuideRequest
 
 @router.post('/workspace')
-def workspace(body:Workspace):
+async def workspace(body:Workspace):
     from core.trading.guide import set_workspace
     service,_=services()
-    return checked(set_workspace,service,body)
+    result=checked(set_workspace,service,body)
+    return result
+
+@router.post('/drawings/ack/{draw_id}')
+async def drawing_ack(draw_id:str):
+    """The page confirms a Freya drawing is on the chart, so she never claims an invisible one."""
+    from core.trading.guide import ack_draw
+    return {'acknowledged':ack_draw(draw_id)}
 
 @router.get('/context')
 def workspace_context(session_id:str|None=None):
