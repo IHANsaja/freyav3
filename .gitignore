@@ -255,3 +255,6 @@ _*.py
 # Trading accounts and third-party inspection checkout
 memory/trading_lab.db*
 .tmp-gptheist/
+
+# Local mission evidence checkpoints
+memory/missions/

@@ -236,5 +236,13 @@
     "openai_model": "",
     "analysis_timeout_s": 45,
     "max_analyses_per_session": 20
+  },
+  "quota": {
+    "project": "default-project",
+    "default_rpm": 10,
+    "rpm_by_model": {},
+    "max_requests_per_mission": 60,
+    "max_retries": 2,
+    "max_retry_wait_s": 60
   }
 }

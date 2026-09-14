@@ -203,24 +203,18 @@ KNOWN MEMORY:
 TRANSCRIPT:
 {conversation_text}"""
 
-    max_retries = 3
+    max_retries = 1  # Shared scheduler owns generation retries.
     retry_delay = 35
 
     for attempt in range(1, max_retries + 1):
         try:
-            client = genai.Client(api_key=api_key)
-            loop = asyncio.get_running_loop()
-            response = await loop.run_in_executor(
-                None,
-                lambda: client.models.generate_content(
-                    model="gemini-3.5-flash-lite",
-                    contents=prompt,
-                    config=types.GenerateContentConfig(
-                        response_mime_type="application/json",
-                        response_schema=_EXTRACT_SCHEMA,
-                    ),
-                ),
-            )
+            client = genai.Client(api_key=api_key, http_options=types.HttpOptions(retry_options=types.HttpRetryOptions(attempts=1)))
+            from core.quota import generate
+            try:
+                response = await generate(client, model="gemini-3.5-flash-lite", contents=prompt,
+                    config=types.GenerateContentConfig(response_mime_type="application/json", response_schema=_EXTRACT_SCHEMA))
+            finally:
+                await client.aio.aclose()
             data = json.loads(response.text or "{}")
             store = get_store()
             added = 0

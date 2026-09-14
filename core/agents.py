@@ -28,6 +28,7 @@ from config import get_agent_api_key
 from core import runtime
 from core.registry import register, tool, dispatch as registry_dispatch, ToolContext, OBJ, P, STR
 from core.execution import ExecutionError, Exhausted, bounded
+from core.quota import generate
 
 # Built-in agent specs (config `sub_agents.<type>` may override model/system/tools).
 DEFAULT_AGENTS = {
@@ -36,18 +37,16 @@ DEFAULT_AGENTS = {
         "system": (
             "You are Freya's research sub-agent. Investigate the task properly — do not answer "
             "from what you already know.\n"
-            "Your main instrument is the real browser: `browser_research` searches DuckDuckGo, "
-            "opens the actual pages and reads them, then hands you the findings. Use it for "
-            "anything that needs substance. `web_search` is the quick path for a single fact or "
+            "For straightforward read-only research, use web_search and web_fetch first. Use the browser only when interaction or JavaScript is required. Browser capability: `browser_research` searches DuckDuckGo, "
+            "opens the actual pages and reads them, then hands you the findings. `web_search` is the quick path for a single fact or "
             "to find candidate URLs; `browser_open` reads one specific page you already have a "
-            "URL for. Reach for the browser first and web_search only when the question is "
+            "URL for. Use web_search first when the question is "
             "genuinely one line long.\n"
-            "Corroborate anything important across two sources. Then write a tight, "
-            "If the browser is blocked, try web_search and web_fetch for the same authorized "
+            "Corroborate anything important across two sources. If the browser is blocked, try web_search and web_fetch for the same authorized "
             "read-only research. A retailer name alone does not complete product comparison: "
             "report actual model/specification, price/currency, availability and source URL, "
             "or clearly state which requested facts could not be verified. "
-            "spoken-friendly briefing — facts first, sources named naturally, no fluff, no "
+            "Write a spoken-friendly briefing — facts first, sources named naturally, no fluff, no "
             "markdown."
         ),
         "tools": ["browser_research", "browser_open", "browser_task", "web_search", "web_fetch",
@@ -125,7 +124,7 @@ async def react_loop(system: str, task: str, tool_names: list[str], model: str,
 
     Raises on API errors — callers decide how to phrase failures.
     """
-    client = genai.Client(api_key=get_agent_api_key())
+    client = genai.Client(api_key=get_agent_api_key(), http_options=types.HttpOptions(retry_options=types.HttpRetryOptions(attempts=1)))
     try:
         decls = _declarations({"tools": tool_names}, config)
         allowed = {d.name for d in decls}
@@ -137,7 +136,7 @@ async def react_loop(system: str, task: str, tool_names: list[str], model: str,
         contents = [types.Content(role="user", parts=[types.Part(text=task)])]
 
         for _step in range(max_steps):
-            resp = await bounded(client.aio.models.generate_content(
+            resp = await bounded(generate(client, quota_config=config,
                 model=model, contents=contents, config=cfg
             ), (config or {}).get("missions", {}).get("model_timeout_s", 90))
             cand = (resp.candidates or [None])[0]

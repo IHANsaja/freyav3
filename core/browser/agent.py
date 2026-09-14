@@ -131,7 +131,7 @@ class BrowserAgent:
         self.config = config or {}
         self.bcfg = self.config.get("browser", {})
         self.on_step = on_step          # async (step:int, action:str, detail:str)
-        self.client = genai.Client(api_key=get_agent_api_key())
+        self.client = genai.Client(api_key=get_agent_api_key(), http_options=types.HttpOptions(retry_options=types.HttpRetryOptions(attempts=1)))
         self.model = self.bcfg.get("llm_model", "gemini-3.5-flash")
         self.fallback = self.bcfg.get("fallback_model", "gemini-3.5-flash-lite")
         self.max_steps = int(self.bcfg.get("max_steps", 25))
@@ -253,32 +253,9 @@ class BrowserAgent:
 
     # ── model plumbing ─────────────────────────────────────────────────────
     async def _generate(self, cfg):
-        """Ask the model, surviving the two failures that actually happen.
-
-        Quota (429) → switch to the fallback model, which is a different
-        free-tier pool. Overload (503) → the model is busy, not exhausted, so
-        back off briefly and retry the same model before switching. Seen in
-        testing: a bare 503 used to abort an entire research run that was three
-        pages deep.
-        """
-        last: Exception | None = None
-        for attempt in range(3):
-            model = self.model if attempt == 0 or not _is_quota(last) else self.fallback
-            try:
-                return await self.client.aio.models.generate_content(
-                    model=model, contents=self.history, config=cfg)
-            except Exception as e:
-                last = e
-                if _is_quota(e):
-                    print(f"  [browser] {model} rate-limited, trying {self.fallback}")
-                    continue
-                if _is_overloaded(e) and attempt < 2:
-                    delay = 2.5 * (attempt + 1)
-                    print(f"  [browser] {model} overloaded, retrying in {delay:.0f}s")
-                    await asyncio.sleep(delay)
-                    continue
-                raise
-        raise last
+        from core.quota import generate
+        return await generate(self.client, quota_config=self.config,
+            model=self.model, contents=self.history, config=cfg)
 
     def _trim(self, keep: int = 8):
         """Drop the middle of the history, keeping the task and recent steps.

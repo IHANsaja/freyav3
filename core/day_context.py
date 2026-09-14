@@ -379,8 +379,9 @@ class DayContext:
                 },
                 required=["summary", "carry_over", "highlights"],
             )
-            client = genai.Client(api_key=api_key)
-            resp = await client.aio.models.generate_content(
+            client = genai.Client(api_key=api_key, http_options=types.HttpOptions(retry_options=types.HttpRetryOptions(attempts=1)))
+            from core.quota import generate
+            resp = await generate(client,
                 model="gemini-3.5-flash-lite",
                 contents=prompt,
                 config=types.GenerateContentConfig(

@@ -18,7 +18,8 @@ _desk=None
 def services():
     global _service,_desk
     from config import load_config
-    cfg={'gemini_model':'gemini-3.5-flash',**load_config().get('trading',{})}
+    full=load_config()
+    cfg={'gemini_model':'gemini-3.5-flash',**full.get('trading',{}),'quota':full.get('quota',{})}
     if not cfg.get('enabled',True): raise HTTPException(403,'Trading Lab disabled')
     if _service is None:
         _service=TradingService(Path(__file__).resolve().parents[2]/'memory'/'trading_lab.db',

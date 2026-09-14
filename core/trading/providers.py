@@ -68,14 +68,15 @@ async def explain(snapshot, provider, config, image=None):
         from google import genai
         from google.genai import types
         from config import get_agent_api_key
-        client=genai.Client(api_key=get_agent_api_key())
+        client=genai.Client(api_key=get_agent_api_key(), http_options=types.HttpOptions(retry_options=types.HttpRetryOptions(attempts=1)))
         try:
             pager=await client.aio.models.list()
             models=[m.name.removeprefix('models/') async for m in pager]
             if model.removeprefix('models/') not in models: raise ValueError("Configured model unavailable to API account")
             parts=[types.Part(text=prompt)]
             if image: parts.append(types.Part.from_bytes(data=image[0],mime_type=image[1]))
-            response=await client.aio.models.generate_content(model=model,contents=parts,
+            from core.quota import generate
+            response=await generate(client, quota_config={"quota":config.get("quota", {})},model=model,contents=parts,
                 config=types.GenerateContentConfig(response_mime_type='application/json',
                     response_json_schema=gemini_schema(),max_output_tokens=4096,
                     thinking_config=(types.ThinkingConfig(thinking_level='low') if model.startswith('gemini-3.')

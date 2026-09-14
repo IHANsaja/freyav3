@@ -45,6 +45,7 @@ export type MissionStatus =
     | "done" | "failed" | "cancelled";
 
 export interface MissionPayload {
+    usage?: { requests: number; tokens: number; models: Record<string, number> };
     id: string;
     goal: string;
     status: MissionStatus;
