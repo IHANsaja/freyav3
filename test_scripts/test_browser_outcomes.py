@@ -15,6 +15,7 @@ class BrowserOutcomeTests(unittest.IsolatedAsyncioTestCase):
     def agent(self, replies):
         agent = BrowserAgent.__new__(BrowserAgent)
         agent.config = {}; agent.bcfg = {}; agent.task = 'Compare laptops with prices'
+        agent.use_vision = True; agent.max_visual_requests = 2; agent.visual_requests = 0
         agent.history = []; agent.visited = []; agent.max_steps = 4; agent.on_step = None
         agent._generate = AsyncMock(side_effect=replies)
         agent._act = AsyncMock(return_value='Source price: LKR 250000')

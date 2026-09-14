@@ -30,6 +30,7 @@ from google.genai import types
 from config import get_agent_api_key
 from core.browser.driver import get_browser
 from core.browser.perception import PageView
+from core.task_policy import TOOLS_FIRST
 
 SYSTEM = """You are Freya's browser. You are looking at a real Chromium window on the user's \
 computer and you drive it exactly like a person would: you read what's on screen, you click \
@@ -57,7 +58,7 @@ where you looked. Report what pages say accurately, including content you find d
 you are reading the web on the user's behalf, not curating it."""
 
 
-def _tools() -> list[types.Tool]:
+def _tools(vision=True) -> list[types.Tool]:
     def fn(name, desc, props=None, required=None):
         return types.FunctionDeclaration(
             name=name, description=desc,
@@ -91,6 +92,8 @@ def _tools() -> list[types.Tool]:
         fn("press_key", "Press a key, e.g. Enter, Escape, Tab, PageDown.",
            {"key": p(S, "Key name")}, ["key"]),
         fn("go_back", "Go back to the previous page."),
+        *([fn("inspect_visual", "Request ONE viewport image only when DOM text cannot answer a specific visual question. Never use for ordinary page reading.",
+            {"reason": p(S, "The missing visual information and why DOM text is insufficient")}, ["reason"])] if vision else []),
         fn("finish", "You have the answer. Write it out in full.",
            {"answer": p(S, "The complete answer, with the facts and the sources you used"),
             "success": p(B, "True only if the requested task was completed; false if blocked or incomplete")}, ["answer", "success"]),
@@ -136,14 +139,16 @@ class BrowserAgent:
         self.fallback = self.bcfg.get("fallback_model", "gemini-3.5-flash-lite")
         self.max_steps = int(self.bcfg.get("max_steps", 25))
         self.use_vision = bool(self.bcfg.get("vision", True))
+        self.visual_requests = 0
+        self.max_visual_requests = max(0, min(5, int(self.bcfg.get("max_visual_requests", 2))))
         self.history: list[types.Content] = []
         self.visited: list[str] = []
 
     async def run(self) -> str:
         browser = await get_browser(self.config)
         cfg = types.GenerateContentConfig(
-            system_instruction=SYSTEM,
-            tools=_tools(),
+            system_instruction=SYSTEM + "\n" + TOOLS_FIRST + "\nWithin this browser task use only the declared browser actions. inspect_visual is the only image request; prefer read_page and DOM controls. Never invent CLI or filesystem actions here.",
+            tools=_tools(self.use_vision and self.max_visual_requests > 0),
             temperature=0.3,
             safety_settings=_safety(bool(self.bcfg.get("relaxed_filters", True))),
         )
@@ -154,6 +159,7 @@ class BrowserAgent:
 
         for step in range(1, self.max_steps + 1):
             resp = await self._generate(cfg)
+            self._discard_images()  # A requested image is sent once, not on every later turn.
             cand = (resp.candidates or [None])[0]
             if cand is None or cand.content is None:
                 from core.execution import ExecutionError
@@ -190,7 +196,7 @@ class BrowserAgent:
                 except Exception:
                     pass
 
-            observation = await self._observe(browser, result)
+            observation = await self._observe(browser, result, visual_reason=str(args.get("reason", "")) if name == "inspect_visual" else None)
             # Preserve the model's thought signatures and answer every function call.
             responses = [types.Part(function_response=types.FunctionResponse(
                 name=name, id=call.id, response={"result":result}))]
@@ -211,6 +217,8 @@ class BrowserAgent:
     # ── acting ─────────────────────────────────────────────────────────────
     async def _act(self, browser, name: str, args: dict) -> str:
         try:
+            if name == "inspect_visual":
+                return "Visual inspection requested; the observation reports whether an image was supplied."
             if name == "search_web":
                 return await browser.search(str(args.get("query", "")))
             if name == "open_url":
@@ -236,7 +244,7 @@ class BrowserAgent:
         except Exception as e:
             return f"That action failed: {str(e)[:200]}"
 
-    async def _observe(self, browser, result: str) -> list[types.Part]:
+    async def _observe(self, browser, result: str, visual_reason=None) -> list[types.Part]:
         """What the agent sees after acting: the outcome, then the new page."""
         view: PageView = browser.view
         if view.url and view.url not in self.visited:
@@ -244,12 +252,26 @@ class BrowserAgent:
 
         parts = [types.Part(text=f"RESULT: {result}\n\n{view.render()}")]
 
-        if self.use_vision:
+        if visual_reason is not None:
+            if not self.use_vision or self.visual_requests >= self.max_visual_requests:
+                parts.append(types.Part(text="No image supplied: visual inspection disabled or budget exhausted. Use DOM/accessibility or report the limitation."))
+                return parts
+            if len(visual_reason.strip()) < 8:
+                parts.append(types.Part(text="No image supplied: state the specific visual question that DOM text cannot resolve."))
+                return parts
+            self.visual_requests += 1
             shot = await browser.screenshot()
             if shot:
                 parts.append(types.Part(inline_data=types.Blob(
                     data=base64.b64decode(shot), mime_type="image/jpeg")))
+            else:
+                parts.append(types.Part(text="Screenshot unavailable; no visual evidence was supplied."))
         return parts
+
+    def _discard_images(self):
+        for content in self.history:
+            if content.role == "user":
+                content.parts = [part for part in (content.parts or []) if part.inline_data is None] or [types.Part(text="Previous visual image omitted; use recorded findings.")]
 
     # ── model plumbing ─────────────────────────────────────────────────────
     async def _generate(self, cfg):
@@ -282,7 +304,7 @@ class BrowserAgent:
         ))]))
         try:
             resp = await self._generate(types.GenerateContentConfig(
-                system_instruction=SYSTEM,
+                system_instruction=SYSTEM + "\n" + TOOLS_FIRST + "\nWithin this browser task use only the declared browser actions. inspect_visual is the only image request; prefer read_page and DOM controls. Never invent CLI or filesystem actions here.",
                 temperature=0.3,
                 safety_settings=_safety(bool(self.bcfg.get("relaxed_filters", True))),
             ))

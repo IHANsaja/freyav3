@@ -29,6 +29,7 @@ from core import runtime
 from core.registry import register, tool, dispatch as registry_dispatch, ToolContext, OBJ, P, STR
 from core.execution import ExecutionError, Exhausted, bounded
 from core.quota import generate
+from core.task_policy import TOOLS_FIRST
 
 # Built-in agent specs (config `sub_agents.<type>` may override model/system/tools).
 DEFAULT_AGENTS = {
@@ -50,7 +51,7 @@ DEFAULT_AGENTS = {
             "markdown."
         ),
         "tools": ["browser_research", "browser_open", "browser_task", "web_search", "web_fetch",
-                  "get_world_news", "recall", "read_file", "search_files"],
+                  "get_world_news", "recall", "read_file", "read_document", "ocr_document", "find_on_pc", "list_dir", "search_files"],
     },
     "coder": {
         "model": "gemini-3.5-flash",
@@ -75,6 +76,12 @@ DEFAULT_AGENTS = {
         "tools": ["focus_window", "list_windows", "read_screen_elements", "find_element",
                   "control_element", "click_element", "click_text"],
     },
+}
+
+DEFAULT_AGENTS["cli"] = {
+    "model": "gemini-3.5-flash",
+    "system": "You are Freya's local command-line agent. Complete authorized tasks using terminal commands, direct file readers and APIs. Inspect first, act, then verify actual exit status and artifacts. Follow the existing safety and approval gates. Do not use GUI or screenshots as a shortcut. Report missing CLI capabilities honestly.",
+    "tools": ["run_terminal_command", "run_code", "read_file", "read_document", "ocr_document", "write_file", "edit_file", "find_on_pc", "list_dir", "search_files", "web_search", "web_fetch"],
 }
 
 MAX_STEPS = 8
@@ -129,7 +136,7 @@ async def react_loop(system: str, task: str, tool_names: list[str], model: str,
         decls = _declarations({"tools": tool_names}, config)
         allowed = {d.name for d in decls}
         cfg = types.GenerateContentConfig(
-            system_instruction=system,
+            system_instruction=system + "\n" + TOOLS_FIRST,
             tools=[types.Tool(function_declarations=decls)] if decls else None,
             temperature=0.4,
         )
@@ -255,9 +262,9 @@ def _run_agent_thread(job_id: str, agent_type: str, task: str, config: dict,
 # ══════════════════════════════════════════════
 @tool(
     "dispatch_agent",
-    "Delegate a multi-step task to a background sub-agent: researcher (web research), coder "
+    "Delegate a multi-step task to a background sub-agent: cli (local commands/files, preferred over GUI), researcher (web research), coder "
     "(write/run code), operator (drive the GUI). Reports back out loud when done.",
-    OBJ({"agent_type": P(STR, "researcher, coder, or operator"),
+    OBJ({"agent_type": P(STR, "cli, researcher, coder, or operator"),
          "task": P(STR, "The full task for the sub-agent to accomplish")},
         ["agent_type", "task"]),
 )
@@ -265,7 +272,7 @@ async def dispatch_agent(args, ctx) -> str:
     agent_type = (args.get("agent_type") or "researcher").lower().strip()
     task = (args.get("task") or "").strip()
     if agent_type not in DEFAULT_AGENTS and agent_type not in (ctx.config or {}).get("sub_agents", {}):
-        return f"Unknown agent type '{agent_type}'. Use researcher, coder, or operator."
+        return f"Unknown agent type '{agent_type}'. Use cli, researcher, coder, or operator."
     if not task:
         return "Give the sub-agent a task to do."
     job_id = f"{agent_type[:3]}-{next(_counter)}"

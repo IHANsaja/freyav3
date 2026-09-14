@@ -8,6 +8,7 @@ from google import genai
 from google.genai import types
 from core.tools import dispatch
 from core import runtime
+from core.task_policy import TOOLS_FIRST
 from core.registry import build_declarations, dispatch as registry_dispatch, ToolContext
 import base64
 
@@ -156,7 +157,7 @@ TOOL_DECLARATIONS = [
     ),
     types.FunctionDeclaration(
         name="capture_screen",
-        description="Capture the user's screen so you can see what's on it. Use when user says 'look at my screen', 'what do you see', 'can you see this', 'look at this'.",
+        description="Capture the user's screen so you can see what's on it. Use only for an explicit screen-view request or visual information unavailable through file/DOM/accessibility tools. For 'see what is in this file', use read_document/read_file instead.",
         parameters=types.Schema(
             type=types.Type.OBJECT,
             properties={},
@@ -350,7 +351,7 @@ class FreyaModel:
                 )
             ),
             system_instruction=types.Content(
-                parts=[types.Part(text=self.personality + "\n\n" +
+                parts=[types.Part(text=self.personality + "\n\n" + TOOLS_FIRST + "\n" +
                     "MISSION ROUTING: When the user asks to start a mission, retain that intent "
                     "while asking for its goal. Once they supply the goal, call start_mission "
                     "with all constraints, even if the goal concerns web research. Do not substitute "
