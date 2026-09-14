@@ -236,7 +236,8 @@
     "gemini_model": "gemini-3.5-flash",
     "openai_model": "",
     "analysis_timeout_s": 45,
-    "max_analyses_per_session": 20
+    "max_analyses_per_session": 20,
+    "max_guide_questions_per_session": 20
   },
   "quota": {
     "project": "default-project",

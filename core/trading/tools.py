@@ -71,3 +71,12 @@ def review_trades(args,ctx):
 async def record_trading_thesis(args,ctx):
     body=dict(args); sid=body.pop('session_id')
     return json.dumps(await command(sid,'thesis',body),default=str)
+
+
+@tool('get_trading_lab_context',
+    "Read the active Trading Lab's selected candle, indicators, portfolio, recent orders and UI help WITHOUT screenshots. Call before answering questions about this workspace. If multiple sessions are active, ask which one. Read-only; never place orders unless separately requested. If analysis_locked=true, explain mechanics only until the user records a thesis.",
+    OBJ({'session_id':P(STR,'Optional explicit session; otherwise use the active workspace')}),gate='trading.enabled')
+def get_trading_lab_context(args,ctx):
+    from core.trading.guide import context
+    service,_=services()
+    return json.dumps(context(service,args.get('session_id')),default=str)

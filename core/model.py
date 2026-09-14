@@ -352,6 +352,7 @@ class FreyaModel:
             ),
             system_instruction=types.Content(
                 parts=[types.Part(text=self.personality + "\n\n" + TOOLS_FIRST + "\n" +
+                    "TRADING LAB: Call get_trading_lab_context before answering questions about the active chart or paper account. Use its structured facts instead of screenshots. Respect analysis_locked; ask which session if ambiguous. "
                     "MISSION ROUTING: When the user asks to start a mission, retain that intent "
                     "while asking for its goal. Once they supply the goal, call start_mission "
                     "with all constraints, even if the goal concerns web research. Do not substitute "
