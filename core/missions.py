@@ -108,7 +108,7 @@ _PLAN_SCHEMA = types.Schema(
             "detail": types.Schema(type=types.Type.STRING,
                                    description="Full self-contained instruction for the step executor"),
             "agent_type": types.Schema(type=types.Type.STRING,
-                                       description="Which agent runs this step: researcher, coder, or operator"),
+                                       description="Which agent runs this step: cli, researcher, coder, or operator"),
             "sensitive": types.Schema(type=types.Type.BOOLEAN,
                                       description="True if the step sends/submits/deletes/changes something outside the project"),
         },
@@ -234,6 +234,7 @@ class MissionOrchestrator:
             f"sequential steps. Each step must be independently executable by ONE background agent "
             f"and verifiable from its output. Do not add filler steps (no 'review results' step at "
             f"the end — verification is automatic). Available agents:\n{_agent_menu(config)}\n\n"
+            f"Prefer cli for local file/system tasks and coder for code. Use researcher for web evidence. Use operator only when CLI/API tools cannot do the task or GUI was explicitly requested. "
             f"Mark a step sensitive if it sends, submits, deletes or changes anything outside this "
             f"machine's Freya project.\n\nGOAL: {mission.goal}"
         )

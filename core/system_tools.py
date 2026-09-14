@@ -55,6 +55,9 @@ def clipboard_write(args, ctx) -> str:
 )
 def read_file(args, ctx) -> str:
     path = resolve_user_path(args.get("path", ""))
+    if os.path.splitext(path)[1].lower() in (".pdf", ".docx"):
+        from core.document_reader import read_document
+        return read_document(args, ctx)
     try:
         with open(path, "r", encoding="utf-8", errors="replace") as f:
             data = f.read()
