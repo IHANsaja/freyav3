@@ -1,6 +1,11 @@
 "use client";
 import type { ReactNode } from "react";
-import { TOOLS, type Drawing, type DrawingKind, type Point } from "./drawingTools";
+import {
+  TOOLS,
+  type Drawing,
+  type DrawingKind,
+  type Point,
+} from "./drawingTools";
 
 export type Frame = {
   w: number;
@@ -14,10 +19,20 @@ type XY = [number, number];
 const BLUE = "#759aff";
 const GREEN = "#21baa0";
 const RED = "#ef6474";
-const FIB_COLORS = ["#ef6474", "#d5ad68", "#21baa0", "#6d99ff", "#21baa0", "#d5ad68", "#b197ff"];
+const FIB_COLORS = [
+  "#ef6474",
+  "#d5ad68",
+  "#21baa0",
+  "#6d99ff",
+  "#21baa0",
+  "#d5ad68",
+  "#b197ff",
+];
 
 const fmt = (n: number) =>
-  n.toLocaleString(undefined, { maximumFractionDigits: Math.abs(n) < 10 ? 5 : 2 });
+  n.toLocaleString(undefined, {
+    maximumFractionDigits: Math.abs(n) < 10 ? 5 : 2,
+  });
 function far(a: XY, b: XY, k = 10000): XY {
   const dx = b[0] - a[0],
     dy = b[1] - a[1],
@@ -31,10 +46,18 @@ function duration(seconds: number) {
     m = Math.floor((s % 3600) / 60);
   return `${d ? `${d}d ` : ""}${h ? `${h}h ` : ""}${m}m`;
 }
-const line = (a: XY, b: XY, color = BLUE, extra: object = {}) => (
-  <line x1={a[0]} y1={a[1]} x2={b[0]} y2={b[1]} stroke={color} strokeWidth={2} {...extra} />
+const baseLine = (a: XY, b: XY, color = BLUE, extra: object = {}) => (
+  <line
+    x1={a[0]}
+    y1={a[1]}
+    x2={b[0]}
+    y2={b[1]}
+    stroke={color}
+    strokeWidth={2}
+    {...extra}
+  />
 );
-const label = (
+const baseLabel = (
   x: number,
   y: number,
   text: string,
@@ -66,7 +89,23 @@ const box = (a: XY, b: XY, fill: string, stroke = "none") => (
 );
 const poly = (pts: XY[]) => pts.map((p) => p.join(",")).join(" ");
 
-function shape(kind: DrawingKind, points: Point[], f: Frame, text?: string): ReactNode {
+function shape(
+  kind: DrawingKind,
+  points: Point[],
+  f: Frame,
+  text?: string,
+  appearance?: Drawing,
+): ReactNode {
+  const BLUE = appearance?.color ?? "#759aff";
+  const line = (a: XY, b: XY, color = BLUE, extra: object = {}) =>
+    baseLine(a, b, color, { strokeWidth: appearance?.width ?? 2, ...extra });
+  const label = (
+    x: number,
+    y: number,
+    text: string,
+    color = BLUE,
+    anchor: "start" | "middle" | "end" = "start",
+  ) => baseLabel(x, y, text, color, anchor);
   const projected = points.map((p) => {
     const x = f.toX(p.time),
       y = f.toY(p.price);
@@ -77,7 +116,13 @@ function shape(kind: DrawingKind, points: Point[], f: Frame, text?: string): Rea
   const need = TOOLS[kind].points;
   if (need && q.length < need)
     return q.length > 1 ? (
-      <polyline points={poly(q)} fill="none" stroke={BLUE} strokeWidth={2} strokeDasharray="4 3" />
+      <polyline
+        points={poly(q)}
+        fill="none"
+        stroke={BLUE}
+        strokeWidth={appearance?.width ?? 2}
+        strokeDasharray="4 3"
+      />
     ) : null;
   const [a, b, c] = q;
   switch (kind) {
@@ -123,18 +168,25 @@ function shape(kind: DrawingKind, points: Point[], f: Frame, text?: string): Rea
           ry={Math.abs(b[1] - a[1]) / 2}
           fill={`${BLUE}22`}
           stroke={BLUE}
-          strokeWidth={2}
+          strokeWidth={appearance?.width ?? 2}
         />
       );
     case "triangle":
-      return <polygon points={poly(q)} fill={`${BLUE}22`} stroke={BLUE} strokeWidth={2} />;
+      return (
+        <polygon
+          points={poly(q)}
+          fill={`${BLUE}22`}
+          stroke={BLUE}
+          strokeWidth={appearance?.width ?? 2}
+        />
+      );
     case "brush":
       return (
         <polyline
           points={poly(q)}
           fill="none"
           stroke={BLUE}
-          strokeWidth={2}
+          strokeWidth={appearance?.width ?? 2}
           strokeLinecap="round"
           strokeLinejoin="round"
         />
@@ -198,7 +250,30 @@ function shape(kind: DrawingKind, points: Point[], f: Frame, text?: string): Rea
             return (
               <g key={l}>
                 {line([x1, y], [x2, y], FIB_COLORS[i], { strokeWidth: 1 })}
-                {label(x1 - 4, y + 3, `${l} (${fmt(price)})`, FIB_COLORS[i], "end")}
+                {label(
+                  x1 - 4,
+                  y + 3,
+                  `${l} (${fmt(price)})`,
+                  FIB_COLORS[i],
+                  "end",
+                )}
+              </g>
+            );
+          })}
+        </>
+      );
+    }
+    case "fibfan": {
+      const ratios = [0.382, 0.5, 0.618];
+      return (
+        <>
+          {line(a, b, "#8391a8", { strokeWidth: 1, strokeDasharray: "4 3" })}
+          {ratios.map((r) => {
+            const end: XY = [b[0], a[1] + (b[1] - a[1]) * r];
+            return (
+              <g key={r}>
+                {line(a, far(a, end))}
+                {label(end[0] + 5, end[1], String(r))}
               </g>
             );
           })}
@@ -237,7 +312,8 @@ function shape(kind: DrawingKind, points: Point[], f: Frame, text?: string): Rea
       const entry = points[0].price;
       const risk = Math.abs(entry - points[1].price) || entry * 0.005;
       const dir = kind === "long" ? 1 : -1;
-      const target = entry + dir * 2 * risk,
+      const ratio = appearance?.rewardRatio ?? 2;
+      const target = entry + dir * ratio * risk,
         stop = entry - dir * risk;
       const yE = a[1],
         yT = f.toY(target),
@@ -251,9 +327,25 @@ function shape(kind: DrawingKind, points: Point[], f: Frame, text?: string): Rea
           {box([x1, yE], [x2, yT], `${GREEN}33`)}
           {box([x1, yE], [x2, yS], `${RED}33`)}
           {line([x1, yE], [x2, yE], "#e6edf7", { strokeWidth: 1 })}
-          {label(x1 + 4, yT + (dir === 1 ? 12 : -4), `Target ${fmt(target)} (${pct(target)}%)`, GREEN)}
-          {label(x1 + 4, yS + (dir === 1 ? -4 : 12), `Stop ${fmt(stop)} (${pct(stop)}%)`, RED)}
-          {label(x2 - 4, yE - 4, `${kind === "long" ? "Long" : "Short"} · R:R 2.00`, "#e6edf7", "end")}
+          {label(
+            x1 + 4,
+            yT + (dir === 1 ? 12 : -4),
+            `Target ${fmt(target)} (${pct(target)}%)`,
+            GREEN,
+          )}
+          {label(
+            x1 + 4,
+            yS + (dir === 1 ? -4 : 12),
+            `Stop ${fmt(stop)} (${pct(stop)}%)`,
+            RED,
+          )}
+          {label(
+            x2 - 4,
+            yE - 4,
+            `${kind === "long" ? "Long" : "Short"} · R:R ${ratio.toFixed(2)}`,
+            "#e6edf7",
+            "end",
+          )}
         </>
       );
     }
@@ -264,19 +356,30 @@ function shape(kind: DrawingKind, points: Point[], f: Frame, text?: string): Rea
       const bars = Math.round((points[1].time - points[0].time) / f.interval);
       const color = kind === "daterange" ? BLUE : dp >= 0 ? GREEN : RED;
       const parts = [
-        kind !== "daterange" && `${fmt(dp)} (${((dp / points[0].price) * 100).toFixed(2)}%)`,
-        kind !== "pricerange" && `${bars} bars, ${duration(points[1].time - points[0].time)}`,
+        kind !== "daterange" &&
+          `${fmt(dp)} (${((dp / points[0].price) * 100).toFixed(2)}%)`,
+        kind !== "pricerange" &&
+          `${bars} bars, ${duration(points[1].time - points[0].time)}`,
       ].filter(Boolean);
       const cx = (a[0] + b[0]) / 2;
       return (
         <>
           {box(a, b, `${color}26`)}
-          {kind !== "daterange" && line([cx, a[1]], [cx, b[1]], color, { markerEnd: "url(#drawing-arrow)" })}
+          {kind !== "daterange" &&
+            line([cx, a[1]], [cx, b[1]], color, {
+              markerEnd: "url(#drawing-arrow)",
+            })}
           {kind !== "pricerange" &&
             line([a[0], (a[1] + b[1]) / 2], [b[0], (a[1] + b[1]) / 2], color, {
               markerEnd: "url(#drawing-arrow)",
             })}
-          {label(cx, Math.max(a[1], b[1]) + 14, parts.join(" · "), color, "middle")}
+          {label(
+            cx,
+            Math.max(a[1], b[1]) + 14,
+            parts.join(" · "),
+            color,
+            "middle",
+          )}
         </>
       );
     }
@@ -316,22 +419,26 @@ export default function DrawingLayer({
           <path d="M0,0 L10,5 L0,10 z" fill="context-stroke" />
         </marker>
       </defs>
-      {drawings.map((d) => (
-        <g
-          key={d.id}
-          className={eraser ? "erasable" : undefined}
-          style={{
-            pointerEvents: eraser ? "visiblePainted" : "none",
-            // Freya's drawings share the shapes but read as hers: violet, not blue.
-            filter:
-              d.author === "freya" ? "hue-rotate(45deg) saturate(1.4)" : undefined,
-          }}
-          onClick={eraser ? () => onErase(d.id) : undefined}
-        >
-          {d.author === "freya" && <title>Drawn by Freya</title>}
-          {shape(d.kind, d.points, frame, d.text)}
-        </g>
-      ))}
+      {drawings
+        .filter((d) => !d.hidden)
+        .map((d) => (
+          <g
+            key={d.id}
+            className={eraser && !d.locked ? "erasable" : undefined}
+            style={{
+              pointerEvents: eraser && !d.locked ? "visiblePainted" : "none",
+              // Freya's drawings share the shapes but read as hers: violet, not blue.
+              filter:
+                d.author === "freya"
+                  ? "hue-rotate(45deg) saturate(1.4)"
+                  : undefined,
+            }}
+            onClick={eraser && !d.locked ? () => onErase(d.id) : undefined}
+          >
+            {d.author === "freya" && <title>Drawn by Freya</title>}
+            {shape(d.kind, d.points, frame, d.text, d)}
+          </g>
+        ))}
       {draft && <g opacity={0.7}>{shape(draft.kind, draft.points, frame)}</g>}
     </svg>
   );

@@ -298,7 +298,7 @@ export default function Home() {
           a card fed bad socket data throws in render, and without this the
           whole app would unmount. Isolated here, the rest stays usable. */}
       <ErrorBoundary label="dashboard">
-      <div className="relative z-10 flex-1 min-h-0">
+      <div className="hud-content relative z-10 flex-1 min-h-0">
         <div className="hud-grid">
           {/* Left column */}
           <div className="flex flex-col gap-4 min-h-0 pointer-events-auto">

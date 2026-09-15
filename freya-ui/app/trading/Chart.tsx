@@ -15,6 +15,7 @@ import {
   type UTCTimestamp,
   type Logical,
 } from "lightweight-charts";
+import { visibleRange } from "./practiceMath";
 import type { Session, Report, Candle } from "./types";
 import DrawingLayer, { type Frame } from "./DrawingLayer";
 import {
@@ -44,6 +45,8 @@ type Props = {
   onSelect: (id: string) => void;
   selected: string | null;
   fit: number;
+  rangeSeconds: number | null;
+  magnet: boolean;
   /** Still-forming live candle; drawn after the closed candles, never persisted. */
   liveCandle?: Candle | null;
 };
@@ -163,7 +166,8 @@ export default function Chart(props: Props) {
     };
     const pointAt = (x: number, y: number): Point | null => {
       const l = chart.timeScale().coordinateToLogical(x);
-      const price = candles.coordinateToPrice(y);
+      const rawPrice = candles.coordinateToPrice(y);
+      let price: number | null = rawPrice;
       if (l === null || price === null || price <= 0) return null;
       const g = geometry();
       const i = Math.round(l);
@@ -173,6 +177,17 @@ export default function Chart(props: Props) {
           : i > g.last
             ? g.lastT + (i - g.last) * g.iv
             : g.firstT + i * g.iv;
+      if (
+        latest.current.magnet &&
+        latest.current.tool !== "cursor" &&
+        i >= 0 &&
+        i <= g.last
+      ) {
+        const c = g.cs[i];
+        price = [+c.open, +c.high, +c.low, +c.close].reduce((a, b) =>
+          Math.abs(b - Number(price)) < Math.abs(a - Number(price)) ? b : a,
+        );
+      }
       return { time, price: Number(price) };
     };
     let frameRequest = 0;
@@ -184,7 +199,8 @@ export default function Chart(props: Props) {
           w: size.width,
           h: size.height,
           interval: latest.current.session.interval,
-          toX: (t) => chart.timeScale().logicalToCoordinate(toLogical(t) as Logical),
+          toX: (t) =>
+            chart.timeScale().logicalToCoordinate(toLogical(t) as Logical),
           toY: (p) => candles.priceToCoordinate(p),
         });
       });
@@ -378,7 +394,13 @@ export default function Chart(props: Props) {
     const lastClosed = props.session.candles.at(-1);
     if (!a || !c || (lastClosed && c.time <= lastClosed.time)) return;
     const time = c.time as UTCTimestamp;
-    a.candles.update({ time, open: +c.open, high: +c.high, low: +c.low, close: +c.close });
+    a.candles.update({
+      time,
+      open: +c.open,
+      high: +c.high,
+      low: +c.low,
+      close: +c.close,
+    });
     a.close.update({ time, value: +c.close });
     a.volume.update({
       time,
@@ -400,6 +422,18 @@ export default function Chart(props: Props) {
   useEffect(() => {
     api.current?.chart.timeScale().fitContent();
   }, [props.fit, props.session.id]);
+  useEffect(() => {
+    if (props.rangeSeconds === null) return;
+    const range = visibleRange(
+      props.session.candles.map((c) => c.time),
+      props.session.interval,
+      props.rangeSeconds,
+    );
+    if (range)
+      api.current?.chart
+        .timeScale()
+        .setVisibleLogicalRange({ from: range.from, to: range.to });
+  }, [props.rangeSeconds, props.session, props.fit]);
   useEffect(() => {
     const a = api.current;
     if (!a) return;
@@ -442,7 +476,7 @@ export default function Chart(props: Props) {
           ? "Brush · drag on the chart to draw"
           : `${toolLabel(props.tool)} · ${
               need > 1
-                ? `click point ${Math.min((activeDraft?.points.length ?? 1), need)} of ${need}`
+                ? `click point ${Math.min(activeDraft?.points.length ?? 1, need)} of ${need}`
                 : "click to place"
             } · Esc cancels`;
   const candle =
@@ -474,10 +508,7 @@ export default function Chart(props: Props) {
         </span>
       </div>
       <div className="chart-canvas-wrap">
-        <div
-          className={`chart-canvas tool-${props.tool}`}
-          ref={root}
-        />
+        <div className={`chart-canvas tool-${props.tool}`} ref={root} />
         {frame && (
           <DrawingLayer
             frame={frame}

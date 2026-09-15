@@ -11,6 +11,7 @@ export type DrawingKind =
   | "pitchfork"
   | "fib"
   | "fibext"
+  | "fibfan"
   | "rect"
   | "ellipse"
   | "triangle"
@@ -28,6 +29,11 @@ export type Drawing = {
   kind: DrawingKind;
   points: Point[];
   text?: string;
+  locked?: boolean;
+  hidden?: boolean;
+  color?: string;
+  width?: number;
+  rewardRatio?: number;
   /** "freya" when Freya drew it by voice; absent/"user" for the user's own. */
   author?: "user" | "freya";
 };
@@ -48,6 +54,7 @@ export const TOOLS: Record<
   channel: { label: "Parallel channel", icon: "▱", points: 3 },
   pitchfork: { label: "Pitchfork", icon: "⋔", points: 3 },
   fib: { label: "Fib retracement", icon: "≣", points: 2 },
+  fibfan: { label: "Fibonacci fan", icon: "⋰", points: 2 },
   fibext: { label: "Trend-based fib extension", icon: "☰", points: 3 },
   rect: { label: "Rectangle", icon: "▭", points: 2 },
   ellipse: { label: "Ellipse", icon: "◯", points: 2 },
@@ -61,26 +68,52 @@ export const TOOLS: Record<
   datepricerange: { label: "Date & price range", icon: "⤡", points: 2 },
 };
 
-export const TOOL_GROUPS: { id: string; label: string; tools: ChartTool[] }[] = [
-  { id: "cursor", label: "Crosshair", tools: ["cursor"] },
-  {
-    id: "lines",
-    label: "Lines",
-    tools: ["trend", "ray", "extended", "arrow", "hline", "hray", "vline", "cross"],
-  },
-  { id: "channels", label: "Channels & pitchforks", tools: ["channel", "pitchfork"] },
-  { id: "fib", label: "Fibonacci", tools: ["fib", "fibext"] },
-  { id: "shapes", label: "Shapes & brush", tools: ["rect", "ellipse", "triangle", "brush"] },
-  { id: "text", label: "Text", tools: ["text"] },
-  { id: "projection", label: "Positions", tools: ["long", "short"] },
-  { id: "measure", label: "Measure", tools: ["pricerange", "daterange", "datepricerange"] },
-  { id: "eraser", label: "Eraser", tools: ["eraser"] },
-];
+export const TOOL_GROUPS: { id: string; label: string; tools: ChartTool[] }[] =
+  [
+    { id: "cursor", label: "Crosshair", tools: ["cursor"] },
+    {
+      id: "lines",
+      label: "Lines",
+      tools: [
+        "trend",
+        "ray",
+        "extended",
+        "arrow",
+        "hline",
+        "hray",
+        "vline",
+        "cross",
+      ],
+    },
+    {
+      id: "channels",
+      label: "Channels & pitchforks",
+      tools: ["channel", "pitchfork"],
+    },
+    { id: "fib", label: "Fibonacci", tools: ["fib", "fibext", "fibfan"] },
+    {
+      id: "shapes",
+      label: "Shapes & brush",
+      tools: ["rect", "ellipse", "triangle", "brush"],
+    },
+    { id: "text", label: "Text", tools: ["text"] },
+    { id: "projection", label: "Positions", tools: ["long", "short"] },
+    {
+      id: "measure",
+      label: "Measure",
+      tools: ["pricerange", "daterange", "datepricerange"],
+    },
+    { id: "eraser", label: "Eraser", tools: ["eraser"] },
+  ];
 
 export const toolIcon = (tool: ChartTool) =>
   tool === "cursor" ? "✛" : tool === "eraser" ? "⌫" : TOOLS[tool].icon;
 export const toolLabel = (tool: ChartTool) =>
-  tool === "cursor" ? "Crosshair" : tool === "eraser" ? "Eraser" : TOOLS[tool].label;
+  tool === "cursor"
+    ? "Crosshair"
+    : tool === "eraser"
+      ? "Eraser"
+      : TOOLS[tool].label;
 
 export const MAX_DRAWINGS = 200;
 
@@ -107,11 +140,26 @@ export function isDrawing(value: unknown): value is Drawing {
   const need = TOOLS[d.kind].points;
   const n = d.points.length;
   if (need ? n !== need : n < 2 || n > MAX_BRUSH_POINTS) return false;
-  if (d.text !== undefined && (typeof d.text !== "string" || d.text.length > 500))
+  if (
+    d.text !== undefined &&
+    (typeof d.text !== "string" || d.text.length > 500)
+  )
     return false;
   if (d.author !== undefined && d.author !== "user" && d.author !== "freya")
     return false;
+  if (d.locked !== undefined && typeof d.locked !== "boolean") return false;
+  if (d.hidden !== undefined && typeof d.hidden !== "boolean") return false;
+  if (d.color !== undefined && !/^#[0-9a-f]{6}$/i.test(d.color)) return false;
+  if (d.width !== undefined && ![1, 2, 3, 4].includes(d.width)) return false;
+  if (
+    d.rewardRatio !== undefined &&
+    (!Number.isFinite(d.rewardRatio) ||
+      d.rewardRatio <= 0 ||
+      d.rewardRatio > 20)
+  )
+    return false;
   return d.points.every(
-    (p) => p && Number.isFinite(p.time) && Number.isFinite(p.price) && p.price > 0,
+    (p) =>
+      p && Number.isFinite(p.time) && Number.isFinite(p.price) && p.price > 0,
   );
 }

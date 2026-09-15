@@ -30,7 +30,7 @@ DRAWING_KINDS = {
     'trend': ('Trend line', 2), 'ray': ('Ray', 2), 'extended': ('Extended line', 2), 'arrow': ('Arrow', 2),
     'hline': ('Horizontal line', 1), 'hray': ('Horizontal ray', 1), 'vline': ('Vertical line', 1),
     'cross': ('Cross line', 1), 'channel': ('Parallel channel', 3), 'pitchfork': ('Pitchfork', 3),
-    'fib': ('Fib retracement', 2), 'fibext': ('Trend-based fib extension', 3), 'rect': ('Rectangle', 2),
+    'fibfan': ('Fibonacci fan', 2), 'fib': ('Fib retracement', 2), 'fibext': ('Trend-based fib extension', 3), 'rect': ('Rectangle', 2),
     'ellipse': ('Ellipse', 2), 'triangle': ('Triangle', 3), 'brush': ('Brush', 0), 'text': ('Text', 1),
     'long': ('Long position', 2), 'short': ('Short position', 2), 'pricerange': ('Price range', 2),
     'daterange': ('Date range', 2), 'datepricerange': ('Date & price range', 2),
@@ -40,7 +40,7 @@ DRAWING_KINDS = {
 class Workspace(StrictModel):
     client_id: str = Field(min_length=1, max_length=100)
     session_id: str
-    panel: Literal['orders','positions','fills','journal','progress','analysis'] = 'orders'
+    panel: Literal['orders','positions','fills','journal','progress','analysis','news','coach','drawings'] = 'orders'
     candle_id: str | None = None
     active: bool = True
     focused: bool = False
