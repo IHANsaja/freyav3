@@ -12,7 +12,7 @@ MARKETS = {
     "XRP-USD": ("XRP", 0.6), "DOGE-USD": ("Dogecoin", 0.15), "ADA-USD": ("Cardano", 0.5),
     "AVAX-USD": ("Avalanche", 30), "LINK-USD": ("Chainlink", 15), "LTC-USD": ("Litecoin", 80),
 }
-INTERVALS = (60, 300, 900, 3600)
+INTERVALS = (60, 300, 900, 3600, 21600, 86400)
 EXCHANGE = "https://api.exchange.coinbase.com"
 _stats_cache = {}
 

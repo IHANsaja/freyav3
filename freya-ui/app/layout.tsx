@@ -2,7 +2,6 @@ import type { Metadata } from "next";
 import { Sora, Share_Tech_Mono, Orbitron, Rajdhani } from "next/font/google";
 import "./globals.css";
 import { FreyaSocketProvider } from "./components/FreyaSocketProvider";
-import Link from "next/link";
 
 const sora = Sora({
   subsets: ["latin"],
@@ -45,7 +44,7 @@ export default function RootLayout({
       suppressHydrationWarning
       className={`${sora.variable} ${shareTechMono.variable} ${orbitron.variable} ${rajdhani.variable} h-full antialiased`}
     >
-      <body className="min-h-full flex flex-col bg-surface text-parchment font-sans"><FreyaSocketProvider><nav className="px-6 py-2 text-xs flex gap-6 border-b border-white/10"><Link href="/">Freya command</Link><Link href="/trading">Trading Lab · Simulation</Link></nav>{children}</FreyaSocketProvider></body>
+      <body className="min-h-full flex flex-col bg-surface text-parchment font-sans"><FreyaSocketProvider>{children}</FreyaSocketProvider></body>
     </html>
   );
 }

@@ -170,3 +170,12 @@ def get_trading_lab_context(args,ctx):
     from core.trading.guide import context
     service,_=services()
     return json.dumps(context(service,args.get('session_id')),default=str)
+
+
+@tool('get_market_news',
+    'Read current financial headlines with publisher links and publication times. These are TODAY’S news, never historical replay evidence or trade signals. Mention source failures/staleness. No model calls or screenshots. Fetch only when the user asks about current news.',
+    OBJ({'symbol':P(STR,'ALL or asset ticker such as BTC, ETH, SOL')}),gate='trading.enabled')
+async def get_market_news(args,ctx):
+    from core.trading.news import headlines
+    services()
+    return json.dumps(await headlines(args.get('symbol','ALL')),default=str)

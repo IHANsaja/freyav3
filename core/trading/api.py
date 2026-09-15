@@ -207,6 +207,14 @@ async def guide(sid:str,body:GuideRequest,request:Request):
         if not task.done():task.cancel()
         await asyncio.gather(task,return_exceptions=True)
 
+@router.get('/news')
+async def market_news(symbol:str='ALL'):
+    from core.trading.news import headlines
+    services()  # Honor the Trading Lab enabled gate.
+    try: return await headlines(symbol)
+    except ValueError as exc: raise HTTPException(422,str(exc)) from exc
+
+
 # Offline launch without importing audio, desktop automation or Gemini Live.
 app=FastAPI(title='Freya Trading Lab (simulation only)')
 app.add_middleware(CORSMiddleware,allow_origins=['http://localhost:3000'],allow_methods=['*'],allow_headers=['*'])

@@ -17,6 +17,10 @@ import {
 } from "./drawingTools";
 import { useSharedFreyaSocket } from "../components/FreyaSocketProvider";
 import "./workspace.css";
+import NewsPanel from "./NewsPanel";
+import PracticeCoach from "./PracticeCoach";
+import DrawingInspector from "./DrawingInspector";
+import { RANGES, visibleRange } from "./practiceMath";
 const API = "http://localhost:8000/trading";
 async function api(path: string, body?: unknown, signal?: AbortSignal) {
   const r = await fetch(API + path, {
@@ -58,7 +62,15 @@ type Learning = {
   ai_cost_usd: string | null;
 };
 type Panel =
-  "orders" | "positions" | "fills" | "journal" | "progress" | "analysis";
+  | "orders"
+  | "positions"
+  | "fills"
+  | "journal"
+  | "progress"
+  | "analysis"
+  | "news"
+  | "coach"
+  | "drawings";
 type LivePrice = { price: string; change_24h: string; fetched_at: number };
 const MARKETS: [string, string, string][] = [
   ["BTC-USD", "Bitcoin", "B"],
@@ -121,6 +133,12 @@ export default function TradingPage() {
   const [tool, setTool] = useState<ChartTool>("cursor");
   const [fit, setFit] = useState(0);
   const [drawings, setDrawings] = useState<Drawing[]>([]);
+  const [rangeSeconds, setRangeSeconds] = useState<number | null>(null);
+  const [magnet, setMagnet] = useState(false);
+  const [historyCounts, setHistoryCounts] = useState({ past: 0, future: 0 });
+  const pastDrawings = useRef<Drawing[][]>([]),
+    futureDrawings = useRef<Drawing[][]>([]);
+
   const [openGroup, setOpenGroup] = useState<string | null>(null);
   const [groupPick, setGroupPick] = useState<Record<string, ChartTool>>({});
   const [drawingsHidden, setDrawingsHidden] = useState(false);
@@ -158,12 +176,18 @@ export default function TradingPage() {
     setS(state);
     if (replace) {
       setSelected(null);
+      setHistoryCounts({ past: 0, future: 0 });
+      pastDrawings.current = [];
+      futureDrawings.current = [];
+      setRangeSeconds(null);
       setThesis(state.thesis?.text ?? "");
       setInvalidation(state.thesis?.invalidation ?? "");
       setSymbol(state.symbol);
       setIntervalValue(state.interval);
       setMode(state.mode);
-      setSource(state.environment === "observation" ? "observation" : "historical");
+      setSource(
+        state.environment === "observation" ? "observation" : "historical",
+      );
       setPlaying(false);
       setForming(null);
       setLearning(null);
@@ -179,7 +203,9 @@ export default function TradingPage() {
           Array.isArray(saved)
             ? saved
                 // Older saves used "level" for what is now a horizontal line.
-                .map((d) => (d && d.kind === "level" ? { ...d, kind: "hline" } : d))
+                .map((d) =>
+                  d && d.kind === "level" ? { ...d, kind: "hline" } : d,
+                )
                 .filter(isDrawing)
                 .slice(0, MAX_DRAWINGS)
             : [],
@@ -188,7 +214,11 @@ export default function TradingPage() {
       } catch {
         setDrawings([]);
       }
-      window.history.replaceState(null, "", `/trading?session=${state.id}${state.environment === "observation" ? "" : "&replay=1"}`);
+      window.history.replaceState(
+        null,
+        "",
+        `/trading?session=${state.id}${state.environment === "observation" ? "" : "&replay=1"}`,
+      );
     }
   }, []);
   const refresh = useCallback(
@@ -199,38 +229,61 @@ export default function TradingPage() {
   );
   useEffect(() => {
     const controller = new AbortController();
-    const explicitId = new URLSearchParams(window.location.search).get("session");
-    const replayRequested = new URLSearchParams(window.location.search).get("replay") === "1";
-    const id = explicitId ||
-      localStorage.getItem("freya-trading-session");
+    const explicitId = new URLSearchParams(window.location.search).get(
+      "session",
+    );
+    const replayRequested =
+      new URLSearchParams(window.location.search).get("replay") === "1";
+    const id = explicitId || localStorage.getItem("freya-trading-session");
     const initialize = async () => {
       setBusy(true);
       mutationLock.current = true;
       try {
         let state: Session | null = null;
         if (id) {
-          try { state = await api(`/sessions/${id}`, undefined, controller.signal); }
-          catch (e) { if (explicitId || controller.signal.aborted) throw e; }
+          try {
+            state = await api(`/sessions/${id}`, undefined, controller.signal);
+          } catch (e) {
+            if (explicitId || controller.signal.aborted) throw e;
+          }
         }
         // A session URL is also written automatically by the workspace. Only
         // explicitly marked replay links may restore non-live market data.
-        if (!state || (!replayRequested && state.environment !== "observation")) {
-          state = await api("/observation", {
-            key: crypto.randomUUID(), symbol: state?.symbol ?? "BTC-USD",
-            interval: state?.interval ?? 900, mode: state?.mode ?? "independent",
-          }, controller.signal);
+        if (
+          !state ||
+          (!replayRequested && state.environment !== "observation")
+        ) {
+          state = await api(
+            "/observation",
+            {
+              key: crypto.randomUUID(),
+              symbol: state?.symbol ?? "BTC-USD",
+              interval: state?.interval ?? 900,
+              mode: state?.mode ?? "independent",
+            },
+            controller.signal,
+          );
         }
         if (!controller.signal.aborted && state) {
           accept(state, true);
           const restoredId = state.id;
           void api(`/analysis/${restoredId}`, undefined, controller.signal)
             .then((r) => {
-              if (!controller.signal.aborted && current.current?.id === restoredId) setReport(r);
-            }).catch(() => {});
+              if (
+                !controller.signal.aborted &&
+                current.current?.id === restoredId
+              )
+                setReport(r);
+            })
+            .catch(() => {});
         }
       } catch (e) {
         if (!controller.signal.aborted)
-          setError(e instanceof Error ? e.message : "Live market data unavailable. Retry with New session.");
+          setError(
+            e instanceof Error
+              ? e.message
+              : "Live market data unavailable. Retry with New session.",
+          );
       } finally {
         if (!controller.signal.aborted) {
           mutationLock.current = false;
@@ -255,12 +308,19 @@ export default function TradingPage() {
       if (id !== current.current?.id) return;
       // Freya drawing (or clearing her drawings) on the chart by voice.
       if (detail.event === "draw" || detail.event === "clear_freya") {
+        pastDrawings.current = [];
+        futureDrawings.current = [];
+        setHistoryCounts({ past: 0, future: 0 });
         setDrawings((prev) => {
           const next =
             detail.event === "draw"
               ? [
                   ...prev,
-                  { ...detail.drawing, id: crypto.randomUUID(), author: "freya" },
+                  {
+                    ...detail.drawing,
+                    id: crypto.randomUUID(),
+                    author: "freya",
+                  },
                 ]
                   .filter(isDrawing)
                   .slice(-MAX_DRAWINGS)
@@ -286,9 +346,11 @@ export default function TradingPage() {
     },
     [],
   );
+  const workspaceSessionId = s?.id;
+  const voiceIdle = voiceState === "idle";
   useEffect(() => {
-    if (!s) return;
-    const id = s.id;
+    if (!workspaceSessionId) return;
+    const id = workspaceSessionId;
     let client = sessionStorage.getItem("freya-workspace-client");
     if (!client) {
       client = crypto.randomUUID();
@@ -303,7 +365,7 @@ export default function TradingPage() {
         active: document.visibilityState === "visible",
         focused: document.hasFocus(),
         ...options,
-        drawings: drawingSummary(drawings),
+        drawings: drawingSummary(drawings.filter((d) => !d.hidden)),
       }).catch(() => {});
     };
     sync();
@@ -317,7 +379,15 @@ export default function TradingPage() {
       window.removeEventListener("blur", sync);
       document.removeEventListener("visibilitychange", sync);
     };
-  }, [s?.id, panel, selected, options, drawings, voiceOn, voiceState === "idle"]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [
+    workspaceSessionId,
+    panel,
+    selected,
+    options,
+    drawings,
+    voiceOn,
+    voiceIdle,
+  ]);
   useEffect(() => {
     const release = () => {
       const client = sessionStorage.getItem("freya-workspace-client");
@@ -391,11 +461,14 @@ export default function TradingPage() {
           setLive((prev) => {
             const next = { ...prev };
             for (const p of r.prices) {
-              if (!next[p.symbol] || p.fetched_at > next[p.symbol].fetched_at) next[p.symbol] = p;
+              if (!next[p.symbol] || p.fetched_at > next[p.symbol].fetched_at)
+                next[p.symbol] = p;
             }
             return next;
           });
-          setLiveOk(r.prices.some((p) => Date.now() / 1000 - p.fetched_at < 15));
+          setLiveOk(
+            r.prices.some((p) => Date.now() / 1000 - p.fetched_at < 15),
+          );
         })
         .catch(() => {
           if (!stopped) setLiveOk(false);
@@ -536,9 +609,7 @@ export default function TradingPage() {
     await run(async () => {
       const body = { key: crypto.randomUUID(), symbol, interval, mode };
       const state = await api(
-        source === "observation"
-            ? "/observation"
-            : "/historical",
+        source === "observation" ? "/observation" : "/historical",
         source === "historical"
           ? {
               ...body,
@@ -550,8 +621,16 @@ export default function TradingPage() {
       accept(state, true);
     });
   }
-  function saveDrawings(next: Drawing[]) {
+  function saveDrawings(next: Drawing[], track = true) {
     if (!s) return;
+    if (track) {
+      pastDrawings.current = [...pastDrawings.current, drawings].slice(-30);
+      futureDrawings.current = [];
+    }
+    setHistoryCounts({
+      past: pastDrawings.current.length,
+      future: futureDrawings.current.length,
+    });
     setDrawings(next);
     try {
       localStorage.setItem(`freya-drawings-${s.id}`, JSON.stringify(next));
@@ -602,9 +681,16 @@ export default function TradingPage() {
         client = crypto.randomUUID();
         sessionStorage.setItem("freya-workspace-client", client);
       }
-      await api("/workspace", { client_id: client, session_id: s.id, panel,
-        candle_id: selected, active: true, focused: true, ...options,
-        drawings: drawingSummary(drawings) });
+      await api("/workspace", {
+        client_id: client,
+        session_id: s.id,
+        panel,
+        candle_id: selected,
+        active: true,
+        focused: true,
+        ...options,
+        drawings: drawingSummary(drawings.filter((d) => !d.hidden)),
+      });
       if (!voiceOn) startFreya();
     } catch {
       setError("Could not share the active chart with Freya. Try again.");
@@ -705,9 +791,7 @@ export default function TradingPage() {
       </header>
       <section className="market-bar">
         <div className="market-title">
-          <span className="coin-icon">
-            {coinIcon(shown)}
-          </span>
+          <span className="coin-icon">{coinIcon(shown)}</span>
           <div>
             <h1>
               {s?.symbol ?? symbol}
@@ -715,7 +799,11 @@ export default function TradingPage() {
                 {s?.interval ? s.interval / 60 : interval / 60}m · SPOT
               </span>
             </h1>
-            <small>{s?.environment === "observation" ? "Coinbase Exchange · live market" : s?.source ?? "Loading live market data…"}</small>
+            <small>
+              {s?.environment === "observation"
+                ? "Coinbase Exchange · live market"
+                : (s?.source ?? "Loading live market data…")}
+            </small>
           </div>
         </div>
         <div className="market-price">
@@ -757,7 +845,13 @@ export default function TradingPage() {
       {(error || feedError) && (
         <div role="alert" className="workspace-error">
           {error || feedError}
-          <button aria-label="Dismiss error" onClick={() => { setError(""); setFeedError(""); }}>
+          <button
+            aria-label="Dismiss error"
+            onClick={() => {
+              setError("");
+              setFeedError("");
+            }}
+          >
             ×
           </button>
         </div>
@@ -810,6 +904,8 @@ export default function TradingPage() {
                 <option value={300}>5 minutes</option>
                 <option value={900}>15 minutes</option>
                 <option value={3600}>1 hour</option>
+                <option value={21600}>6 hours</option>
+                <option value={86400}>1 day</option>
               </select>
             </label>
             <label>
@@ -896,7 +992,14 @@ export default function TradingPage() {
                 </button>
               ))}
             </div>
-            <button onClick={() => setFit((n) => n + 1)}>Fit chart</button>
+            <button
+              onClick={() => {
+                setRangeSeconds(null);
+                setFit((n) => n + 1);
+              }}
+            >
+              Fit chart
+            </button>
             <button
               className="analysis-button"
               disabled={
@@ -906,6 +1009,51 @@ export default function TradingPage() {
             >
               ✧ {analysisBusy ? "Analyzing…" : "Chart analysis"}
             </button>
+          </div>
+          <div className="range-toolbar" aria-label="Chart time range">
+            <span>Visible range</span>
+            {RANGES.map((r) => (
+              <button
+                key={r.label}
+                disabled={!s}
+                aria-pressed={rangeSeconds === r.seconds}
+                onClick={() => {
+                  setRangeSeconds(r.seconds);
+                  setFit((n) => n + 1);
+                }}
+              >
+                {r.label}
+              </button>
+            ))}
+            <button
+              aria-pressed={rangeSeconds === null}
+              onClick={() => {
+                setRangeSeconds(null);
+                setFit((n) => n + 1);
+              }}
+            >
+              All
+            </button>
+            <small>
+              1m = one minute · candle size{" "}
+              {(s?.interval ?? interval) < 3600
+                ? `${(s?.interval ?? interval) / 60}m`
+                : (s?.interval ?? interval) < 86400
+                  ? `${(s?.interval ?? interval) / 3600}h`
+                  : "1D"}
+              {s &&
+              rangeSeconds &&
+              visibleRange(
+                s.candles.map((c) => c.time),
+                s.interval,
+                rangeSeconds,
+              )?.limited
+                ? " · limited to loaded / revealed history"
+                : ""}
+              {s && rangeSeconds && rangeSeconds < s.interval
+                ? " · shorter than one candle"
+                : ""}
+            </small>
           </div>
           <div
             className="chart-stage"
@@ -962,6 +1110,35 @@ export default function TradingPage() {
               })}
               <span />
               <button
+                aria-label="Snap to OHLC"
+                title="Magnet: snap anchors to candle open, high, low or close"
+                aria-pressed={magnet}
+                onClick={() => setMagnet((v) => !v)}
+              >
+                ⌁
+              </button>
+              <button
+                aria-label="Drawing objects"
+                title="Edit, style and lock drawings"
+                onClick={() => setPanel("drawings")}
+              >
+                ☷
+              </button>
+              <button
+                aria-label="Redo drawing"
+                title="Redo drawing"
+                disabled={!historyCounts.future}
+                onClick={() => {
+                  const next = futureDrawings.current.pop();
+                  if (next) {
+                    pastDrawings.current.push(drawings);
+                    saveDrawings(next, false);
+                  }
+                }}
+              >
+                ↷
+              </button>
+              <button
                 title={drawingsHidden ? "Show drawings" : "Hide drawings"}
                 aria-label={drawingsHidden ? "Show drawings" : "Hide drawings"}
                 aria-pressed={drawingsHidden}
@@ -972,8 +1149,14 @@ export default function TradingPage() {
               <button
                 title="Undo drawing"
                 aria-label="Undo drawing"
-                disabled={!drawings.length}
-                onClick={() => saveDrawings(drawings.slice(0, -1))}
+                disabled={!historyCounts.past}
+                onClick={() => {
+                  const previous = pastDrawings.current.pop();
+                  if (previous) {
+                    futureDrawings.current.push(drawings);
+                    saveDrawings(previous, false);
+                  }
+                }}
               >
                 ↶
               </button>
@@ -981,7 +1164,7 @@ export default function TradingPage() {
                 title="Clear drawings"
                 aria-label="Clear drawings"
                 disabled={!drawings.length}
-                onClick={() => saveDrawings([])}
+                onClick={() => saveDrawings(drawings.filter((d) => d.locked))}
               >
                 ×
               </button>
@@ -1001,7 +1184,7 @@ export default function TradingPage() {
                 onSelect={setSelected}
                 liveCandle={liveCandle}
                 onErase={(id) =>
-                  saveDrawings(drawings.filter((d) => d.id !== id))
+                  saveDrawings(drawings.filter((d) => d.id !== id || d.locked))
                 }
                 onDraw={(d) => {
                   setDrawingsHidden(false);
@@ -1013,6 +1196,8 @@ export default function TradingPage() {
                     );
                 }}
                 fit={fit}
+                rangeSeconds={rangeSeconds}
+                magnet={magnet}
               />
             ) : (
               <div className="workspace-empty">
@@ -1051,9 +1236,9 @@ export default function TradingPage() {
                   Refresh now ↻
                 </button>
                 <span className={s.feed_stale ? "negative" : "positive"}>
-                  {s.feed_stale ? "Stale feed" : "Live"} · candles update
-                  every {CANDLE_POLL_MS / 1000}s · orders fill on the next
-                  closed candle
+                  {s.feed_stale ? "Stale feed" : "Live"} · candles update every{" "}
+                  {CANDLE_POLL_MS / 1000}s · orders fill on the next closed
+                  candle
                 </span>
               </>
             ) : (
@@ -1130,7 +1315,10 @@ export default function TradingPage() {
                   s ? `${num(s.quantity)} ${s.symbol.split("-")[0]}` : "—",
                 ],
                 ["Fees paid", s ? money(s.fees) : "—"],
-                ["Max drawdown", s ? `${(+s.drawdown * 100).toFixed(2)}%` : "—"],
+                [
+                  "Max drawdown",
+                  s ? `${(+s.drawdown * 100).toFixed(2)}%` : "—",
+                ],
               ] as [string, string, string?][]
             ).map(([label, value, className]) => (
               <div key={label}>
@@ -1149,6 +1337,9 @@ export default function TradingPage() {
                   "journal",
                   "progress",
                   "analysis",
+                  "news",
+                  "coach",
+                  "drawings",
                 ] as Panel[]
               ).map((p) => (
                 <button
@@ -1162,6 +1353,30 @@ export default function TradingPage() {
               ))}
             </div>
             <div className="panel-body">
+              {panel === "news" && (
+                <NewsPanel
+                  key={s?.id ?? "none"}
+                  symbol={s?.symbol ?? symbol}
+                  replay={s?.environment !== "observation"}
+                />
+              )}
+              {panel === "coach" &&
+                (s ? (
+                  <PracticeCoach
+                    key={s.id}
+                    session={s}
+                    onQuantity={(q) => {
+                      setQuantity(q);
+                      setSideTab("ticket");
+                    }}
+                  />
+                ) : (
+                  <p>Open a practice session first.</p>
+                ))}
+              {panel === "drawings" && (
+                <DrawingInspector drawings={drawings} onChange={saveDrawings} />
+              )}
+
               {panel === "orders" && (
                 <div className="table-scroll">
                   <table>
