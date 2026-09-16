@@ -3,6 +3,7 @@ from config import load_config, get_api_key, get_memory_api_key, get_active_voic
 from config import get_mode_personality, get_mode_model  # ← add these
 from core.audio import MicStream, SpeakerStream
 from core.model import FreyaModel, is_rotation
+from core.live_protocol import LiveRoute, ModeChange
 from core.memory import load_memory, build_system_prompt, update_memory, TranscriptCollector
 
 config = load_config()
@@ -46,17 +47,20 @@ async def main():
     consecutive_failures = 0
     max_reconnect_attempts = 5
     resume_handle = None
+    continue_task = False
+    route = LiveRoute(model_id, config)
 
     try:
         while True:
             freya = FreyaModel(
                 api_key=api_key,
-                model_id=model_id,
+                model_id=route.model,
                 voice=voice,
                 personality=personality,
                 config=config,
                 transcript=transcript,
                 resume_handle=resume_handle,
+                continue_task=continue_task,
             )
             try:
                 await freya.run(mic, speaker)
@@ -67,7 +71,20 @@ async def main():
                 # Carry the conversation forward whatever went wrong.
                 resume_handle = freya.resume_handle
 
-                if is_rotation(e):
+                if freya.connected and not isinstance(e, ModeChange):
+                    continue_task = False
+                fallback = None if isinstance(e, ModeChange) else route.fallback(e)
+                if isinstance(e, ModeChange):
+                    resume_handle = None  # Model/personality changed: never reuse its token.
+                    continue_task = str(e) == "complex_tasks"
+                    consecutive_failures = 0
+                elif fallback:
+                    resume_handle = None
+                    # Retry an unstarted handoff, never replay a live action.
+                    continue_task = continue_task and not freya.connected
+                    print(f"Live model unavailable; falling back to {fallback}.")
+                    await asyncio.sleep(1)
+                elif is_rotation(e):
                     # Expected lifecycle event, not a fault: don't spend the
                     # failure budget and don't make the user wait 2-10 seconds.
                     print("🔄 Rotating session (context preserved)...")
@@ -84,7 +101,11 @@ async def main():
                 # Reload config and keys
                 config = load_config()
                 api_key = get_api_key()
+                previous_model = route.model
                 model_id = get_mode_model(config)
+                route.configure(model_id, config)
+                if route.model != previous_model:
+                    resume_handle = None
                 voice = get_active_voice(config)
                 base_personality = get_personality(config)
                 personality = build_system_prompt(get_mode_personality(config, base_personality), memory)

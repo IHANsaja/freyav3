@@ -429,6 +429,8 @@ def switch_mode(mode: str) -> str:
     if mode not in valid_modes:
         return f"Unknown mode: {mode}. Valid modes are: {', '.join(valid_modes)}"
     
+    if config.get("active_mode", "default") == mode:
+        return f"Already in {mode} mode. Continue the current task."
     config_path = os.path.join(os.path.dirname(__file__), '..', 'config', 'freya_config.json')
     try:
         with open(config_path, 'r') as f:

@@ -31,6 +31,11 @@ def load_config():
     ensure_config()
     with open(CONFIG_PATH, "r", encoding="utf-8") as f:
         config = json.load(f)
+    from config.models import migrate_live_defaults
+    if migrate_live_defaults(config):
+        # Save the migration marker so selecting the fallback later is respected.
+        with open(CONFIG_PATH, "w", encoding="utf-8") as f:
+            json.dump(config, f, indent=2)
     # New simulation-only capability defaults without rewriting existing installs.
     config.setdefault("trading", {"enabled": True})
     
@@ -40,7 +45,7 @@ def load_config():
     config_dir = os.path.dirname(CONFIG_PATH)
     try:
         for filename in os.listdir(config_dir):
-            if filename.startswith("freya_") and filename.endswith(".json") and filename != "freya_config.json":
+            if filename.startswith("freya_") and filename.endswith(".json") and filename not in ("freya_config.json", "freya_config.example.json"):
                 mode_id = filename[6:-5]  # strip "freya_" prefix and ".json" suffix
                 file_path = os.path.join(config_dir, filename)
                 try:

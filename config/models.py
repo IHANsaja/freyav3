@@ -1,7 +1,9 @@
-"""Gemini role defaults, checked against Google's model catalog 2026-09-13."""
+"""Gemini role defaults, checked against Google's model catalog 2026-09-16."""
 TEXT_MODEL = "gemini-3.5-flash"
 LITE_MODEL = "gemini-3.5-flash-lite"
-LIVE_MODEL = "gemini-3.1-flash-live-preview"
+LIVE_MODEL = "gemini-3.8-live"
+LIVE_FALLBACK_MODEL = "gemini-3.1-flash-live-preview"
+THINKING_LIVE_MODEL = "gemini-3.8-live-extended-thinking"
 
 # Only aliases and retired models are migrated; supported explicit pins survive.
 REPLACEMENTS = {
@@ -36,3 +38,39 @@ def normalize_models(value):
         for item in value:
             normalize_models(item)
     return value
+
+
+LIVE_MODELS = [
+    {"id": LIVE_MODEL, "label": "Gemini 3.8 Live (main)"},
+    {"id": THINKING_LIVE_MODEL, "label": "Gemini 3.8 Live Extended Thinking"},
+    {"id": LIVE_FALLBACK_MODEL, "label": "Gemini 3.1 Flash Live (fallback)"},
+]
+COMPLEX_MODE = {
+    "label": "Complex Tasks",
+    "model_override": THINKING_LIVE_MODEL,
+    "thinking_level": "high",
+    "personality_override": "Work through this complex task carefully, verify important conclusions with tools, and give short progress updates. Keep the user's goal and constraints. Do not repeat completed actions.",
+    "theme": {"accent": "#8b7cff", "glow": 0.8},
+}
+
+
+def migrate_live_defaults(config):
+    """One-time upgrade; later explicit model choices and unrelated config survive."""
+    from copy import deepcopy
+    live = config.setdefault("live", {})
+    if live.get("defaults_version", 0) >= 1:
+        return False
+    if config.get("active_model", LIVE_FALLBACK_MODEL).removeprefix("models/") in (
+        LIVE_FALLBACK_MODEL, "gemini-2.0-flash-live-001", "gemini-live-2.5-flash-preview"
+    ):
+        config["active_model"] = LIVE_MODEL
+    live.update(defaults_version=1)
+    live.setdefault("fallback_model", LIVE_FALLBACK_MODEL)
+    live.setdefault("auto_complex_mode", True)
+    live.setdefault("thinking_level", "high")
+    config.setdefault("modes", {}).setdefault("complex_tasks", deepcopy(COMPLEX_MODE))
+    provider = config.setdefault("providers", {}).setdefault("gemini", {})
+    old = provider.get("models", [])
+    ids = {m["id"] for m in LIVE_MODELS}
+    provider["models"] = deepcopy(LIVE_MODELS) + [m for m in old if m.get("id") not in ids]
+    return True
