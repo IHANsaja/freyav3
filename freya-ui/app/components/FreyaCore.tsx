@@ -341,7 +341,7 @@ export default function FreyaCore({ state, avatarIntent, persona }: FreyaCorePro
   }, [state]);
 
   const sessionVisual: VisualState =
-    state === "listening" || state === "speaking" || state === "interrupted" ? state : "idle";
+    state === "listening" || state === "speaking" || state === "interrupted" || state === "thinking" ? state : "idle";
   const visual = override ?? sessionVisual;
 
   return (

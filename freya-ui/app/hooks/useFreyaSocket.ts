@@ -14,7 +14,7 @@ import type {
 export type AvatarIntent = AvatarIntentPayload & { seq: number };
 
 // ── Types ──
-export type FreyaState = "idle" | "listening" | "speaking" | "interrupted";
+export type FreyaState = "idle" | "listening" | "speaking" | "interrupted" | "thinking";
 
 export interface TranscriptEntry {
     id: number;

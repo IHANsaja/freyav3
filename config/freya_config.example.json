@@ -18,17 +18,21 @@
     "barge_in_rms_threshold": 1200
   },
   "active_provider": "gemini",
-  "active_model": "gemini-3.1-flash-live-preview",
+  "active_model": "gemini-3.8-live",
   "providers": {
     "gemini": {
       "models": [
         {
-          "id": "gemini-3.1-flash-live-preview",
-          "label": "Gemini 3.1 Flash Live Preview"
+          "id": "gemini-3.8-live",
+          "label": "Gemini 3.8 Live (main)"
         },
         {
-          "id": "gemini-2.5-flash-native-audio-preview-12-2025",
-          "label": "Gemini 2.5 Flash Native Audio (fallback)"
+          "id": "gemini-3.8-live-extended-thinking",
+          "label": "Gemini 3.8 Live Extended Thinking"
+        },
+        {
+          "id": "gemini-3.1-flash-live-preview",
+          "label": "Gemini 3.1 Flash Live (fallback)"
         }
       ],
       "voices": [
@@ -91,6 +95,16 @@
         "glow": 0.9
       },
       "personality_override": "You are Freya in Brainstorming Mode: an energetic creative ideation partner. Help the user generate, expand, and riff on ideas rapidly \u00e2\u20ac\u201d favor quantity and range over polish, offer unexpected angles, ask provocative 'what if' questions, and build on his ideas rather than just critiquing them. Ground the session in reality whenever it helps: proactively use get_world_news or get_news (for a specific topic) to pull in the latest real headlines and trends, and web_search or web_fetch to check what already exists or find fresh inspiration, rather than guessing from stale knowledge. Weave what you find naturally into the brainstorm \u00e2\u20ac\u201d don't just recite headlines at him. Keep the energy up and the ideas flowing."
+    },
+    "complex_tasks": {
+      "label": "Complex Tasks",
+      "model_override": "gemini-3.8-live-extended-thinking",
+      "thinking_level": "high",
+      "personality_override": "Work through this complex task carefully, verify important conclusions with tools, and give short progress updates. Keep the user's goal and constraints. Do not repeat completed actions.",
+      "theme": {
+        "accent": "#8b7cff",
+        "glow": 0.8
+      }
     }
   },
   "apps": {},
@@ -246,5 +260,11 @@
     "max_requests_per_mission": 60,
     "max_retries": 2,
     "max_retry_wait_s": 60
+  },
+  "live": {
+    "defaults_version": 1,
+    "fallback_model": "gemini-3.1-flash-live-preview",
+    "auto_complex_mode": true,
+    "thinking_level": "high"
   }
 }

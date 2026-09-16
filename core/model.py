@@ -9,6 +9,7 @@ from google.genai import types
 from core.tools import dispatch
 from core import runtime
 from core.task_policy import TOOLS_FIRST
+from core.live_protocol import ModeChange, Interaction, is_thinking, setup_options, tool_behavior, routing_instruction
 from core.registry import build_declarations, dispatch as registry_dispatch, ToolContext
 import base64
 
@@ -67,7 +68,7 @@ TOOL_DECLARATIONS = [
             properties={
                 "mode": types.Schema(
                     type=types.Type.STRING,
-                    description="Mode identifier: 'default', 'language_learning', 'coding', or other custom modes."
+                    description="Mode identifier: complex_tasks for hard reasoning, debugging or multi-step research; default for normal conversation; language_learning, coding or other custom modes."
                 )
             },
             required=["mode"]
@@ -210,7 +211,6 @@ _ROTATION_MARKERS = (
     "goaway",
     "go away",
     "session duration",
-    "1008",
     "deadline exceeded",
     "keepalive ping timeout",
 )
@@ -231,7 +231,7 @@ def is_rotation(exc: Exception) -> bool:
 
 class FreyaModel:
     def __init__(self, api_key, model_id, voice, personality, config, transcript=None,
-                 resume_handle=None):
+                 resume_handle=None, continue_task=False):
         self.client = genai.Client(api_key=api_key)
         self.model_id = model_id
         self.voice = voice
@@ -242,7 +242,11 @@ class FreyaModel:
         # new socket picks up the SAME conversation instead of a blank one —
         # this is what stops Freya forgetting what we were working on.
         self.resume_handle = resume_handle
+        self.continue_task = continue_task
+        self._interaction = Interaction(is_thinking(model_id))
+        self._pending_tools = 0
         self.session = None
+        self.connected = False
         # Serializes proactive speech. Injects arrive from many independent
         # background powers — scheduler, ambient watcher, missions, approvals,
         # finished sub-agents, webcam gesture touches — none of which know about
@@ -340,9 +344,13 @@ class FreyaModel:
         # Built once so the budget can be measured against the exact list that
         # gets sent — the declarations ARE most of the immovable baseline.
         declarations = TOOL_DECLARATIONS + build_declarations(self.config)
+        behavior = tool_behavior(self.model_id)
+        if behavior:
+            declarations = [d.model_copy(update={"behavior": types.Behavior(behavior)}) for d in declarations]
         trigger_tokens, target_tokens = self._compression_budget(declarations)
 
         return types.LiveConnectConfig(
+            **setup_options(self.model_id, self.config),
             response_modalities=["AUDIO"],
             speech_config=types.SpeechConfig(
                 voice_config=types.VoiceConfig(
@@ -352,7 +360,7 @@ class FreyaModel:
                 )
             ),
             system_instruction=types.Content(
-                parts=[types.Part(text=self.personality + "\n\n" + TOOLS_FIRST + "\n" +
+                parts=[types.Part(text=self.personality + "\n\n" + routing_instruction(self.config, self.model_id) + "\n\n" + TOOLS_FIRST + "\n" +
                     "TRADING LAB: Call get_trading_lab_context with no session_id first before answering questions about the active chart or paper account. It resolves the focused workspace automatically; do not ask the user for a session before trying it. Use its structured facts (chart_legend, recent_candles, market_summary, live_price, indicators, orders) instead of screenshots; never capture_screen for the Trading Lab. For questions about colored lines, use chart_legend and answer the original question directly. Explaining indicator mechanics does not require a thesis. Do not replace the answer with an acknowledgment or offer to explain. "
                     "TRADING TEACHER: In the Trading Lab you are the user's patient, warm trading teacher. Assume they know NOTHING about trading unless get_trading_learner_profile says otherwise; call it at the start of any trading conversation. "
                     "Speak in plain everyday words. Avoid jargon; if a term is unavoidable (candle, EMA, RSI, support, stop loss...), explain it simply with an everyday analogy the first time, and only use terms the profile says they already understand. "
@@ -462,13 +470,17 @@ class FreyaModel:
             speaking = self._model_speaking
             waited = 0.0
             while waited < WAIT_LIMIT:
-                busy = speaking is not None and speaking.is_set()
+                busy = (speaking is not None and speaking.is_set()) or not self._interaction.idle or self._pending_tools > 0
                 mid_exchange = runtime.seconds_since_activity() < GAP_S
                 if not busy and not mid_exchange:
                     break
                 await asyncio.sleep(POLL)
                 waited += POLL
 
+            # Never interrupt extended background work merely because its spoken
+            # filler finished. Let the scheduler try again at the next natural gap.
+            if not self._interaction.idle or self._pending_tools:
+                return
             if not self.session:  # session may have closed while we waited
                 return
             try:
@@ -510,7 +522,7 @@ class FreyaModel:
                 turns=types.Content(
                     role="user",
                     parts=[types.Part(text=(
-                        "[SESSION RECONNECTED — the previous connection dropped. This is the "
+                        "[SESSION CONTINUITY — connection or mode changed. This is the "
                         "transcript of the conversation you and the user were having moments ago. "
                         "Treat it as your own memory of the last few minutes and simply carry "
                         "on from where you left off. Do NOT announce the reconnection, do NOT "
@@ -518,7 +530,7 @@ class FreyaModel:
                         "again — just continue naturally.]\n\n" + "\n".join(tail)
                     ))],
                 ),
-                turn_complete=False,
+                turn_complete=self.continue_task,
             )
             print(f"  Context restored from transcript ({len(tail)} lines).")
         except Exception as e:
@@ -548,7 +560,9 @@ class FreyaModel:
 
         # Tracking variables for turn-completion and playback sync
         pending_playback_chunks = 0
-        model_turn_complete = True
+        tool_queue = asyncio.Queue(maxsize=64)
+        cancelled_calls = set()
+        seen_calls = set()
 
         # Connect any configured MCP servers BEFORE building the tool list so
         # their tools are advertised to Gemini in this session.
@@ -565,6 +579,7 @@ class FreyaModel:
             config=live_config
         ) as session:
             self.session = session
+            self.connected = True
             # Publish this session's channels so background powers can reach it.
             runtime.set_channels(self._inject_text, self.on_event)
             # Publish the conversation record too, so `recall_conversation` can
@@ -641,8 +656,113 @@ class FreyaModel:
                         audio=types.Blob(data=data, mime_type="audio/pcm;rate=16000")
                     )
 
+            async def execute_tools():
+                # One executor preserves desktop action order while the receiver
+                # continues streaming fillers, audio, cancellation and status.
+                while True:
+                    fc = await tool_queue.get()
+                    try:
+                        if fc.id in cancelled_calls:
+                            continue
+                        tool_name = fc.name
+                        tool_args = dict(fc.args) if fc.args else {}
+                        call_id = fc.id
+                        print(f"  Tool : {tool_name}({tool_args})")
+                        ctx = ToolContext(self.config, session=session)
+                        result = await registry_dispatch(tool_name, tool_args, ctx)
+                        print(f"  Result: {result}")
+
+                        if call_id in cancelled_calls:
+                            continue
+                        if self.transcript:
+                            self.transcript.add("Tool", f"{tool_name}: {str(result)[:1600]}")
+
+                        # ── VISION: send screenshot to Gemini as image ──
+                        if result == "VISION_REQUESTED":
+                            from core.vision import capture_screen, get_capture_grid
+                            import base64
+                            print("  Capturing screen...")
+                            b64_image = await loop.run_in_executor(None, capture_screen)
+                            gw, gh = get_capture_grid()
+
+                            # Show the screenshot she's looking at on the dashboard canvas.
+                            try:
+                                await runtime.emit("image", {"data": b64_image, "label": "Screen capture"})
+                            except Exception:
+                                pass
+
+                            # Send the screenshot through send_client_content, NOT
+                            # send_realtime_input. Realtime input is the latency-
+                            # optimized STREAMING channel (webcam/screen feeds): the
+                            # Live API samples frames from it on its own cadence, so a
+                            # one-shot image sent there can be ingested late — or
+                            # dropped — relative to the conversation stream. The model
+                            # then answered from the tool-response text alone (a
+                            # hallucinated guess) and only saw the real pixels a turn
+                            # later. Client content is appended to the conversation
+                            # context deterministically and in order; turn_complete=
+                            # False adds the image WITHOUT triggering generation, so
+                            # the tool response that follows lands after it — with the
+                            # image guaranteed already in context.
+                            #
+                            # The turn is then closed explicitly below. It has to be:
+                            # per the SDK, turn_complete=False means "the model will
+                            # wait for you to send additional client_content, and will
+                            # not return until you send turn_complete=True". A tool
+                            # response does NOT close a client-content turn, so she sat
+                            # silent after taking the screenshot and only answered once
+                            # the user spoke again and that utterance closed the turn.
+                            await session.send_client_content(
+                                turns=types.Content(
+                                    role="user",
+                                    parts=[
+                                        types.Part(text=(
+                                            f"[SCREEN CAPTURE — {gw}x{gh} screenshot of the user's "
+                                            "REAL screen, taken this instant]"
+                                        )),
+                                        types.Part(inline_data=types.Blob(
+                                            data=base64.b64decode(b64_image),
+                                            mime_type="image/jpeg",
+                                        )),
+                                    ],
+                                ),
+                                turn_complete=False,
+                            )
+                            await session.send_tool_response(
+                                function_responses=[types.FunctionResponse(
+                                    id=call_id,
+                                    name=tool_name,
+                                    response={"result": (
+                                        "Screen captured. The screenshot of the user's REAL current "
+                                        "screen is already in your context (the image right above "
+                                        "this). Describe and interact based STRICTLY on that image "
+                                        "- never guess or imagine screen content. All click/move/"
+                                        "scroll coordinates must be measured on this exact image."
+                                    )}
+                                )]
+                            )
+                            # Close the turn opened above. Without this she never
+                            # replies to "look at my screen" — she just waits.
+                            await session.send_client_content(turn_complete=True)
+                            print("  Screen sent to Gemini (client_content).")
+                        else:
+                            await session.send_tool_response(
+                                function_responses=[types.FunctionResponse(
+                                    id=call_id,
+                                    name=tool_name,
+                                    response={"result": result}
+                                )]
+                            )
+                        await self.on_tool(tool_name, tool_args, result)
+                        if tool_name == "switch_mode" and result.startswith("MODE_SWITCHED:"):
+                            await audio_queue.join()
+                            raise ModeChange(result.split(":", 1)[1])
+                    finally:
+                        self._pending_tools -= 1
+                        tool_queue.task_done()
+
             async def receive_audio():
-                nonlocal pending_playback_chunks, model_turn_complete
+                nonlocal pending_playback_chunks
                 freya_buffer = ""
                 user_buffer = ""
 
@@ -686,7 +806,6 @@ class FreyaModel:
                         if sru is not None:
                             if getattr(sru, "resumable", False) and getattr(sru, "new_handle", None):
                                 self.resume_handle = sru.new_handle
-                            continue
 
                         # ── GoAway: the socket is about to be closed by Google ──
                         # Leave voluntarily and immediately. Staying is what
@@ -699,99 +818,24 @@ class FreyaModel:
                             await flush_freya(cut=True)
                             raise SessionRotation(str(left))
 
+                        self._interaction.update(response)
+                        cancellation = getattr(response, "tool_call_cancellation", None)
+                        if cancellation:
+                            cancelled_calls.update(cancellation.ids or [])
+                        if response.tool_call is not None:
+                            await flush_user()
+                            await flush_freya()
+                            for fc in response.tool_call.function_calls:
+                                if fc.id and fc.id in seen_calls:
+                                    continue
+                                if fc.id:
+                                    seen_calls.add(fc.id)
+                                tool_queue.put_nowait(fc)
+                                self._pending_tools += 1
+                        if pending_playback_chunks == 0 and self._interaction.utterance_complete:
+                            model_speaking.clear()
+                            await self.on_state(self._interaction.state_after_playback())
                         if response.server_content is None:
-                            if response.tool_call is not None:
-                                for fc in response.tool_call.function_calls:
-                                    tool_name = fc.name
-                                    tool_args = dict(fc.args) if fc.args else {}
-                                    call_id = fc.id
-                                    print(f"  Tool : {tool_name}({tool_args})")
-                                    ctx = ToolContext(self.config, session=session)
-                                    result = await registry_dispatch(tool_name, tool_args, ctx)
-                                    print(f"  Result: {result}")
-                                    await self.on_tool(tool_name, tool_args, result)
-
-                                    # ── VISION: send screenshot to Gemini as image ──
-                                    if result == "VISION_REQUESTED":
-                                        from core.vision import capture_screen, get_capture_grid
-                                        import base64
-                                        print("  Capturing screen...")
-                                        b64_image = capture_screen()
-                                        gw, gh = get_capture_grid()
-
-                                        # Show the screenshot she's looking at on the dashboard canvas.
-                                        try:
-                                            await runtime.emit("image", {"data": b64_image, "label": "Screen capture"})
-                                        except Exception:
-                                            pass
-
-                                        # Send the screenshot through send_client_content, NOT
-                                        # send_realtime_input. Realtime input is the latency-
-                                        # optimized STREAMING channel (webcam/screen feeds): the
-                                        # Live API samples frames from it on its own cadence, so a
-                                        # one-shot image sent there can be ingested late — or
-                                        # dropped — relative to the conversation stream. The model
-                                        # then answered from the tool-response text alone (a
-                                        # hallucinated guess) and only saw the real pixels a turn
-                                        # later. Client content is appended to the conversation
-                                        # context deterministically and in order; turn_complete=
-                                        # False adds the image WITHOUT triggering generation, so
-                                        # the tool response that follows lands after it — with the
-                                        # image guaranteed already in context.
-                                        #
-                                        # The turn is then closed explicitly below. It has to be:
-                                        # per the SDK, turn_complete=False means "the model will
-                                        # wait for you to send additional client_content, and will
-                                        # not return until you send turn_complete=True". A tool
-                                        # response does NOT close a client-content turn, so she sat
-                                        # silent after taking the screenshot and only answered once
-                                        # the user spoke again and that utterance closed the turn.
-                                        await session.send_client_content(
-                                            turns=types.Content(
-                                                role="user",
-                                                parts=[
-                                                    types.Part(text=(
-                                                        f"[SCREEN CAPTURE — {gw}x{gh} screenshot of the user's "
-                                                        "REAL screen, taken this instant]"
-                                                    )),
-                                                    types.Part(inline_data=types.Blob(
-                                                        data=base64.b64decode(b64_image),
-                                                        mime_type="image/jpeg",
-                                                    )),
-                                                ],
-                                            ),
-                                            turn_complete=False,
-                                        )
-                                        await session.send_tool_response(
-                                            function_responses=[types.FunctionResponse(
-                                                id=call_id,
-                                                name=tool_name,
-                                                response={"result": (
-                                                    "Screen captured. The screenshot of the user's REAL current "
-                                                    "screen is already in your context (the image right above "
-                                                    "this). Describe and interact based STRICTLY on that image "
-                                                    "- never guess or imagine screen content. All click/move/"
-                                                    "scroll coordinates must be measured on this exact image."
-                                                )}
-                                            )]
-                                        )
-                                        # Close the turn opened above. Without this she never
-                                        # replies to "look at my screen" — she just waits.
-                                        await session.send_client_content(turn_complete=True)
-                                        print("  Screen sent to Gemini (client_content).")
-                                    else:
-                                        await session.send_tool_response(
-                                            function_responses=[types.FunctionResponse(
-                                                id=call_id,
-                                                name=tool_name,
-                                                response={"result": result}
-                                            )]
-                                        )
-                                        # Clear speaking block to unmute mic if the tool execution finishes
-                                        pending_playback_chunks = 0
-                                        model_turn_complete = True
-                                        model_speaking.clear()
-                                        await self.on_state("listening")
                             continue
 
                         sc = response.server_content
@@ -808,7 +852,6 @@ class FreyaModel:
                             # Keep what she managed to say, marked as cut off
                             await flush_freya(cut=True)
                             pending_playback_chunks = 0
-                            model_turn_complete = True
                             model_speaking.clear()
                             await self.on_state("interrupted")
                             continue
@@ -828,32 +871,25 @@ class FreyaModel:
                                 # Model started answering → the user's turn is over
                                 await flush_user()
                                 freya_buffer += " " + text
-                                model_turn_complete = False
                                 # Stream the fragment live so the UI can type it out
                                 # in the center of the scene as she speaks.
                                 await runtime.emit("speech", {"text": text})
 
-                        # Turn complete → emit full buffered sentences
+                        if sc.model_turn is not None:
+                            for part in sc.model_turn.parts:
+                                if part.inline_data is not None:
+                                    if not model_speaking.is_set():
+                                        model_speaking.set()
+                                        await self.on_state("speaking")
+                                    pending_playback_chunks += 1
+                                    await audio_queue.put(part.inline_data.data)
+
                         if getattr(sc, 'turn_complete', False):
                             await flush_user()
                             await flush_freya()
-                            model_turn_complete = True
                             if pending_playback_chunks == 0:
                                 model_speaking.clear()
-                                await self.on_state("listening")
-                            continue
-
-                        if sc.model_turn is None:
-                            continue
-
-                        for part in sc.model_turn.parts:
-                            if part.inline_data is not None:
-                                if not model_speaking.is_set():
-                                    model_speaking.set()
-                                    await self.on_state("speaking")
-                                model_turn_complete = False
-                                pending_playback_chunks += 1
-                                await audio_queue.put(part.inline_data.data)
+                                await self.on_state(self._interaction.state_after_playback())
 
             async def play_audio():
                 nonlocal pending_playback_chunks
@@ -866,20 +902,22 @@ class FreyaModel:
                         echo_gate.end_playback()
                     audio_queue.task_done()
                     pending_playback_chunks = max(0, pending_playback_chunks - 1)
-                    if pending_playback_chunks == 0 and model_turn_complete:
+                    if pending_playback_chunks == 0 and self._interaction.utterance_complete:
                         model_speaking.clear()
-                        await self.on_state("listening")
+                        await self.on_state(self._interaction.state_after_playback())
 
             try:
                 from core.voice_tasks import run_voice_tasks
                 await run_voice_tasks(
                     send_audio(),
                     receive_audio(),
-                    play_audio()
+                    play_audio(),
+                    execute_tools()
                 )
             finally:
                 # Release the proactive channels and background loops bound to
                 # this session so the next reconnect starts clean.
+                self.session = None
                 runtime.clear_channels()
                 try:
                     from core.scheduler import scheduler

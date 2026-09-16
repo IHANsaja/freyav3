@@ -22,6 +22,8 @@ interface FreyaAvatarProps {
  *  (thinking/working/dance/seated) arrive as avatar intents instead. */
 function socketToBase(state: string): BaseState {
     switch (state) {
+        case "thinking":
+            return "thinking";
         case "speaking":
             return "speaking";
         case "listening":

@@ -31,6 +31,9 @@ export function useEngineStatus(
   if (micPaused) {
     return { engine: "paused", statusLabel: "PAUSED", stripText: "PAUSED.", isRunning };
   }
+  if (state === "thinking") {
+    return { engine: "processing", statusLabel: "THINKING", stripText: "WORKING THROUGH YOUR TASK…", isRunning };
+  }
   if (state === "speaking") {
     return { engine: "processing", statusLabel: "SPEAKING", stripText: "PROCESSING…", isRunning };
   }

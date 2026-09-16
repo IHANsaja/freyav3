@@ -50,6 +50,7 @@ from core.audio import MicStream, SpeakerStream
 from core.events import bus
 from core.memory import load_memory, build_system_prompt, update_memory, TranscriptCollector
 from core.model import FreyaModel, is_rotation
+from core.live_protocol import LiveRoute, ModeChange
 
 
 @asynccontextmanager
@@ -221,8 +222,7 @@ async def run_freya():
             if result.startswith("MODE_SWITCHED:"):
                 new_mode = result.split(":")[1]
                 await broadcast({"type": "mode", "value": new_mode})
-                # Reconnect so the mode's model/personality overrides apply
-                asyncio.create_task(restart_freya())
+                # The runner handles ModeChange without losing the transcript.
 
         async def on_state(self, value: str):
             await broadcast({"type": "state", "value": value})
@@ -234,17 +234,24 @@ async def run_freya():
     consecutive_failures = 0
     max_reconnect_attempts = 5
     resume_handle = None
+    continue_task = False
+    route = LiveRoute(model_id, config)
 
     try:
         while freya_running:
+            await broadcast({"type": "persona", "payload": {
+                "mode": config.get("active_mode", "default"), "voice": voice,
+                "theme": get_mode_theme(config),
+            }})
             freya = FreyaModelWithBroadcast(
                 api_key=api_key,
-                model_id=model_id,
+                model_id=route.model,
                 voice=voice,
                 personality=personality,
                 config=config,
                 transcript=transcript,
                 resume_handle=resume_handle,
+                continue_task=continue_task,
             )
             try:
                 await freya.run(mic, speaker)
@@ -256,7 +263,22 @@ async def run_freya():
                 # Keep the server-side conversation state across the reconnect.
                 resume_handle = freya.resume_handle
 
-                if is_rotation(e):
+                if freya.connected and not isinstance(e, ModeChange):
+                    continue_task = False
+                fallback = None if isinstance(e, ModeChange) else route.fallback(e)
+                if isinstance(e, ModeChange):
+                    resume_handle = None  # Model/personality changed: never reuse its token.
+                    continue_task = str(e) == "complex_tasks"
+                    consecutive_failures = 0
+                elif fallback:
+                    resume_handle = None
+                    # Retry an unstarted handoff, never replay a live action.
+                    continue_task = continue_task and not freya.connected
+                    print(f"Live model unavailable; falling back to {fallback}.")
+                    await broadcast({"type": "transcript", "speaker": "Freya",
+                                     "text": f"[Using fallback voice model: {fallback}]"})
+                    await asyncio.sleep(1)
+                elif is_rotation(e):
                     # Routine session rotation — reconnect silently and fast.
                     # No UI noise: from the user's side nothing happened.
                     print("Rotating Freya session (context preserved).")
@@ -283,7 +305,11 @@ async def run_freya():
                 # Reload config and keys in case they were updated
                 config = load_config()
                 api_key = get_api_key()
+                previous_model = route.model
                 model_id = get_mode_model(config)
+                route.configure(model_id, config)
+                if route.model != previous_model:
+                    resume_handle = None
                 voice = get_mode_voice(config)
                 base_personality = get_personality(config)
                 personality = build_system_prompt(get_mode_personality(config, base_personality), memory)

@@ -77,7 +77,7 @@ export function useSceneMood(
   }, [state]);
 
   const sessionVisual: VisualState =
-    state === "listening" || state === "speaking" || state === "interrupted" ? (state as VisualState) : "idle";
+    state === "listening" || state === "speaking" || state === "interrupted" || state === "thinking" ? (state as VisualState) : "idle";
   const visual = override ?? sessionVisual;
 
   useFrame((_, delta) => {
