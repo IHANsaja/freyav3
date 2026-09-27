@@ -74,13 +74,45 @@ def show(title: str, body: str = "", source: str = "", image_b64: str | None = N
     if mgr is None:
         return False
     mgr.enqueue({
-        "title": (title or "Freya").strip(),
+        "title": (title or "Freyja").strip(),
         "body": (body or "").strip(),
         "source": (source or "").strip(),
         "image": image_b64,
         "duration": int(duration_ms or DEFAULT_MS),
     })
     return True
+
+
+# ── Is anyone looking at the dashboard? ─────────────────────────────────
+# Each dashboard tab reports whether it is visible AND its window focused. While
+# none is, the dashboard is effectively invisible, so everything Freya says or
+# shows is mirrored onto desktop cards instead of only reaching the browser.
+# No tab connected at all counts as "not watching".
+_viewers: dict[int, bool] = {}
+
+
+def set_viewer(client_id: int, watching: bool):
+    _viewers[client_id] = bool(watching)
+
+
+def remove_viewer(client_id: int):
+    _viewers.pop(client_id, None)
+
+
+def dashboard_watched() -> bool:
+    return any(_viewers.values())
+
+
+def say(text: str):
+    """Mirror one of Freya's spoken replies as a card when nobody is watching
+    the dashboard. Longer lines hold longer so they can be read."""
+    text = (text or "").strip()
+    if not text or dashboard_watched() or not _enabled_flag:
+        return
+    show("Freyja", text, "", None, min(30000, max(DEFAULT_MS, 60 * len(text))))
+
+
+_enabled_flag = True
 
 
 def configure(config: dict | None):
@@ -103,8 +135,9 @@ def attach_to_bus(config: dict | None):
     Returns an unsubscribe callable (a no-op if popups are disabled), so the
     caller's shutdown path can detach cleanly.
     """
-    global _unsubscribe
+    global _unsubscribe, _enabled_flag
     if not enabled(config):
+        _enabled_flag = False
         return lambda: None
     configure(config)
 
@@ -112,7 +145,14 @@ def attach_to_bus(config: dict | None):
 
     async def _listener(event):
         p = event.payload or {}
-        if not p.get("popup"):
+        unwatched = not dashboard_watched()
+        if event.type == "approval" and unwatched and p.get("event") == "requested":
+            # Otherwise an approval waits on a dashboard nobody is looking at.
+            show("Approval needed", p.get("summary", ""), "Answer by voice or on the dashboard",
+                 None, 30000)
+            return
+        # Opt-in cards always pop; every card pops while the dashboard is unseen.
+        if not (p.get("popup") or unwatched):
             return
         if event.type == "card":
             show(p.get("title", "Freya"), p.get("body", ""), p.get("source", ""),
@@ -275,7 +315,7 @@ class _Card:
         header = tk.Frame(body, bg=BG_ALT)
         header.pack(fill="x")
         tk.Label(header, text="◆", font=("Segoe UI", 9), fg=ACCENT, bg=BG_ALT).pack(side="left", padx=(10, 4), pady=6)
-        tk.Label(header, text="FREYA", font=("Segoe UI Semibold", 8), fg=ACCENT, bg=BG_ALT).pack(side="left", pady=6)
+        tk.Label(header, text="FREYJA", font=("Segoe UI Semibold", 8), fg=ACCENT, bg=BG_ALT).pack(side="left", pady=6)
         tk.Label(header, text="✕", font=("Segoe UI", 9), fg=MUTED, bg=BG_ALT).pack(side="right", padx=10, pady=6)
 
         img = self._decode(data.get("image"))

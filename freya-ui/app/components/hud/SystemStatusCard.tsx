@@ -58,6 +58,8 @@ const HAND_LABEL: Record<HandTrackingStatus, [string, Tone]> = {
   starting: ["STARTING", "warn"],
   active: ["TRACKING", "ok"],
   denied: ["DENIED", "warn"],
+  no_camera: ["NO CAM", "warn"],
+  busy: ["IN USE", "warn"],
   unsupported: ["N/A", "off"],
   error: ["ERROR", "warn"],
 };

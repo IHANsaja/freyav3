@@ -53,9 +53,14 @@ async def remember(args, ctx) -> str:
     content = str(args.get("content", "")).strip()
     if not content:
         return "Give me something to remember."
+    importance = args.get("importance")
+    if not importance:
+        # The model usually leaves this out and everything lands at 3.
+        from core import systemone
+        importance = (await systemone.memory_importance([f"{subject}: {content}"], ctx.config))[0]
     item_id = await _run(
         store.add, kind, subject, content,
-        int(args.get("importance", 3) or 3), args.get("due_at") or None, "voice",
+        int(importance or 3), args.get("due_at") or None, "voice",
     )
     await _run(_mirror_to_rag, item_id, subject, content)
     await _notify(ctx, [kind])

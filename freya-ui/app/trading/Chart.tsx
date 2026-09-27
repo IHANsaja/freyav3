@@ -63,6 +63,11 @@ export default function Chart(props: Props) {
     markers: ISeriesMarkersPluginApi<Time>;
     redraw: () => void;
   } | null>(null);
+  // Keep every candle in view until the user zooms, pans or picks a range. A
+  // single fitContent() on mount is not enough: it can run before the panel
+  // has its final width (or any width at all), which left the candles bunched
+  // into the right edge until "Fit chart" was pressed.
+  const autoFit = useRef(true);
   const [hover, setHover] = useState<Candle | null>(null);
   const [frame, setFrame] = useState<Frame | null>(null);
   type Draft = { kind: DrawingKind; points: Point[] };
@@ -90,7 +95,14 @@ export default function Chart(props: Props) {
         vertLines: { color: "#1c2533" },
         horzLines: { color: "#1c2533" },
       },
-      timeScale: { timeVisible: true, borderColor: "#263144", rightOffset: 5 },
+      timeScale: {
+        timeVisible: true,
+        borderColor: "#263144",
+        rightOffset: 5,
+        // autoSize widens the chart after the first fitContent() has run; without
+        // this the old bar spacing is kept and the candles bunch up on the right.
+        lockVisibleTimeRangeOnResize: true,
+      },
       rightPriceScale: { borderColor: "#263144" },
       crosshair: {
         vertLine: { color: "#64748b", labelBackgroundColor: "#29354a" },
@@ -207,6 +219,18 @@ export default function Chart(props: Props) {
     };
     chart.timeScale().subscribeVisibleLogicalRangeChange(redraw);
     chart.timeScale().subscribeSizeChange(redraw);
+    const refit = () => {
+      if (autoFit.current) chart.timeScale().fitContent();
+    };
+    chart.timeScale().subscribeSizeChange(refit);
+    const takeControl = () => {
+      autoFit.current = false;
+    };
+    const dragControl = (e: PointerEvent) => {
+      if (e.buttons !== 0) autoFit.current = false;
+    };
+    el.addEventListener("wheel", takeControl, { passive: true });
+    el.addEventListener("pointermove", dragControl);
     api.current = {
       chart,
       candles,
@@ -332,6 +356,8 @@ export default function Chart(props: Props) {
     el.addEventListener("pointercancel", cancel);
     window.addEventListener("keydown", escape);
     return () => {
+      el.removeEventListener("wheel", takeControl);
+      el.removeEventListener("pointermove", dragControl);
       el.removeEventListener("pointerdown", start);
       el.removeEventListener("pointermove", move);
       el.removeEventListener("pointerup", finish);
@@ -377,6 +403,7 @@ export default function Chart(props: Props) {
         .filter((i) => i.rsi !== null)
         .map((i) => ({ time: i.time as UTCTimestamp, value: i.rsi! })),
     );
+    if (autoFit.current) a.chart.timeScale().fitContent();
     a.redraw();
     a.markers.setMarkers(
       props.session.fills.map((f) => ({
@@ -420,6 +447,7 @@ export default function Chart(props: Props) {
     a.chart.panes()[2].setStretchFactor(props.options.rsi ? 1 : 0.15);
   }, [props.options]);
   useEffect(() => {
+    autoFit.current = true;
     api.current?.chart.timeScale().fitContent();
   }, [props.fit, props.session.id]);
   useEffect(() => {
@@ -429,10 +457,12 @@ export default function Chart(props: Props) {
       props.session.interval,
       props.rangeSeconds,
     );
-    if (range)
+    if (range) {
+      autoFit.current = false;
       api.current?.chart
         .timeScale()
         .setVisibleLogicalRange({ from: range.from, to: range.to });
+    }
   }, [props.rangeSeconds, props.session, props.fit]);
   useEffect(() => {
     const a = api.current;
@@ -469,7 +499,7 @@ export default function Chart(props: Props) {
       : TOOLS[props.tool].points;
   const hint =
     props.tool === "cursor"
-      ? "Click a candle to give Freya its context"
+      ? "Click a candle to give Freyja its context"
       : props.tool === "eraser"
         ? "Eraser · click a drawing to remove it"
         : props.tool === "brush"

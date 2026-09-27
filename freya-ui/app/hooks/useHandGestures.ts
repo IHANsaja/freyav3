@@ -36,7 +36,17 @@ export interface HandGestureState {
   pinch: number;
 }
 
-export type HandTrackingStatus = "idle" | "starting" | "active" | "denied" | "unsupported" | "error";
+export type HandTrackingStatus =
+  | "idle" | "starting" | "active" | "denied" | "no_camera" | "busy" | "unsupported" | "error";
+
+/** Map a getUserMedia / MediaPipe failure to a status the toggle can explain. */
+function statusForError(err: unknown): HandTrackingStatus {
+  const name = (err as { name?: string })?.name;
+  if (name === "NotAllowedError" || name === "SecurityError") return "denied";
+  if (name === "NotFoundError" || name === "OverconstrainedError") return "no_camera";
+  if (name === "NotReadableError" || name === "AbortError") return "busy";
+  return "error";
+}
 
 const IDLE_STATE: HandGestureState = {
   present: false, x: 0.5, y: 0.5, gesture: "None", confidence: 0, grip: 0, span: 0,
@@ -156,6 +166,10 @@ function installMediaPipeLogFilter(): () => void {
   };
 }
 
+function cameraSupported(): boolean {
+  return typeof navigator !== "undefined" && !!navigator.mediaDevices?.getUserMedia;
+}
+
 /** Tracks a single hand's position + recognized gesture from the user's webcam via
  *  MediaPipe's GestureRecognizer. Purely a sensor: exposes results through a mutable
  *  ref (no React state churn per frame), matching the fxRef/moodRef convention used
@@ -164,24 +178,29 @@ function installMediaPipeLogFilter(): () => void {
  *  need to special-case errors, just read `status` for an optional UI indicator. */
 /** @param deviceId Optional specific camera to use (from useVideoDevices). Falls
  *  back to the system default front-facing camera when omitted. */
-export function useHandGestures(enabled: boolean, deviceId?: string): {
+export function useHandGestures(enabled: boolean, deviceId?: string, retryKey = 0): {
   stateRef: MutableRefObject<HandGestureState>;
   status: HandTrackingStatus;
 } {
   const stateRef = useRef<HandGestureState>({ ...IDLE_STATE });
-  const [status, setStatus] = useState<HandTrackingStatus>("idle");
+  const [status, setStatus] = useState<HandTrackingStatus>(enabled ? "starting" : "idle");
+
+  // Each (enabled, camera, retry) combination is a fresh run: reset the status
+  // while rendering, so the effect below only ever sets it asynchronously.
+  const runKey = `${enabled}|${deviceId ?? ""}|${retryKey}`;
+  const [statusRunKey, setStatusRunKey] = useState(runKey);
+  if (runKey !== statusRunKey) {
+    setStatusRunKey(runKey);
+    setStatus(!enabled ? "idle" : cameraSupported() ? "starting" : "unsupported");
+  }
 
   useEffect(() => {
     if (!enabled) {
       stateRef.current = { ...IDLE_STATE };
-      setStatus("idle");
       return;
     }
 
-    if (typeof navigator === "undefined" || !navigator.mediaDevices?.getUserMedia) {
-      setStatus("unsupported");
-      return;
-    }
+    if (!cameraSupported()) return;
 
     let cancelled = false;
     let stream: MediaStream | null = null;
@@ -191,15 +210,21 @@ export function useHandGestures(enabled: boolean, deviceId?: string): {
     let rafId = 0;
     let lastInferAt = 0;
 
-    setStatus("starting");
-
     (async () => {
       try {
-        stream = await navigator.mediaDevices.getUserMedia({
-          video: deviceId
-            ? { deviceId: { exact: deviceId }, width: { ideal: 320 }, height: { ideal: 240 } }
-            : { facingMode: "user", width: { ideal: 320 }, height: { ideal: 240 } },
-        });
+        const size = { width: { ideal: 320 }, height: { ideal: 240 } };
+        try {
+          stream = await navigator.mediaDevices.getUserMedia({
+            video: deviceId ? { deviceId: { exact: deviceId }, ...size } : { facingMode: "user", ...size },
+          });
+        } catch (err) {
+          // A remembered deviceId goes stale when the camera is unplugged or the
+          // browser rotates ids; fall back to any camera instead of failing.
+          const name = (err as { name?: string })?.name;
+          if (!deviceId || (name !== "OverconstrainedError" && name !== "NotFoundError")) throw err;
+          console.warn("[hand tracking] selected camera unavailable, using default", err);
+          stream = await navigator.mediaDevices.getUserMedia({ video: size });
+        }
         if (cancelled) {
           stream.getTracks().forEach((t) => t.stop());
           return;
@@ -213,27 +238,30 @@ export function useHandGestures(enabled: boolean, deviceId?: string): {
 
         const { FilesetResolver, GestureRecognizer } = await import("@mediapipe/tasks-vision");
         if (cancelled) return;
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        let vision: any = null;
+        const create = (delegate: "GPU" | "CPU") =>
+          GestureRecognizer.createFromOptions(vision, {
+            baseOptions: { modelAssetPath: "/mediapipe/models/gesture_recognizer.task", delegate },
+            runningMode: "VIDEO",
+            numHands: 1,
+          });
+        let delegate: "GPU" | "CPU" = "GPU";
 
         // The filter has to be in place while the WASM module is instantiated —
         // that's the one moment it captures its stderr sink. Restored in
         // `finally`, after which the app's console is untouched for good.
         const restoreConsole = installMediaPipeLogFilter();
         try {
-          const vision = await FilesetResolver.forVisionTasks("/mediapipe/wasm");
+          vision = await FilesetResolver.forVisionTasks("/mediapipe/wasm");
           if (cancelled) return;
 
           try {
-            recognizer = await GestureRecognizer.createFromOptions(vision, {
-              baseOptions: { modelAssetPath: "/mediapipe/models/gesture_recognizer.task", delegate: "GPU" },
-              runningMode: "VIDEO",
-              numHands: 1,
-            });
-          } catch {
-            recognizer = await GestureRecognizer.createFromOptions(vision, {
-              baseOptions: { modelAssetPath: "/mediapipe/models/gesture_recognizer.task", delegate: "CPU" },
-              runningMode: "VIDEO",
-              numHands: 1,
-            });
+            recognizer = await create("GPU");
+          } catch (err) {
+            console.warn("[hand tracking] GPU delegate failed, using CPU", err);
+            delegate = "CPU";
+            recognizer = await create("CPU");
           }
         } finally {
           restoreConsole();
@@ -257,7 +285,38 @@ export function useHandGestures(enabled: boolean, deviceId?: string): {
           // No console wrapping here: the WASM captured its stderr sink at
           // instantiation, so per-frame logs already route through the filter
           // installed back then.
-          const result = recognizer.recognizeForVideo(video, now);
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          let result: any;
+          try {
+            result = recognizer.recognizeForVideo(video, now);
+          } catch (err) {
+            // Some GPUs build the GPU graph fine and then fail on every frame,
+            // which used to leave status "active" with nothing tracking. Swap
+            // to CPU once; if that fails too, stop and report.
+            cancelAnimationFrame(rafId);
+            rafId = 0;
+            if (delegate === "GPU") {
+              console.warn("[hand tracking] GPU inference failed, switching to CPU", err);
+              delegate = "CPU";
+              recognizer?.close?.();
+              recognizer = null;
+              create("CPU")
+                .then((r) => {
+                  if (cancelled) return r.close();
+                  recognizer = r;
+                  rafId = requestAnimationFrame(loop);
+                })
+                .catch((e) => {
+                  console.error("[hand tracking] CPU fallback failed", e);
+                  if (!cancelled) setStatus("error");
+                });
+            } else {
+              console.error("[hand tracking] inference failed", err);
+              setStatus("error");
+            }
+            stateRef.current = { ...IDLE_STATE };
+            return;
+          }
           const allHands: { x: number; y: number }[][] = result.landmarks ?? [];
           const primary = allHands[0];
           const topGesture = result.gestures?.[0]?.[0];
@@ -285,9 +344,13 @@ export function useHandGestures(enabled: boolean, deviceId?: string): {
         };
         rafId = requestAnimationFrame(loop);
       } catch (err) {
+        stream?.getTracks().forEach((t) => t.stop());
         if (cancelled) return;
-        const name = (err as { name?: string })?.name;
-        setStatus(name === "NotAllowedError" || name === "SecurityError" ? "denied" : "error");
+        const status = statusForError(err);
+        // Camera missing/busy/denied is an environment state shown on the
+        // toggle, not an app bug; only unexpected failures raise console.error.
+        (status === "error" ? console.error : console.warn)("[hand tracking] failed to start", err);
+        setStatus(status);
         stateRef.current = { ...IDLE_STATE };
       }
     })();
@@ -299,7 +362,7 @@ export function useHandGestures(enabled: boolean, deviceId?: string): {
       recognizer?.close?.();
       stateRef.current = { ...IDLE_STATE };
     };
-  }, [enabled, deviceId]);
+  }, [enabled, deviceId, retryKey]);
 
   return { stateRef, status };
 }

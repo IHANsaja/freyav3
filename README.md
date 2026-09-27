@@ -18,7 +18,7 @@ Freya is a local, real-time voice assistant built on a low-latency bi-directiona
 > [!NOTE]
 > For the modular design, internal subsystems, and operational patterns, see the [Architecture Documentation](./ARCHITECTURE.md).
 
-Armed with **108 tools**, a **mission orchestrator**, **approval-gated autopilot**, **structured long-term memory**, a **rolling day context**, **webcam hand-gesture control**, an **intent-driven 3D avatar**, and **always-on context awareness**, Freya doesn't just run tools; she plans, acts, verifies, remembers, and animates herself.
+Armed with **113 tools**, a **mission orchestrator**, **approval-gated autopilot**, **structured long-term memory**, a **rolling day context**, **webcam hand-gesture control**, an **intent-driven 3D avatar**, **always-on context awareness**, and an **on-screen activity pill**, Freya doesn't just run tools; she plans, acts, verifies, remembers, and animates herself.
 
 She also knows the machine she lives on. Ask her what you've got open, tell her to launch
 something, ask where a file went, or tell her your desktop is a mess — she resolves all of it
@@ -34,7 +34,7 @@ Open **PowerShell** and run:
 irm https://raw.githubusercontent.com/IHANsaja/freyav3/main/install.ps1 | iex
 ```
 
-The installer checks prerequisites, clones the repo, builds the Python venv and the dashboard, installs Chromium for browser automation, prompts for your Gemini API key, and writes a `start-freya.ps1` launcher.
+The installer checks prerequisites, clones the repo, builds the Python venv and the dashboard, installs Chromium for browser automation, prompts for your Gemini API key (plus an optional Jev key, see below), and writes a `start-freya.ps1` launcher. Re-running the same command later updates an existing install.
 
 **Then:**
 
@@ -42,7 +42,9 @@ The installer checks prerequisites, clones the repo, builds the Python venv and 
 .\start-freya.ps1
 ```
 
-Both servers start and `http://localhost:3000` opens automatically.
+Both servers start, and `http://localhost:3000` opens as soon as the dashboard is ready. The backend listens on this machine only (`127.0.0.1:8000`).
+
+**Jev is optional.** Jev (TypeSafe System One) is an early-access API for fast routing and triage decisions. If you have a key, enter it when the installer asks (or add `TYPESAFE_API_KEY=...` to `.env`) and Freya uses Jev with Gemini as the fallback. Without a key she runs on Gemini alone; nothing else to configure. The startup log says which: `Jev: on` or `Jev: off — running on Gemini only`.
 
 <details>
 <summary>Installer options &amp; manual setup</summary>
@@ -65,7 +67,7 @@ python -m venv venv
 pip install -r requirements.txt
 playwright install chromium
 cd freya-ui; npm install; cd ..
-# create .env with GEMINI_API_KEY=...
+# create .env with GEMINI_API_KEY=...  (and TYPESAFE_API_KEY=... only if you have Jev access)
 ```
 
 `config/freya_config.json` is created automatically from `config/freya_config.example.json`
@@ -80,6 +82,9 @@ leaving them empty is the normal case.
 ## 🌟 Key Capabilities
 
 *   🔊 **Zero-Latency Live Conversation**: 16 kHz input / 24 kHz output on a dedicated audio thread pool, so background agents can never stutter her voice.
+*   💬 **Talks First, One Job at a Time**: She says what she's about to do *before* she does it, keeps chatting while a long job runs, and queues anything new you ask for until the current job is done — no silent stretches, no overlapping desktop actions.
+*   🟢 **Activity Pill**: A small status pill at the top of your screen always shows what she's doing right now — *Thinking…*, *Searching your PC for "resume"*, *Waiting for your OK* — with a running timer. Click-through, never steals focus, invisible to her own screenshots.
+*   🛟 **Keeps Going When Google Doesn't**: Repeated Live-server errors switch her to the fallback voice model; an overloaded or exhausted background model retries once on a lighter one; a turn that comes back silent gets a nudge instead of leaving her mute.
 *   ✳️ **Real GLSL Desktop Overlay**: You watch her work. Six fragment-shader effects — target lock-on, click impact, capture scan, cursor trail, scroll flow, typing — rendered over the live desktop with noise fields, chromatic aberration, hex lattices and glitch displacement. Colour follows your active persona, so switching mode re-skins your whole screen.
 *   🖥️ **She Knows Your Desktop**: What programs are open, which window is in front, where any file lives, and how to launch anything installed — Start Menu, registry, Microsoft Store apps and portable exes all indexed. You never give her a path.
 *   🧹 **Tidy Up**: *"Organise my desktop"* sorts loose files into type folders in one pass, leaves your shortcuts and code projects alone, and is reversible with *"undo"*.
@@ -127,7 +132,8 @@ Design notes:
 | 🔎 **Web & News** | Quota-free search/fetch plus live headlines projected into the scene. | `web_search`, `web_fetch`, `get_world_news` |
 | 🖼️ **Show, Don't Say** | Puts what she found on screen, following your attention: a card on the right of your screen when you're heads-down, the dashboard when you're actually looking at it. | `show_info`, `show_image` |
 | 📅 **Day Context** | Knows what today has been about; rotates and summarises the day at 4am, carrying open threads forward. | `note_day_context`, `get_day_context`, `rotate_day_context` |
-| 🔦 **PC Knowledge** | Knows where your apps, projects and documents live, and searches the disk live when they aren't indexed. Launches anything installed by name — no path, ever. | `open_app`, `find_on_pc`, `list_installed_apps`, `refresh_pc_knowledge` |
+| 🔦 **PC Knowledge** | Knows where your apps, projects and documents live, and searches the disk live when they aren't indexed. Launches anything installed by name — no path, ever. Documents come back best match first, newest first among equals, so *"my latest CV"* finds the new one. | `open_app`, `find_on_pc`, `list_installed_apps`, `refresh_pc_knowledge` |
+| 📈 **Trading Lab** | Paper-trading practice on live Coinbase candles with a patient teacher. Opening it reuses the tab you already have (or opens one in *your* browser) and follows the session you're looking at. | `open_trading_lab`, `get_trading_lab_context`, `analyze_chart`, `draw_on_chart`, `paper_order` |
 | 🖥️ **Desktop Awareness** | What programs are open, grouped by app, with the focused window marked; optionally every background process too. | `list_windows`, `get_active_window` |
 | 🧹 **Tidy Up** | Sorts a cluttered folder into type-based subfolders in one pass, skipping shortcuts and code projects. Fully reversible. | `organize_folder`, `undo_organize` |
 | 📁 **File Manager** | Copy, move/rename, recycle, zip/unzip, inspect, reveal in Explorer, find large/recent files. | `copy_item`, `move_item`, `delete_item`, `zip_item`, `find_files_by`, … |
@@ -190,6 +196,12 @@ freyav3/
 │   ├── user_identity.py    # Reads memory/MEMORY.md — the only source of your name
 │   ├── context_watch.py    # Always-on metadata context tracker (opt-in)
 │   ├── desktop_popup.py    # show_info / show_image cards outside the dashboard
+│   ├── activity_overlay.py # The "what she's doing now" pill at the top of the screen
+│   ├── systemone.py        # Optional Jev (TypeSafe) fast decisions — on only with a key
+│   ├── quota.py            # Gemini pacing, retries, flash -> flash-lite fallback
+│   ├── proc.py             # subprocess with a timeout that really returns (tree kill)
+│   ├── tool_index.py       # search_tools / run_tool: core tools loaded, the rest on demand
+│   ├── trading/            # Trading Lab: simulator, live data, teacher, chart tools
 │   └── ...                 # audio, model loop, registry, screen, browser, scheduler
 ├── freya-ui/
 │   └── app/
@@ -203,7 +215,7 @@ freyav3/
 │   ├── freya_memory.db     # Structured memory + day context (SQLite)
 │   ├── machine_index.db    # The PC map
 │   └── rag_db/             # Chroma vector store
-├── test_scripts/           # test_smoke, test_awareness, test_search, test_organizer
+├── test_scripts/           # pytest suites + test_smoke / test_awareness / test_organizer scripts
 ├── install.ps1             # One-command installer
 ├── main.py                 # CLI entrypoint
 ├── server.py               # FastAPI + WebSocket backend
@@ -237,6 +249,36 @@ cd freya-ui; npm run dev
 Open `http://localhost:3000` and press **START FREYA**.
 
 **Headless CLI:** `.\venv\Scripts\python.exe main.py` (`Ctrl+C` stops and persists memory).
+
+The backend prints a few status lines at startup worth knowing:
+
+```
+  Jev: off (no TYPESAFE_API_KEY) — running on Gemini only.
+Connecting to gemini-3.8-live...
+  Tool index: 27 tools loaded, 96 deferred
+  Context budget: baseline ~6,257 tok (prompt 3,603 + 27 tools 2,654)
+```
+
+---
+
+## 🧠 Models & Resilience
+
+| Role | Default | Falls back to |
+| :--- | :--- | :--- |
+| Voice (default mode) | `gemini-3.8-live` | `gemini-3.1-flash-live-preview` on quota/unavailable errors, or on a **second** `1011 Internal error` in a row |
+| Voice (Complex Tasks mode) | `gemini-3.8-live-extended-thinking` | `gemini-3.8-live`, then the 3.1 fallback |
+| Missions, sub-agents, chart analysis | `gemini-3.5-flash` | `gemini-3.5-flash-lite`, once, when flash is overloaded or out of quota (`quota.fallback_models`) |
+| Fast decisions (tool routing, mission checks, memory triage, approval risk) | Jev, **only if `TYPESAFE_API_KEY` is set** | Gemini / built-in heuristics — the normal path without a key |
+
+Pick the voice model in ⚙ Settings. Voices keep their names across models but are rendered by
+each model's own audio stack, so *Zephyr* on 3.8 does not sound identical to *Zephyr* on 3.1.
+
+**Live-session safety nets** — all logged, so you can see when they fire:
+
+- `[live] empty model turn; nudging it to respond.` — the model closed a turn with no speech and no action (3.8 has proactive audio permanently on and sometimes chooses silence).
+- `[live] model went quiet 8s after a tool result; nudging it on.` — a tool result that got no follow-up (`live.stall_nudge_s`).
+- `Spoken tool call caught: …` — she said call syntax out loud instead of making the call; it's scrubbed and she's told to make it.
+- Pausing listening sends `audio_stream_end`, so she hears you again straight after you resume.
 
 ---
 
@@ -272,17 +314,19 @@ turn, so it costs you on each one and eats into what's left for the conversation
 
 | | tokens | set by |
 | :--- | ---: | :--- |
-| model input limit (`gemini-3.1-flash-live-preview`) | 131,072 | Google |
+| model input limit (131,072 for `gemini-3.1-flash-live-preview`) | per model | Google |
 | `freya.compression_trigger_tokens` | 96,000 | you |
 | `freya.compression_target_tokens` | 32,000 | you |
-| baseline: system prompt + 108 tool declarations | ~12,200 | code |
-| conversation retained after a compression | ~19,800 | result |
+| baseline: system prompt + 27 core tool declarations | ~6,250 | code |
+| conversation retained after a compression | ~25,700 | result |
 
+Only a core set of tools is declared in full. The other ~96 are listed by name and reached
+through `search_tools` → `run_tool` (`core/tool_index.py`), which is what halved the baseline.
 She prints this at startup so it can never drift silently:
 
 ```
-Context budget: baseline ~12,173 tok (prompt 2,763 + 108 tools 9,410)
-                trigger 96,000 / target 32,000 -> ~19,827 tok for conversation
+Context budget: baseline ~6,257 tok (prompt 3,603 + 27 tools 2,654)
+                trigger 96,000 / target 32,000 -> ~25,743 tok for conversation
 ```
 
 If the target ever drops below the baseline she says so loudly — that combination shreds the
@@ -300,6 +344,20 @@ Edit it in **⚙ Settings → ACCESS_CONTROL**:
 - **Confirm sensitive actions** — the approval gate for deletions, sends, submissions, and out-of-project writes.
 - **Unrestricted mode** — disables the folder sandbox entirely. Off by default; only enable if you understand the consequences.
 
+**Network exposure.** The API can approve actions, change the sandbox and drive your desktop,
+and it has no login of its own, so it is locked to this machine:
+
+- The backend listens on `127.0.0.1` only — not reachable from your LAN.
+- The WebSocket accepts browser connections only from the dashboard origin
+  (`http://localhost:3000` / `http://127.0.0.1:3000`). A random website open in your browser
+  can no longer connect and approve a pending action. Local scripts that send no `Origin`
+  header still work.
+- Settings and memory writes are validated: an unknown model/voice/device or an empty memory
+  is rejected with HTTP 400 instead of being saved.
+
+Opening the dashboard from a phone on your LAN therefore needs a deliberate change (a token and
+a different bind address) — it is not on by default.
+
 ---
 
 ## 🔌 HTTP API
@@ -309,9 +367,11 @@ Edit it in **⚙ Settings → ACCESS_CONTROL**:
 | `GET /status` | Session telemetry: running, startedAt, model, voice, mode, tool count |
 | `GET /agents` | Live sub-agent + browser jobs with their tasks and current step |
 | `GET`/`POST` `/safety` | Read/update the access-control sandbox |
-| `GET`/`POST` `/config` | Model, voice, mode, audio devices |
+| `GET`/`POST` `/config` | Model, voice, mode, audio input/output devices (validated — unknown values get HTTP 400) |
+| `GET`/`POST`/`PATCH`/`DELETE` `/memory/items` | Structured memory CRUD (empty content is rejected) |
 | `GET /skills` | Skill catalog with tools + gate state |
 | `GET /audio/devices` | Input/output device enumeration |
+| `/trading/*` | Trading Lab sessions, live candles, analysis, and the workspace the page reports |
 | `POST /debug/emit` | Push any event to the dashboard without a voice session |
 
 Exercise the UI with no mic or quota:
@@ -344,12 +404,32 @@ curl -X POST http://localhost:8000/debug/emit -H "Content-Type: application/json
 | **Open anything** | *"Open Blender"* — or any app you've never configured | It launches. She never asks where it is |
 | **Find a file** | *"Where's my CV?"* | The path, from the index or a live disk walk — no questions back |
 | **Tidy the desktop** | *"My desktop is a mess, sort it out"* | Files sorted into type folders; shortcuts and repos untouched; *"undo"* puts it all back |
+| **Activity pill** | *"Find the Freya Constitution and open it"* | A pill at the top of your screen: *Searching your PC for "Freya Constitution"*, then *Opening FREYA CONSTITUTION v1.2.pdf* |
+| **Talk first, one job at a time** | Ask for a slow search, then ask something else while it runs | She says what she's doing before starting, chats meanwhile, and runs the second request only after the first finishes |
+| **Latest document** | *"Open my latest CV — it's called something like full stack developer"* | Best name match, newest first, from any drive |
+| **Trading Lab** | *"Open the trading lab"* | Opens in your browser (or reuses your open tab) and works on the chart you're looking at |
+| **Windows** | *"Open VS Code, minimize it, maximize it, close it"* | Every step hits the same window — never another VS Code you had open |
 
 ---
 
 ## 🧪 Tests
 
-Offline suites — no mic, no API quota, no network. Run them from the project root:
+Offline suites — no mic, no API quota, no network. Run them from the project root.
+
+The pytest suites cover the live loop (with a fake Gemini session), tool scheduling, fallbacks,
+search, the Trading Lab and the activity pill:
+
+```powershell
+.\venv\Scripts\python.exe -m pytest -q test_scripts\test_live_routing.py test_scripts\test_voice_lifecycle.py `
+  test_scripts\test_session_resilience.py test_scripts\test_find_documents.py test_scripts\test_systemone.py `
+  test_scripts\test_activity_overlay.py test_scripts\test_trading_open.py test_scripts\test_quota_fixes.py
+```
+
+`test_live_routing.py` includes the one-job-at-a-time scenario: a slow job goes to the
+background, a second request is answered "queued" and only starts after the first finishes,
+an expression runs instantly, and both results are delivered in order.
+
+Script-style checks:
 
 ```powershell
 .\venv\Scripts\python.exe test_scripts\test_shaders.py     # GLSL compiles + every effect draws

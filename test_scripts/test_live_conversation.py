@@ -9,7 +9,8 @@ load_dotenv()
 api_key = os.getenv("GEMINI_API_KEY")
 model_id = "gemini-3.1-flash-live-preview"
 
-async def test_conn():
+# Manual live-API probe, not a pytest test.
+async def probe_conn():
     client = genai.Client(api_key=api_key)
     config = types.LiveConnectConfig(
         response_modalities=["AUDIO"]
@@ -46,4 +47,4 @@ async def test_conn():
         traceback.print_exc()
 
 if __name__ == "__main__":
-    asyncio.run(test_conn())
+    asyncio.run(probe_conn())

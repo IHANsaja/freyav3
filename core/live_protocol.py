@@ -1,9 +1,21 @@
 """Model routing and state rules for Gemini Live; no audio-device dependencies."""
+import re
+
 from config.models import LIVE_MODEL, LIVE_FALLBACK_MODEL, THINKING_LIVE_MODEL
 
 
 class ModeChange(Exception):
     """Reconnect with the new mode while retaining the runner's transcript."""
+
+
+class ThinkingTaskFailed(Exception):
+    """3.8 extended thinking dropped its background task and said so aloud.
+
+    Seen in isolation (bare prompt, no tools, no audio): the model starts, then
+    reports "a system error occurred" roughly half the time, and retrying in
+    the same session keeps failing. The regular Live model handles the same
+    request reliably, so the runner falls back to it and resumes the task.
+    """
 
 
 def is_thinking(model):
@@ -53,12 +65,20 @@ class LiveRoute:
     def model(self):
         return self.models[self.index]
 
-    def fallback(self, exc):
+    def fallback(self, exc, repeated: int = 1):
         # Authentication, malformed setup and arbitrary local tool errors do not
         # become silent model downgrades. 1008 alone is not a rotation either.
+        # `repeated` counts this failure: a server-side 1011 "Internal error" is
+        # retried once on the same model, but a second one in a row falls back —
+        # it used to burn all five reconnects on a model that was down.
         text = str(exc).lower()
+        if repeated >= 2 and ("1011" in text or "internal error" in text):
+            if self.index + 1 < len(self.models):
+                self.index += 1
+                return self.model
+            return None
         code = getattr(exc, 'code', None) or getattr(exc, 'status_code', None)
-        eligible = code in (404, 429, 500, 502, 503, 504) or any(s in text for s in (
+        eligible = isinstance(exc, ThinkingTaskFailed) or code in (404, 429, 500, 502, 503, 504) or any(s in text for s in (
             'resource_exhausted', 'quota exceeded', 'rate limit', 'model not found',
             'model is not available', 'model unavailable', 'service unavailable',
             'overloaded', 'not found for api version',
@@ -67,6 +87,16 @@ class LiveRoute:
             self.index += 1
             return self.model
         return None
+
+
+_THINKING_FAILURE = re.compile(
+    r"(sorry|apologi[sz]e|unfortunately)\b.{0,80}\b(system error|error occurred|"
+    r"encountered an error|ran into an error)", re.IGNORECASE)
+
+
+def is_thinking_failure(spoken: str) -> bool:
+    """Does this finished turn read like the extended-thinking failure apology?"""
+    return bool(_THINKING_FAILURE.search(spoken or ""))
 
 
 class Interaction:

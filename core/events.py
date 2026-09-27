@@ -81,6 +81,13 @@ class EventBus:
             self._buffer.append(event)
             if len(self._buffer) > self._buffer_size:
                 self._buffer = self._buffer[-self._buffer_size:]
+        # Subscribers are per-client WebSocket writers owned by the server's
+        # loop. Missions and sub-agents publish from the background loop now, and
+        # an asyncio.Queue is not thread-safe, so delivery always hops home.
+        from core import background
+        await background.on_main(self._deliver(event))
+
+    async def _deliver(self, event: Event):
         # Isolate subscribers: one broken listener must not starve the others.
         for fn in list(self._subscribers):
             try:
@@ -89,12 +96,9 @@ class EventBus:
                 print(f"  [events] subscriber failed on '{event.type}': {e}")
 
     def publish_soon(self, event_type: str, payload: dict):
-        """Fire-and-forget publish from sync code that runs inside the loop."""
-        try:
-            loop = asyncio.get_running_loop()
-            loop.create_task(self.publish(event_type, payload))
-        except RuntimeError:
-            pass  # no loop — nothing is listening anyway
+        """Fire-and-forget publish from sync code running inside any loop."""
+        from core import background
+        background.call_on_main(self.publish(event_type, payload))
 
     def replay_buffer(self, n: int = 50) -> list[Event]:
         return self._buffer[-n:]

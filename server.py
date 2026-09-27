@@ -9,6 +9,7 @@ from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from starlette.websockets import WebSocketState
 
 from core.errors import log_error, error_payload, UserFacingError, logger
 
@@ -19,6 +20,16 @@ from core.errors import log_error, error_payload, UserFacingError, logger
 # this policy is process-wide, so that loop inherits Proactor from here.
 if sys.platform == "win32":
     asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
+
+# Piped or redirected output (the launcher, a log file) defaults to cp1252 on
+# Windows, and printing an emoji or Sinhala text then raises. Those prints sit
+# inside the live tool executor, so a tool that succeeded was reported to the
+# model as failed. Logging must never be able to fail a tool.
+for _stream in (sys.stdout, sys.stderr):
+    try:
+        _stream.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
 
 # Browsers attach every cookie stored for 'localhost' to the WebSocket handshake
 # (the cookie jar is shared across ALL localhost ports, so other dev tools count).
@@ -50,11 +61,16 @@ from core.audio import MicStream, SpeakerStream
 from core.events import bus
 from core.memory import load_memory, build_system_prompt, update_memory, TranscriptCollector
 from core.model import FreyaModel, is_rotation
-from core.live_protocol import LiveRoute, ModeChange
+from core.live_protocol import LiveRoute, ModeChange, ThinkingTaskFailed
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    # Claim this loop as "home" before anything can publish. Missions and
+    # sub-agents run on the background loop and marshal their events back here;
+    # without this they'd have nowhere to send them until a voice session began.
+    from core import background
+    background.set_main_loop()
     # The bus is the single transport for all runtime.emit() events. Subscribing
     # here (not per-session) means mission/approval/suggestion events reach the
     # dashboard even while no voice session is running.
@@ -68,6 +84,19 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         print(f"  desktop popups unavailable: {e}")
         detach_popups = lambda: None
+    try:
+        from core import systemone
+        print(f"  {systemone.describe_status()}")
+    except Exception:
+        pass
+    # Activity pill: approval waits arrive on the bus, not through a tool call.
+    try:
+        from core import activity_overlay
+        activity_overlay.configure(load_config())
+        detach_activity = activity_overlay.attach_to_bus()
+    except Exception as e:
+        print(f"  activity overlay unavailable: {e}")
+        detach_activity = lambda: None
     # Import any legacy markdown memory into the structured store up front so
     # the Memory panel is populated before the first voice session.
     try:
@@ -78,6 +107,7 @@ async def lifespan(app: FastAPI):
     yield
     unsubscribe()
     detach_popups()
+    detach_activity()
 
 
 app = FastAPI(lifespan=lifespan)
@@ -89,10 +119,15 @@ app.include_router(trading_router)
 # client to enforce that. See the /ws gesture_touch handler below.
 _last_gesture_touch_ts = 0.0
 
+# The dashboard is the only browser origin allowed in. CORS covers fetch();
+# WebSockets ignore CORS entirely, so /ws checks the same list itself —
+# otherwise any page open in the browser could connect and approve actions.
+DASHBOARD_ORIGINS = ["http://localhost:3000", "http://127.0.0.1:3000"]
+
 # Allow Next.js dev server to connect
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000"],
+    allow_origins=DASHBOARD_ORIGINS,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -132,6 +167,8 @@ freya_running = False
 # time, so it reports the SESSION's real age instead of the browser tab's.
 freya_started_at: float | None = None
 connected_clients: list[WebSocket] = []
+# The live session's speaker, so /stop can silence it before cancelling.
+_active_speaker = None
 
 
 # ══════════════════════════════════════════════
@@ -189,6 +226,8 @@ async def run_freya():
     speaker = SpeakerStream(device_index=output_idx)
     mic.start()
     speaker.start()
+    global _active_speaker
+    _active_speaker = speaker
 
     # Learn the machine on first run (or refresh a stale index). Background
     # thread, so the dashboard comes up straight away.
@@ -211,6 +250,14 @@ async def run_freya():
         async def on_transcript(self, speaker_name: str, text: str):
             # NOTE: FreyaModel.run() already records to the transcript
             # collector; adding it here too caused duplicate memory entries.
+            if speaker_name == "Freya":
+                # Dashboard not being looked at → her reply also pops up as a
+                # desktop card, so she can be followed from any window.
+                try:
+                    from core import desktop_popup
+                    desktop_popup.say(text)
+                except Exception:
+                    pass
             await broadcast({
                 "type": "transcript",
                 "speaker": speaker_name,
@@ -265,7 +312,8 @@ async def run_freya():
 
                 if freya.connected and not isinstance(e, ModeChange):
                     continue_task = False
-                fallback = None if isinstance(e, ModeChange) else route.fallback(e)
+                fallback = None if isinstance(e, ModeChange) else route.fallback(
+                    e, repeated=consecutive_failures + 1)
                 if isinstance(e, ModeChange):
                     resume_handle = None  # Model/personality changed: never reuse its token.
                     continue_task = str(e) == "complex_tasks"
@@ -273,7 +321,8 @@ async def run_freya():
                 elif fallback:
                     resume_handle = None
                     # Retry an unstarted handoff, never replay a live action.
-                    continue_task = continue_task and not freya.connected
+                    # A dropped thinking task resumes on the new model; the recap shows what already ran.
+                    continue_task = isinstance(e, ThinkingTaskFailed) or (continue_task and not freya.connected)
                     print(f"Live model unavailable; falling back to {fallback}.")
                     await broadcast({"type": "transcript", "speaker": "Freya",
                                      "text": f"[Using fallback voice model: {fallback}]"})
@@ -315,6 +364,8 @@ async def run_freya():
                 personality = build_system_prompt(get_mode_personality(config, base_personality), memory)
     finally:
         freya_running = False
+        if _active_speaker is speaker:
+            _active_speaker = None
         mic.stop()
         speaker.stop()
         try:
@@ -338,6 +389,8 @@ async def _stop_voice_task():
     """Caller holds the lifecycle lock until the old session releases audio."""
     global freya_task, freya_running, freya_started_at
     freya_running = False
+    if _active_speaker is not None:
+        _active_speaker.interrupt()
     task = freya_task
     if task is not None:
         task.cancel()
@@ -418,10 +471,27 @@ async def update_config_endpoint(body: dict):
     config_path = os.path.join("config", "freya_config.json")
     with open(config_path, "r", encoding="utf-8") as f:
         config = json.load(f)
+    # Validate everything before writing anything: a bad value here is persisted
+    # and only surfaces as a failed connect on the next session start.
+    gemini = config["providers"]["gemini"]
+    if "model" in body:
+        model_ids = [m["id"] if isinstance(m, dict) else m for m in gemini.get("models", [])]
+        if body["model"] not in model_ids:
+            raise UserFacingError(f"Unknown model {body['model']!r}. Choose one of: {', '.join(model_ids)}.")
+    if "voice" in body and body["voice"] not in gemini.get("voices", []):
+        raise UserFacingError(f"Unknown voice {body['voice']!r}.")
+    for key, side in (("input_device_index", "input"), ("output_device_index", "output")):
+        if key in body:
+            from core.audio import list_audio_devices
+            value = body[key]
+            valid = {d["index"] for d in list_audio_devices().get(side, [])}
+            if isinstance(value, bool) or not isinstance(value, int) or value not in valid:
+                raise UserFacingError(f"{key} must be one of the available {side} devices.")
+
     if "model" in body:
         config["active_model"] = body["model"]
     if "voice" in body:
-        config["providers"]["gemini"]["active_voice"] = body["voice"]
+        gemini["active_voice"] = body["voice"]
     if "input_device_index" in body:
         config.setdefault("audio", {})["input_device_index"] = body["input_device_index"]
     if "output_device_index" in body:
@@ -464,17 +534,29 @@ async def list_memory_items(kind: str | None = None, q: str | None = None):
     return JSONResponse({"items": [i.to_payload() for i in items]})
 
 
+def _memory_importance(value) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        raise UserFacingError("importance must be a whole number from 1 to 5.")
+
+
 @app.post("/memory/items")
 async def create_memory_item(body: dict):
     from core.memory_store import get_store
+    content = str(body.get("content") or "").strip()
+    if not content:
+        raise UserFacingError("A memory needs some content.")
+    subject = str(body.get("subject") or "").strip() or "General"
+    importance = _memory_importance(body.get("importance", 2) or 2)
     loop = asyncio.get_event_loop()
     item_id = await loop.run_in_executor(
         None,
         lambda: get_store().add(
             kind=str(body.get("kind", "fact")),
-            subject=str(body.get("subject", "General")),
-            content=str(body.get("content", "")),
-            importance=int(body.get("importance", 2) or 2),
+            subject=subject,
+            content=content,
+            importance=importance,
             due_at=body.get("due_at"),
             source="ui",
         ),
@@ -486,6 +568,10 @@ async def create_memory_item(body: dict):
 @app.patch("/memory/items/{item_id}")
 async def update_memory_item_endpoint(item_id: int, body: dict):
     from core.memory_store import get_store
+    if "content" in body and not str(body.get("content") or "").strip():
+        raise UserFacingError("A memory can't be edited down to nothing — use forget instead.")
+    if body.get("importance") is not None:
+        _memory_importance(body["importance"])
     loop = asyncio.get_event_loop()
     ok = await loop.run_in_executor(
         None,
@@ -700,6 +786,14 @@ async def debug_emit(body: dict):
 # ══════════════════════════════════════════════
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
+    # Browsers always send Origin on a WebSocket handshake; local scripts
+    # (test_scripts/listen_ws.py) send none and are already confined to this
+    # machine by the 127.0.0.1 bind.
+    origin = websocket.headers.get("origin")
+    if origin is not None and origin not in DASHBOARD_ORIGINS:
+        logger.warning("[ws] rejected connection from origin %r", origin)
+        await websocket.close(code=1008)
+        return
     await websocket.accept()
     connected_clients.append(websocket)
 
@@ -747,6 +841,13 @@ async def websocket_endpoint(websocket: WebSocket):
             except WebSocketDisconnect:
                 raise
             except Exception as exc:
+                # A failed send in the writer task marks the socket closed
+                # without raising WebSocketDisconnect here; every receive then
+                # fails instantly, and `continue` became a tight loop that
+                # pinned a CPU core and flooded the log. Gone means gone.
+                if (websocket.application_state != WebSocketState.CONNECTED
+                        or websocket.client_state != WebSocketState.CONNECTED):
+                    break
                 log_error("ws.receive", exc, level=logging.WARNING)
                 continue
             if not isinstance(data, dict):
@@ -778,12 +879,20 @@ async def websocket_endpoint(websocket: WebSocket):
             await asyncio.gather(writer, return_exceptions=True)
         if websocket in connected_clients:
             connected_clients.remove(websocket)
+        try:
+            from core import desktop_popup
+            desktop_popup.remove_viewer(id(websocket))
+        except Exception:
+            pass
 
 
 async def _dispatch_ws_message(websocket: WebSocket, msg_type, data: dict):
     """Handle one client→server WebSocket message. Raised exceptions are caught
     and logged by the receive loop, so one bad message never drops the socket."""
-    if msg_type == "start":
+    if msg_type == "dashboard_visibility":
+        from core import desktop_popup
+        desktop_popup.set_viewer(id(websocket), bool(data.get("watching")))
+    elif msg_type == "start":
         await start_freya()
     elif msg_type == "stop":
         await stop_freya()
@@ -878,4 +987,6 @@ async def _dispatch_ws_message(websocket: WebSocket, msg_type, data: dict):
 #  ENTRY POINT
 # ══════════════════════════════════════════════
 if __name__ == "__main__":
-    uvicorn.run("server:app", host="0.0.0.0", port=8000, reload=False)
+    # Loopback only: the API can approve actions, change the file sandbox and
+    # drive the desktop, and it has no authentication of its own.
+    uvicorn.run("server:app", host="127.0.0.1", port=8000, reload=False)

@@ -53,7 +53,17 @@ def classify(exc):
     return None, None
 
 
-async def generate(client, *, quota_config=None, **kwargs):
+_DEFAULT_FALLBACKS = {'gemini-3.5-flash': 'gemini-3.5-flash-lite'}
+
+
+def _fallback_model(cfg: dict, model: str):
+    """quota.fallback_models overrides the default map; {} turns it off."""
+    table = cfg.get('fallback_models', _DEFAULT_FALLBACKS)
+    fallback = (table or {}).get(model)
+    return fallback if fallback and fallback != model else None
+
+
+async def generate(client, *, quota_config=None, _no_fallback=False, **kwargs):
     if quota_config is None:
         from config import load_config
         quota_config = load_config()
@@ -91,6 +101,14 @@ async def generate(client, *, quota_config=None, **kwargs):
             if kind is None: raise
             # Daily exhaustion cannot be fixed by quick retries or rotating keys.
             if kind == 'daily' or attempt == retries:
+                # A different model has its own quota and its own servers: an
+                # overloaded or exhausted gemini-3.5-flash used to fail whole
+                # missions and sub-agents while flash-lite was answering in 1.5 s.
+                fallback = _fallback_model(cfg, model)
+                if fallback and not _no_fallback:
+                    print(f'  [quota] {model}: {kind} — retrying once on {fallback}.')
+                    return await generate(client, quota_config=config,
+                                          _no_fallback=True, **{**kwargs, 'model': fallback})
                 raise QuotaError(f'Gemini {model}: {kind} limit/error. Execution stopped without replaying tools; check AI Studio and completed evidence.') from exc
             delay = max(retry or 0, 2 ** attempt + random.random())
             if delay > float(cfg.get('max_retry_wait_s', 60)):

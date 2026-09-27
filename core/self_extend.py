@@ -14,6 +14,8 @@ import importlib
 import importlib.util
 import os
 import subprocess
+
+from core.proc import run as run_killable  # tree-kill on timeout
 import sys
 
 from core.registry import tool, register, OBJ, P, STR
@@ -118,8 +120,7 @@ def run_code(args, ctx) -> str:
     if not code.strip():
         return "No code to run."
     try:
-        proc = subprocess.run([sys.executable, "-c", code], capture_output=True,
-                              text=True, timeout=30)
+        proc = run_killable([sys.executable, "-c", code], timeout=30)
         out = (proc.stdout or "").strip() or (proc.stderr or "").strip()
         if not out:
             return "Code ran with no output."

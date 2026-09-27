@@ -73,15 +73,48 @@ class SpeakerStream:
             rate=RECEIVE_SAMPLE_RATE,
             output=True,
             output_device_index=self.device_index,
+            # ~85 ms of PortAudio buffering so a busy event loop can't starve
+            # the device between writes.
+            frames_per_buffer=2048,
         )
         print("Speaker stream started.")
 
+    # Chunks are written in slices so a stop can skip what's left. interrupt()
+    # aborts the stream directly, so the slice size doesn't delay a stop; it
+    # just has to be big enough that the gaps between writes (where this
+    # thread needs the GIL back) never starve the device. 43 ms slices did,
+    # and her voice stuttered.
+    _SLICE = 12000  # bytes = 6000 samples, 250 ms at 24 kHz
+
+    interrupted = False
+
     def write(self, data):
-        self.stream.write(data)
+        for i in range(0, len(data), self._SLICE):
+            if self.interrupted or not self.stream:
+                return
+            self.stream.write(data[i:i + self._SLICE])
+
+    def interrupt(self):
+        """Silence now: drop the rest of the current chunk and any audio
+        already buffered in PortAudio."""
+        self.interrupted = True
+        try:
+            if self.stream and self.stream.is_active():
+                self.stream.abort_stream()
+        except Exception:
+            pass
 
     def stop(self):
+        self.interrupted = True
         if self.stream:
-            self.stream.stop_stream()
+            try:
+                # abort, not stop: stop_stream() drains the buffer first, so
+                # Freya kept talking after being stopped.
+                if self.stream.is_active():
+                    self.stream.abort_stream()
+            except Exception:
+                pass
             self.stream.close()
+            self.stream = None
         self.p.terminate()
         print("Speaker stream stopped.")

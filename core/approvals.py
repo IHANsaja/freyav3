@@ -48,9 +48,10 @@ class PendingAction:
     thunk: Optional[Callable[[], Awaitable[str]]] = None  # live path
     future: Optional[asyncio.Future] = None               # mission path
     timeout_task: Optional[asyncio.Task] = field(default=None, repr=False)
+    risk: Optional[int] = None  # 1-5 from Jev; advisory only, never auto-approves
 
     def to_payload(self) -> dict:
-        return {
+        payload = {
             "id": self.id,
             "summary": self.summary,
             "tool": self.tool,
@@ -58,6 +59,47 @@ class PendingAction:
             "source": self.source,
             "expiresAt": self.expires_at,
         }
+        if self.risk is not None:
+            payload["risk"] = self.risk
+        return payload
+
+
+_RISK_LEVELS = [
+    "Harmless: read-only or trivially undone",
+    "Low: a small change that is easy to undo",
+    "Moderate: changes files, settings or apps in ways that take effort to undo",
+    "High: sends or publishes something, spends money, or deletes data",
+    "Severe: irreversible loss, security exposure, or money leaving the account",
+]
+
+
+_assessments: set[asyncio.Task] = set()  # keeps fire-and-forget tasks alive
+
+
+async def _assess(action: "PendingAction"):
+    """Rate how risky the parked action is, for the dashboard badge.
+
+    Purely advisory: it changes what the card shows, never whether the action
+    needs the user's yes.
+    """
+    from core import systemone
+    try:
+        from config import load_config
+        config = load_config()
+    except Exception:
+        return
+    result = await systemone.score(
+        {"tool": action.tool, "summary": action.summary, "arguments": action.args,
+         "requested_by": action.source},
+        "How risky is it to run this action on the user's computer and accounts?",
+        _RISK_LEVELS, config, "approval_risk",
+    )
+    if not result or action.id not in approvals._pending:
+        return
+    if result["confidence"] < float(systemone.setting(config, "approval_risk", "min_confidence", 0.4)):
+        return
+    action.risk = round(result["score"]) + 1
+    await bus.publish("approval", {"event": "assessed", "id": action.id, "risk": action.risk})
 
 
 class ApprovalManager:
@@ -75,7 +117,21 @@ class ApprovalManager:
 
     async def wait(self, summary: str, tool_name: str, args: dict,
                    source: str, timeout: float = 120.0) -> bool:
-        """MISSION path: block the calling step until decided or expired."""
+        """MISSION path: block the calling step until decided or expired.
+
+        The caller is now on the background loop, but the decision arrives on the
+        main loop — a click on the dashboard or a spoken "yes" routed through
+        `approve_action`. An asyncio.Future belongs to exactly one loop, so the
+        whole wait is hosted on the main loop and the background step simply
+        awaits the hop.
+        """
+        from core import background
+        return await background.on_main(
+            self._wait_on_main(summary, tool_name, args, source, timeout)
+        )
+
+    async def _wait_on_main(self, summary: str, tool_name: str, args: dict,
+                            source: str, timeout: float = 120.0) -> bool:
         future: asyncio.Future = asyncio.get_running_loop().create_future()
         action = self._add(summary, tool_name, args, source, timeout, future=future)
         # Ask out loud too — the user may be away from the dashboard.
@@ -112,6 +168,8 @@ class ApprovalManager:
         bus.publish_soon("approval", {"event": "requested", **action.to_payload()})
         # Body language: the avatar snaps to an alert stance while waiting.
         bus.publish_soon("avatar", {"intent": "expression", "name": "alert", "intensity": 0.8})
+        _assessments.add(t := asyncio.get_running_loop().create_task(_assess(action)))
+        t.add_done_callback(_assessments.discard)
         return action
 
     async def _expire_after(self, action_id: str, timeout: float):

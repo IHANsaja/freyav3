@@ -103,7 +103,7 @@ export default function ChatCard({
               className="text-[9px] tracking-[0.2em] uppercase"
               style={{ fontFamily: "var(--font-ui)", color: "var(--accent-red)" }}
             >
-              Freya
+              Freyja
             </span>
             <p
               className="text-[11px] leading-relaxed border-l-2 pl-2"

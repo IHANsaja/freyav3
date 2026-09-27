@@ -115,7 +115,7 @@ export default function AgentsCard({ agents }: { agents: AgentJob[] }) {
     >
       {shown.length === 0 ? (
         <p className="text-[11px] leading-relaxed" style={{ color: "var(--text-tertiary)" }}>
-          No background workers running. Ask Freya to research, code or drive the
+          No background workers running. Ask Freyja to research, code or drive the
           browser and they&apos;ll appear here.
         </p>
       ) : (

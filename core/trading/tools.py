@@ -1,5 +1,7 @@
 import json
 import asyncio
+import uuid
+import webbrowser
 from core import runtime
 from core.registry import tool, OBJ, P, STR, INT, NUM, ARR
 from core.trading.api import services, command
@@ -9,12 +11,41 @@ MUTATION={**SESSION,'key':P(STR,'Unique command id; reuse only for an identical 
     'revision':P(INT,'Current backend revision')}
 
 
-@tool('open_trading_lab','Open the simulated Trading Lab; returns its URL and existing session or creates one.',
-    OBJ({'session_id':P(STR),'key':P(STR,'Required for a new session')}),gate='trading.enabled')
-def open_trading_lab(args,ctx):
+LAB_URL='http://localhost:3000/trading'
+
+
+@tool('open_trading_lab','Open the Trading Lab in the user\'s browser (or find the one already open) and return the '
+    'session he is looking at. Only say it is open when this returns opened/already_open.',
+    OBJ({'session_id':P(STR,'Reuse this session instead of the one on screen')}),gate='trading.enabled')
+async def open_trading_lab(args,ctx):
+    # It used to create a REPLAY session and only return a URL: nothing opened,
+    # she said "I've opened the trading lab" anyway, and the page (which keeps
+    # live-market sessions only) then made its own — so her session_id pointed
+    # at a chart nobody could see. Now the page owns the session and she follows it.
+    from core.trading.guide import _current_view
     service,_=services()
-    state=service.get(args['session_id']) if args.get('session_id') else service.create({'key':args.get('key','')})
-    return json.dumps({'url':f"http://localhost:3000/trading?session={state['id']}",'session_id':state['id'],'revision':state['revision']})
+    if args.get('session_id'):
+        state=service.get(args['session_id'])
+        return json.dumps({'status':'session','session_id':state['id'],'revision':state['revision'],
+                           'url':f"{LAB_URL}?session={state['id']}"})
+    view=_current_view()
+    if view:
+        return json.dumps({'status':'already_open','session_id':view['session_id'],
+                           'note':'The Trading Lab is already open in his browser on this session.'})
+    if ctx.source!='live':
+        state=service.create({'key':uuid.uuid4().hex})
+        return json.dumps({'status':'created','session_id':state['id'],'revision':state['revision'],
+                           'url':f"{LAB_URL}?session={state['id']}&replay=1"})
+    webbrowser.open(LAB_URL)
+    for _ in range(60):                    # the page reports its session within a few seconds
+        await asyncio.sleep(0.25)
+        view=_current_view()
+        if view:
+            return json.dumps({'status':'opened','session_id':view['session_id'],
+                               'note':'Opened in his browser; this is the session on screen.'})
+    return json.dumps({'status':'not_confirmed','url':LAB_URL,
+                       'note':'Asked the browser to open it, but the page has not reported in yet. Do not say '
+                              'it is open — ask him whether a Trading Lab tab appeared.'})
 
 
 @tool('analyze_chart','Explain visible candles and the recorded thesis. Independent practice requires a thesis first.',

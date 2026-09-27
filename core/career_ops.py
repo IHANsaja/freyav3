@@ -28,6 +28,8 @@ import os
 import re
 import subprocess
 
+from core.proc import run as run_killable  # tree-kill on timeout
+
 from core.registry import tool, OBJ, P, STR, ARR
 
 _PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
@@ -202,8 +204,7 @@ def run_career_script(args, ctx) -> str:
     if extra:
         cmd += ["--"] + extra
     try:
-        proc = subprocess.run(cmd, capture_output=True, text=True,
-                              timeout=SCRIPT_TIMEOUT, cwd=root, shell=(os.name == "nt"))
+        proc = run_killable(cmd, timeout=SCRIPT_TIMEOUT, cwd=root, shell=(os.name == "nt"))
     except subprocess.TimeoutExpired:
         return f"The {command} job was still running after 15 minutes, so I stopped it."
     except FileNotFoundError:

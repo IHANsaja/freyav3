@@ -23,6 +23,7 @@ import CenterStage from "./components/hud/CenterStage";
 import CustomCursor from "./components/hud/CustomCursor";
 import PortraitCard from "./components/hud/PortraitCard";
 import SystemStatusCard from "./components/hud/SystemStatusCard";
+import LinkHealthCard from "./components/hud/LinkHealthCard";
 import SessionCard from "./components/hud/SessionCard";
 import AgentsCard from "./components/hud/AgentsCard";
 import ChatCard from "./components/hud/ChatCard";
@@ -74,6 +75,10 @@ export default function Home() {
     sendGestureTouch,
     cancelMission,
     respondSuggestion,
+    linkErrors,
+    linkStats,
+    pingMs,
+    clearLinkErrors,
   } = useFreyaSocket();
 
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
@@ -102,17 +107,19 @@ export default function Home() {
     orbFxRef.current.paused = status.engine === "paused" ? 1 : 0;
   }, [status.engine]);
 
-  // Webcam hand tracking — on by default (requests camera access on load);
-  // the HeaderBar toggle still lets it be switched off. Hand movement turns the
+  // Webcam hand tracking — off by default (no camera request on load); the
+  // HeaderBar toggle switches it on. Hand movement turns the
   // orb itself (Orb.tsx, via OrbScene's gestureRef prop) while the camera stays
   // locked, and useGestureOrbBridge dispatches squeeze/sign shader reactions +
   // a gesture_touch WS message so Freya reacts through the live Gemini session.
-  const [handTrackingEnabled, setHandTrackingEnabled] = useState(true);
+  const [handTrackingEnabled, setHandTrackingEnabled] = useState(false);
   const videoDevices = useVideoDevices();
   const [selectedVideoDeviceId, setSelectedVideoDeviceId] = useState("");
+  const [handTrackingRetry, setHandTrackingRetry] = useState(0);
   const { stateRef: gestureRef, status: handTrackingStatus } = useHandGestures(
     handTrackingEnabled,
-    selectedVideoDeviceId || undefined
+    selectedVideoDeviceId || undefined,
+    handTrackingRetry
   );
   useGestureOrbBridge(gestureRef, orbFxRef, sendGestureTouch);
 
@@ -287,7 +294,12 @@ export default function Home() {
           onOpenSettings={() => setIsSettingsOpen(true)}
           handTrackingEnabled={handTrackingEnabled}
           handTrackingStatus={handTrackingStatus}
-          onToggleHandTracking={() => setHandTrackingEnabled((v) => !v)}
+          onToggleHandTracking={() => {
+            // After a failure the button retries instead of switching off.
+            const failed = ["error", "denied", "no_camera", "busy"].includes(handTrackingStatus);
+            if (handTrackingEnabled && failed) setHandTrackingRetry((n) => n + 1);
+            else setHandTrackingEnabled((v) => !v);
+          }}
           videoDevices={videoDevices}
           selectedVideoDeviceId={selectedVideoDeviceId}
           onSelectVideoDevice={setSelectedVideoDeviceId}
@@ -316,6 +328,7 @@ export default function Home() {
               handTracking={handTrackingStatus}
             />
             <SessionCard session={session} />
+            <LinkHealthCard connected={connected} stats={linkStats} pingMs={pingMs} errors={linkErrors} onClear={clearLinkErrors} />
           </div>
 
           {/* Center stage */}

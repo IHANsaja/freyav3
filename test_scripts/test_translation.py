@@ -9,7 +9,8 @@ load_dotenv()
 api_key = os.getenv("GEMINI_API_KEY")
 model_id = "gemini-3.5-live-translate-preview"
 
-async def test_translation():
+# Manual live-API probe, not a pytest test (the name kept pytest collecting it).
+async def probe_translation():
     client = genai.Client(api_key=api_key)
     
     # Configure stream translation for spanish
@@ -50,4 +51,4 @@ async def test_translation():
         traceback.print_exc()
 
 if __name__ == "__main__":
-    asyncio.run(test_translation())
+    asyncio.run(probe_translation())

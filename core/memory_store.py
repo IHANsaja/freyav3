@@ -74,6 +74,16 @@ def _now() -> str:
     return datetime.now().isoformat(timespec="seconds")
 
 
+def _clean_due(value) -> Optional[str]:
+    """A due date is an ISO string or NULL. The session extractor used to
+    store str(None) — the literal 'None' — which the UI showed as "due None"
+    and which sorts after every real date in `due_at >= ?` queries."""
+    if value is None:
+        return None
+    text = str(value).strip()
+    return None if text.lower() in ("", "none", "null") else text
+
+
 class MemoryStore:
     def __init__(self, path: str = MEMORY_DB_PATH):
         self.path = os.path.abspath(path)
@@ -83,12 +93,17 @@ class MemoryStore:
         self._conn.row_factory = sqlite3.Row
         with self._lock:
             self._conn.executescript(_SCHEMA)
+            # Repair rows written before _clean_due existed.
+            self._conn.execute(
+                "UPDATE items SET due_at = NULL "
+                "WHERE due_at IS NOT NULL AND lower(trim(due_at)) IN ('', 'none', 'null')"
+            )
             self._conn.commit()
 
     def _row(self, r: sqlite3.Row) -> MemoryItem:
         return MemoryItem(
             id=r["id"], kind=r["kind"], subject=r["subject"], content=r["content"],
-            importance=r["importance"], due_at=r["due_at"], created_at=r["created_at"],
+            importance=r["importance"], due_at=_clean_due(r["due_at"]), created_at=r["created_at"],
             updated_at=r["updated_at"], source=r["source"], active=bool(r["active"]),
         )
 
@@ -104,7 +119,7 @@ class MemoryStore:
             cur = self._conn.execute(
                 "INSERT INTO items (kind, subject, content, importance, due_at, created_at, updated_at, source) "
                 "VALUES (?,?,?,?,?,?,?,?)",
-                (kind, subject.strip(), content.strip(), importance, due_at, now, now, source),
+                (kind, subject.strip(), content.strip(), importance, _clean_due(due_at), now, now, source),
             )
             self._conn.commit()
             return int(cur.lastrowid)
@@ -115,7 +130,11 @@ class MemoryStore:
         for key, value in fields.items():
             if key in allowed and value is not None:
                 sets.append(f"{key} = ?")
-                values.append(int(value) if key in ("importance", "active") else value)
+                if key in ("importance", "active"):
+                    value = int(value)
+                elif key == "due_at":
+                    value = _clean_due(value)   # "" / "none" clears the date
+                values.append(value)
         if not sets:
             return False
         sets.append("updated_at = ?")

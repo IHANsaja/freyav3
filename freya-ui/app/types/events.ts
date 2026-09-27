@@ -10,10 +10,12 @@ export interface PendingApproval {
     argsPreview: string;
     source: string; // "live" | "mission:<id>" | "suggestion"
     expiresAt: number; // unix seconds
+    risk?: number; // 1-5, Jev's advisory assessment; absent when unscored
 }
 
 export type ApprovalPayload =
     | ({ event: "requested" } & PendingApproval)
+    | { event: "assessed"; id: string; risk: number }
     | { event: "resolved"; id: string; approved: boolean; via: "voice" | "ui" | "timeout" };
 
 // ── Missions ──

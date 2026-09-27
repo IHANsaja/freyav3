@@ -1,12 +1,24 @@
 import asyncio
+import sys
+
+# Redirected output defaults to cp1252 on Windows; printing a tool result with
+# an emoji would raise inside the tool executor. See the same block in server.py.
+for _stream in (sys.stdout, sys.stderr):
+    try:
+        _stream.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+
 from config import load_config, get_api_key, get_memory_api_key, get_active_voice, get_personality
 from config import get_mode_personality, get_mode_model  # ← add these
 from core.audio import MicStream, SpeakerStream
 from core.model import FreyaModel, is_rotation
-from core.live_protocol import LiveRoute, ModeChange
+from core.live_protocol import LiveRoute, ModeChange, ThinkingTaskFailed
 from core.memory import load_memory, build_system_prompt, update_memory, TranscriptCollector
 
 config = load_config()
+from core import systemone
+print(f"  {systemone.describe_status()}")
 api_key = get_api_key()
 model_id = get_mode_model(config)          # ← was get_active_model(config)
 voice = get_active_voice(config)
@@ -17,6 +29,10 @@ output_idx = config["audio"]["output_device_index"]
 
 async def main():
     global config, api_key, model_id, voice, base_personality
+    # Home loop for everything the background powers need to hand back: speech,
+    # dashboard events, approval futures. Claimed before any of them can start.
+    from core import background
+    background.set_main_loop()
     memory = load_memory(config)
     personality = build_system_prompt(get_mode_personality(config, base_personality), memory)  # ← was just base_personality
     transcript = TranscriptCollector()
@@ -73,7 +89,8 @@ async def main():
 
                 if freya.connected and not isinstance(e, ModeChange):
                     continue_task = False
-                fallback = None if isinstance(e, ModeChange) else route.fallback(e)
+                fallback = None if isinstance(e, ModeChange) else route.fallback(
+                    e, repeated=consecutive_failures + 1)
                 if isinstance(e, ModeChange):
                     resume_handle = None  # Model/personality changed: never reuse its token.
                     continue_task = str(e) == "complex_tasks"
@@ -81,7 +98,8 @@ async def main():
                 elif fallback:
                     resume_handle = None
                     # Retry an unstarted handoff, never replay a live action.
-                    continue_task = continue_task and not freya.connected
+                    # A dropped thinking task resumes on the new model; the recap shows what already ran.
+                    continue_task = isinstance(e, ThinkingTaskFailed) or (continue_task and not freya.connected)
                     print(f"Live model unavailable; falling back to {fallback}.")
                     await asyncio.sleep(1)
                 elif is_rotation(e):

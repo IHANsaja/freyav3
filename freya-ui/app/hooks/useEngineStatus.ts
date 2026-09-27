@@ -23,7 +23,7 @@ export function useEngineStatus(
   const isRunning = state !== "idle";
 
   if (!connected) {
-    return { engine: "offline", statusLabel: "OFFLINE", stripText: "FREYA OFFLINE.", isRunning: false };
+    return { engine: "offline", statusLabel: "OFFLINE", stripText: "FREYJA OFFLINE.", isRunning: false };
   }
   if (!isRunning) {
     return { engine: "stopped", statusLabel: "STANDBY", stripText: "STANDBY. PRESS START TO ENGAGE.", isRunning };

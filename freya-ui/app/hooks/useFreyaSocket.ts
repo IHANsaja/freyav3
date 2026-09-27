@@ -93,6 +93,45 @@ export interface SessionInfo {
     clients: number;
 }
 
+/** A problem on the dashboard ↔ backend link: the WebSocket dropping, the
+ *  /status ping failing, or the voice session reporting a connection error. */
+export interface LinkError {
+    id: number;
+    source: "socket" | "ping" | "session";
+    message: string;
+    /** What to check to fix it. */
+    hint?: string;
+    /** How many times in a row it has happened. */
+    count: number;
+    firstSeen: Date;
+    timestamp: Date;
+}
+
+/** Live statistics about the dashboard ↔ server.py link. */
+export interface LinkStats {
+    /** Last 30 pings, oldest first; null = no reply. */
+    pingHistory: (number | null)[];
+    /** Unix ms when the current socket opened; null while closed. */
+    socketOpenedAt: number | null;
+    /** Reconnect attempts since the socket last opened. */
+    reconnectAttempts: number;
+    /** Total socket (re)connects since page load. */
+    connects: number;
+    messagesReceived: number;
+    lastMessageAt: number | null;
+    lastClose: { code: number; reason: string; at: number } | null;
+}
+
+/** Plain-English meaning of WebSocket close codes. */
+export const CLOSE_CODES: Record<number, string> = {
+    1000: "Normal closure",
+    1001: "Server going away (shutdown or restart)",
+    1006: "Abnormal closure: no close frame. The server is down or unreachable",
+    1011: "Server hit an internal error",
+    1012: "Server restarting",
+    1013: "Server overloaded: this client was too slow to keep up",
+};
+
 export interface FreyaConfig {
     active_model: string;
     active_voice: string;
@@ -112,7 +151,7 @@ export function useFreyaSocketConnection() {
 
     const [state, setState] = useState<FreyaState>("idle");
     const [transcript, setTranscript] = useState<TranscriptEntry[]>([]);
-    const [liveText, setLiveText] = useState<string>(""); // Freya's words as she speaks
+    const [liveText, setLiveText] = useState<string>(""); // Freyja's words as she speaks
     const [toolLog, setToolLog] = useState<ToolEntry[]>([]);
     const [images, setImages] = useState<ImageEntry[]>([]);
     const [cards, setCards] = useState<InfoCard[]>([]);
@@ -137,6 +176,74 @@ export function useFreyaSocketConnection() {
     const [suggestions, setSuggestions] = useState<SuggestionPayload[]>([]);
     const [contextInfo, setContextInfo] = useState<ContextPayload | null>(null);
     const [persona, setPersona] = useState<PersonaPayload | null>(null);
+    const [linkErrors, setLinkErrors] = useState<LinkError[]>([]);
+    const [pingMs, setPingMs] = useState<number | null>(null);
+    const linkErrorSeq = useRef(0);
+    const [linkStats, setLinkStats] = useState<LinkStats>({
+        pingHistory: [], socketOpenedAt: null, reconnectAttempts: 0, connects: 0,
+        messagesReceived: 0, lastMessageAt: null, lastClose: null,
+    });
+    // Message counting is batched: a state update per frame would re-render
+    // the whole dashboard on every audio-level tick.
+    const msgCounter = useRef({ n: 0, last: null as number | null });
+    useEffect(() => {
+        const id = setInterval(() => {
+            const { n, last } = msgCounter.current;
+            setLinkStats((p) => (p.messagesReceived === n ? p : { ...p, messagesReceived: n, lastMessageAt: last }));
+        }, 1000);
+        return () => clearInterval(id);
+    }, []);
+
+    // Consecutive repeats of the same error (a backend that stays down fails
+    // every retry) bump the timestamp instead of flooding the list.
+    const pushLinkError = useCallback((source: LinkError["source"], message: string, hint?: string) => {
+        setLinkErrors((prev) => {
+            const now = new Date();
+            const last = prev.at(-1);
+            if (last && last.source === source && last.message === message) {
+                return [...prev.slice(0, -1), { ...last, count: last.count + 1, timestamp: now }];
+            }
+            return [...prev, { id: linkErrorSeq.current++, source, message, hint, count: 1, firstSeen: now, timestamp: now }].slice(-20);
+        });
+    }, []);
+    const clearLinkErrors = useCallback(() => setLinkErrors([]), []);
+
+    // ── Ping: round-trip to /status every 5 s ──
+    useEffect(() => {
+        let disposed = false;
+        const ping = async () => {
+            const t0 = performance.now();
+            try {
+                const res = await fetch("http://localhost:8000/status", {
+                    cache: "no-store",
+                    signal: AbortSignal.timeout(3000),
+                });
+                if (disposed) return;
+                if (!res.ok) throw new Error(`HTTP ${res.status} ${res.statusText}`);
+                const ms = Math.round(performance.now() - t0);
+                setPingMs(ms);
+                setLinkStats((p) => ({ ...p, pingHistory: [...p.pingHistory, ms].slice(-30) }));
+            } catch (e) {
+                if (disposed) return;
+                setPingMs(null);
+                setLinkStats((p) => ({ ...p, pingHistory: [...p.pingHistory, null].slice(-30) }));
+                const timedOut = e instanceof DOMException && e.name === "TimeoutError";
+                if (timedOut) {
+                    pushLinkError("ping", "GET /status timed out after 3 s",
+                        "server.py is running but not answering. Its event loop may be blocked by a slow tool or a hung audio call.");
+                } else if (e instanceof TypeError) {
+                    pushLinkError("ping", "GET /status failed: network error (connection refused)",
+                        "server.py isn't reachable on localhost:8000. Start it, or check whether it crashed in its terminal.");
+                } else {
+                    pushLinkError("ping", `GET /status failed: ${e instanceof Error ? e.message : String(e)}`,
+                        "The server answered with an error. Check the server.py log for a traceback.");
+                }
+            }
+        };
+        ping();
+        const id = setInterval(ping, 5000);
+        return () => { disposed = true; clearInterval(id); };
+    }, [pushLinkError]);
 
     // ── Fetch initial config ──
     // Runs on mount AND on every socket (re)connect, so starting server.py after
@@ -155,7 +262,7 @@ export function useFreyaSocketConnection() {
                 if (cfg.active_mode) setActiveMode(cfg.active_mode);
             })
             .catch(() => {
-                console.warn("Freya config unavailable — backend offline, will retry on reconnect.");
+                console.warn("Freyja config unavailable — backend offline, will retry on reconnect.");
             });
         fetch("http://localhost:8000/audio/devices")
             .then((r) => r.json())
@@ -197,6 +304,23 @@ export function useFreyaSocketConnection() {
         loadBackendConfig();
     }, [loadBackendConfig]);
 
+    // ── Dashboard visibility → backend ──
+    // Tells server.py whether this tab is actually being looked at (visible
+    // and focused). While no tab is, Freya mirrors her replies and cards onto
+    // desktop popups in the bottom-right corner instead.
+    const reportVisibility = useCallback(() => {
+        const watching = document.visibilityState === "visible" && document.hasFocus();
+        if (ws.current?.readyState === WebSocket.OPEN) {
+            ws.current.send(JSON.stringify({ type: "dashboard_visibility", watching }));
+        }
+    }, []);
+    useEffect(() => {
+        const events = ["visibilitychange", "focus", "blur"] as const;
+        const target = (e: string) => (e === "visibilitychange" ? document : window);
+        events.forEach((e) => target(e).addEventListener(e, reportVisibility));
+        return () => events.forEach((e) => target(e).removeEventListener(e, reportVisibility));
+    }, [reportVisibility]);
+
     // ── WebSocket connection ──
     useEffect(() => {
         let disposed = false;
@@ -207,22 +331,42 @@ export function useFreyaSocketConnection() {
 
             socket.onopen = () => {
                 setConnected(true);
-                console.log("Freya WebSocket connected");
+                reportVisibility();
+                setLinkStats((p) => ({ ...p, socketOpenedAt: Date.now(), reconnectAttempts: 0, connects: p.connects + 1 }));
+                console.log("Freyja WebSocket connected");
                 // The socket coming up is the signal that the REST endpoints are
                 // live too — pull the config that failed while it was down.
                 loadConfigRef.current();
             };
 
-            socket.onclose = () => {
+            socket.onclose = (ev) => {
                 setConnected(false);
-                console.log("Freya backend offline (is server.py running?) — retrying in 2s...");
+                setLinkStats((p) => ({
+                    ...p,
+                    socketOpenedAt: null,
+                    reconnectAttempts: p.reconnectAttempts + 1,
+                    lastClose: { code: ev.code, reason: ev.reason, at: Date.now() },
+                }));
+                if (!disposed) {
+                    const meaning = CLOSE_CODES[ev.code] ?? "Unknown close code";
+                    pushLinkError("socket",
+                        `ws://localhost:8000/ws closed: code ${ev.code} (${meaning})${ev.reason ? `, reason "${ev.reason}"` : ""}. Retrying every 2 s`,
+                        ev.code === 1013
+                            ? "The tab fell behind the server's broadcast queue, often because the tab was in the background or busy."
+                            : ev.code === 1006
+                                ? "Check that server.py is running and nothing else is using port 8000."
+                                : undefined);
+                }
+                console.log("Freyja backend offline (is server.py running?) — retrying in 2s...");
                 reconnectTimer = setTimeout(connect, 2000); // auto-reconnect
             };
 
             // Expected while the backend is down (we retry via onclose) —
             // console.warn keeps it out of the Next.js dev-overlay issue count.
             socket.onerror = () => {
-                console.warn("Freya WebSocket connection failed — will retry.");
+                console.warn("Freyja WebSocket connection failed — will retry.");
+                pushLinkError("socket", "WebSocket handshake to ws://localhost:8000/ws failed",
+                    "The browser couldn't open the socket. Usually the backend is down or still starting.");
             };
 
             const flushFreyaBuffer = () => {
@@ -243,6 +387,8 @@ export function useFreyaSocketConnection() {
             };
 
             socket.onmessage = (event) => {
+                msgCounter.current.n++;
+                msgCounter.current.last = Date.now();
                 // A malformed frame used to throw straight out of onmessage
                 // (uncaught, and it aborted processing that message). Guard the
                 // parse so a bad frame is logged and skipped; the socket lives on.
@@ -259,7 +405,7 @@ export function useFreyaSocketConnection() {
                         return;
                     }
                 } catch {
-                    console.warn("Freya: dropped an unparseable WebSocket frame.");
+                    console.warn("Freyja: dropped an unparseable WebSocket frame.");
                     return;
                 }
                 if (!msg || typeof msg !== "object") return;
@@ -279,6 +425,12 @@ export function useFreyaSocketConnection() {
                     freyaBuffer.current += " " + msg.text;
                     setLiveText(freyaBuffer.current.trim());
                 } else if (msg.type === "transcript") {
+                    if (typeof msg.text === "string" && /^\[(SESSION ERROR|Connection lost)/.test(msg.text)) {
+                        pushLinkError("session", `Gemini Live: ${msg.text.replace(/^\[|\]$/g, "")}`,
+                            msg.text.startsWith("[SESSION ERROR")
+                                ? "The voice session gave up reconnecting. Check the API key, quota and network, then press Start again."
+                                : "The Gemini Live connection dropped and is reconnecting. See the server.py log for the exception.");
+                    }
                     if (msg.speaker === "User") {
                         // User's turn captured → commit Freya's line + clear caption
                         flushFreyaBuffer();
@@ -404,6 +556,10 @@ export function useFreyaSocketConnection() {
                         const { event: _event, ...action } = p;
                         setApprovals((prev) =>
                             prev.some((a) => a.id === action.id) ? prev : [...prev, action]
+                        );
+                    } else if (p.event === "assessed") {
+                        setApprovals((prev) =>
+                            prev.map((a) => (a.id === p.id ? { ...a, risk: p.risk } : a))
                         );
                     } else {
                         setApprovals((prev) => prev.filter((a) => a.id !== p.id));
@@ -538,6 +694,10 @@ export function useFreyaSocketConnection() {
         // State
         state,
         connected,
+        linkErrors,
+        linkStats,
+        pingMs,
+        clearLinkErrors,
         transcript,
         liveText,
         toolLog,

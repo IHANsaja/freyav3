@@ -12,24 +12,36 @@ interface SkillEntry {
     tools: string[];
 }
 
+async function fetchSkills(): Promise<SkillEntry[] | null> {
+    try {
+        const res = await fetch("http://localhost:8000/skills");
+        const data = await res.json();
+        return data.skills ?? [];
+    } catch (e) {
+        console.error("skills load failed", e);
+        return null;
+    }
+}
+
 /** Skill catalog: every capability module, its tools, and enable toggles. */
 export default function SkillsPanel() {
     const [skills, setSkills] = useState<SkillEntry[]>([]);
     const [note, setNote] = useState("");
 
     const load = useCallback(async () => {
-        try {
-            const res = await fetch("http://localhost:8000/skills");
-            const data = await res.json();
-            setSkills(data.skills ?? []);
-        } catch (e) {
-            console.error("skills load failed", e);
-        }
+        const next = await fetchSkills();
+        if (next) setSkills(next);
     }, []);
 
     useEffect(() => {
-        load();
-    }, [load]);
+        let cancelled = false;
+        fetchSkills().then((next) => {
+            if (next && !cancelled) setSkills(next);
+        });
+        return () => {
+            cancelled = true;
+        };
+    }, []);
 
     const toggle = async (id: string) => {
         const res = await fetch(`http://localhost:8000/skills/${id}/toggle`, { method: "POST" });

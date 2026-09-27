@@ -66,7 +66,7 @@ def error_payload(exc: BaseException, *, code: str = "internal_error") -> dict:
     so the frontend can rely on it.
     """
     user_facing = isinstance(exc, UserFacingError)
-    message = str(exc) if user_facing else "Something went wrong on Freya's side."
+    message = str(exc) if user_facing else "Something went wrong on Freyja's side."
     payload = {"error": True, "code": "user_error" if user_facing else code, "message": message}
     if DEBUG and not user_facing:
         payload["detail"] = f"{type(exc).__name__}: {exc}"

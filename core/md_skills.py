@@ -36,6 +36,8 @@ config `skills.paths`), so users can add capabilities without touching Python.
 
 import os
 import subprocess
+
+from core.proc import run as run_killable  # tree-kill on timeout
 import sys
 
 from core.registry import tool, OBJ, P, STR, ARR
@@ -234,8 +236,7 @@ def run_skill_script(args, ctx) -> str:
     cmd += [str(a) for a in (args.get("args") or [])]
 
     try:
-        proc = subprocess.run(cmd, capture_output=True, text=True,
-                              timeout=SCRIPT_TIMEOUT, cwd=skill["path"])
+        proc = run_killable(cmd, timeout=SCRIPT_TIMEOUT, cwd=skill["path"])
     except subprocess.TimeoutExpired:
         return f"{script} was still running after {SCRIPT_TIMEOUT // 60} minutes, so I stopped it."
     except Exception as e:

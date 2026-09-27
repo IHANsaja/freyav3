@@ -140,6 +140,12 @@ def _tokens(text: str) -> list[str]:
     return [t for t in re.split(r"[\s\-_.,/\\]+", text.lower()) if t]
 
 
+def _squash(text: str) -> str:
+    """Lower-case with separators removed, so "fullstack" matches
+    "Full Stack Developer.pdf" and "full stack" matches "FullStack_CV.pdf"."""
+    return re.sub(r"[\s\-_.,]+", "", text.lower())
+
+
 def lookup(query: str, kind: str | None = None, limit: int = 12) -> list[dict]:
     """Search the index, ranked by what the person probably meant.
 
@@ -158,6 +164,10 @@ def lookup(query: str, kind: str | None = None, limit: int = 12) -> list[dict]:
         params: list = []
         for t in toks:
             params += [f"%{t}%", f"%{t}%"]
+        # Separator-blind match on the name as a whole ("fullstack" ↔ "Full Stack").
+        where += (" OR REPLACE(REPLACE(REPLACE(REPLACE(LOWER(name), ' ', ''), '_', ''), "
+                  "'-', ''), '.', '') LIKE ?")
+        params.append(f"%{_squash(q)}%")
         sql = f"SELECT kind, name, path, detail FROM entries WHERE ({where})"
         if kind:
             sql += " AND kind = ?"
@@ -192,6 +202,8 @@ def lookup(query: str, kind: str | None = None, limit: int = 12) -> list[dict]:
             quality = 2                       # every token present in the name
         elif toks and set(toks) <= name_toks:
             quality = 2
+        elif _squash(q) in _squash(name):
+            quality = 2                       # same words, different spacing
         elif matched:
             quality = 3                       # some tokens
         elif matched_path == len(toks):
@@ -203,7 +215,10 @@ def lookup(query: str, kind: str | None = None, limit: int = 12) -> list[dict]:
         # project called "myApp" ahead of the actual file "My CV ihan.docx",
         # because being an app/project outranked being the thing he named.
         # Kind now only breaks ties between equally good name matches.
-        score = (quality, _KIND_RANK.get(k, 3), len(name))
+        # More of his words beats a shorter name: with length as the only
+        # tie-break, "Freya Constitution v2" kept freya_memory.db (1 word) and
+        # cut the actual Constitution files (2 words) from the candidate list.
+        score = (quality, -max(matched, matched_path), _KIND_RANK.get(k, 3), len(name))
         scored.append((score, {"kind": k, "name": name, "path": path,
                                "detail": detail, "score": score}))
 
@@ -241,7 +256,7 @@ def best_match(query: str, kind: str | None = None) -> dict | None:
     top, second = hits[0]["score"], hits[1]["score"]
     # Compare quality and kind only — a name being two characters shorter is
     # not a reason to claim certainty.
-    if top[:2] < second[:2]:
+    if top[:3] < second[:3]:          # quality, words matched, kind
         return hits[0]
 
     if _same_thing(hits[0], hits[1]):
@@ -603,7 +618,7 @@ def ensure_index(config: dict | None = None) -> None:
 #  LIVE SEARCH (the "give me a minute" path)
 # ══════════════════════════════════════════════
 def live_search(query: str, kinds: tuple[str, ...] = (), limit: int = 10,
-                budget: float = 25.0) -> list[dict]:
+                budget: float = 25.0, slack: int = 0) -> list[dict]:
     """Search the disk right now for something the index doesn't know.
 
     Deliberately narrow and time-boxed: user folders and data drives, name
@@ -636,7 +651,11 @@ def live_search(query: str, kinds: tuple[str, ...] = (), limit: int = 10,
             dirs[:] = [d for d in dirs if d not in _SKIP_DIRS]
             for entry in dirs + files:
                 low = entry.lower()
-                if not all(t in low for t in toks):
+                squashed = _squash(entry)
+                hits_in_name = sum(1 for t in toks if t in low or t in squashed)
+                # `slack` lets a wrong or extra word through ("Constitution v2"
+                # for "CONSTITUTION v1.2.pdf"); ranking puts full matches first.
+                if hits_in_name < len(toks) - slack and _squash(q) not in squashed:
                     continue
                 full = os.path.join(dirpath, entry)
                 if full in seen:
@@ -674,12 +693,71 @@ def _safe_listdir(path: str) -> list[str]:
 # ══════════════════════════════════════════════
 #  TOOLS
 # ══════════════════════════════════════════════
+_FILE_KINDS = ("document", "media", "file")
+
+
+def _documents_answer(what: str, indexed: list[dict]) -> str:
+    """Documents come in versions, so there is no single "that's the one": a
+    confident single answer handed back last year's resume.pdf after the user
+    had just said it wasn't the latest. List the matches newest first, with
+    dates, and let the conversation decide.
+    """
+    good = [r for r in indexed if r["kind"] in _FILE_KINDS and r.get("score", (9,))[0] <= 3]
+    # The index is refreshed weekly and time-boxed; a file saved last month may
+    # not be in it. Top up from the disk when the index is thin.
+    if len([r for r in good if r["score"][0] <= 2]) < 3:
+        slack = 1 if len(_tokens(what)) >= 3 else 0
+        good += [r for r in live_search(what, limit=15, slack=slack) if r["kind"] in _FILE_KINDS]
+
+    found: dict[str, float] = {}
+    names: dict[str, str] = {}
+    for r in good:
+        path = r["path"]
+        if path in found:
+            continue
+        # Live-search hits are any file; a document answer is documents/media
+        # only — never freya_memory.db or an installer.
+        if os.path.splitext(path)[1].lower() not in _DOC_EXTS | _MEDIA_EXTS:
+            continue
+        try:
+            found[path] = os.path.getmtime(path)
+            names[path] = r["name"]
+        except OSError:
+            continue            # indexed once, gone now
+    if not found:
+        return (f"No document on this PC is named like '{what}'. Ask the user what the file "
+                f"is called — or search again with the words he'd have used in its name.")
+
+    # Rank by how many of his words the file name contains, then newest. Pure
+    # newest-first let a partial match win: "Freya Constitution" returned
+    # freya_memory.db (one word) above the real PDF (both words), which then
+    # fell off the list entirely.
+    toks = _tokens(what)
+
+    def matched(path: str) -> int:
+        fname = os.path.basename(path).lower()
+        return sum(1 for t in toks if t in fname or t in _squash(fname))
+
+    best = max((matched(p) for p in found), default=0)
+    strong = [p for p in found if matched(p) >= best]
+    if len(strong) < 3:                    # room for the next tier as context
+        strong += [p for p in found if matched(p) == best - 1 and best > 1]
+    ranked = sorted(strong, key=lambda p: (-matched(p), -found[p]))[:5]
+    lines = [f"{time.strftime('%Y-%m-%d', time.localtime(found[p]))}  {p}" for p in ranked]
+    return (f"Files matching '{what}' — closest name match first, newest first among equals "
+            f"(modified date, path):\n" + "\n".join(lines) +
+            "\nIf he wants the latest of equally good matches, take the newest. If he already "
+            "turned one of these down, don't offer it again — search with the words he used.")
+
+
 @tool(
     "find_on_pc",
-    "Find where an app, project, document or folder lives on this PC. ALWAYS use this before "
-    "asking him where something is. A live disk search takes seconds — say 'give me a second' "
-    "first. Only ask him if this finds nothing.",
-    OBJ({"what": P(STR, "What you're looking for, e.g. 'my CV', 'freyav3', 'valorant'"),
+    "Find where an app, project, document or folder lives on this PC — searches every drive. "
+    "ALWAYS use this before asking him where something is, and use HIS words for the name: "
+    "if he says it's called something like 'full stack developer', search that, not 'resume'. "
+    "Documents come back newest first with dates. A live disk search takes seconds — say "
+    "'give me a second' first. Only ask him if this finds nothing.",
+    OBJ({"what": P(STR, "Words from the name, e.g. 'full stack developer', 'my CV', 'freyav3', 'valorant'"),
          "kind": P(STR, "Optional filter: app, project, document, folder, media")},
         ["what"]),
 )
@@ -689,7 +767,10 @@ def find_on_pc(args, ctx) -> str:
         return "What am I looking for?"
     kind = (args.get("kind") or "").strip().lower() or None
 
-    results = lookup(what, kind)
+    # Documents come in versions and copies; give the ranking more to work with.
+    results = lookup(what, kind, limit=30 if kind in _FILE_KINDS else 12)
+    if kind in _FILE_KINDS or (results and results[0]["kind"] in _FILE_KINDS):
+        return _documents_answer(what, results)
     if not results:
         results = [r for r in live_search(what) if not kind or r["kind"] == kind]
 

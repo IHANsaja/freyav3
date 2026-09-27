@@ -13,6 +13,7 @@ keeps a rolling activity log, and fires *suggestions* from pure heuristics:
 
 On a trigger it makes ONE cheap text-model call to phrase a one-line suggestion,
 published as a `suggestion` event (dashboard chip). Voice only if configured.
+With System One on, Jev first judges whether the nudge is welcome at all.
 Vision happens only if the user *accepts* a suggestion. Rate limits: per-kind
 cooldowns that back off 2x each time a suggestion is dismissed, a global hourly
 cap, quiet hours, and a hard mute while listening is paused.
@@ -146,6 +147,7 @@ class ContextTracker:
         self._fired_this_hour: deque[float] = deque(maxlen=_GLOBAL_CAP_PER_HOUR)
         self._suggestions: dict[str, dict] = {}
         self._stuck_fired_for: str = ""
+        self._outcomes: deque[str] = deque(maxlen=8)  # "kind: accepted|dismissed"
 
     # ── Lifecycle (mirrors Scheduler.attach/detach) ────────────────────────
 
@@ -290,6 +292,8 @@ class ContextTracker:
         self._cooldowns[kind] = time.time() + self._cooldown_len[kind]
         self._fired_this_hour.append(time.time())
 
+        if not await self._welcome(kind, situation):
+            return
         text = await self._draft(kind, situation)
         if not text:
             return
@@ -304,6 +308,35 @@ class ContextTracker:
             await runtime.inject(
                 f"[Proactive nudge, keep it to one casual sentence]: {text}", priority="low")
 
+    async def _welcome(self, kind: str, situation: str) -> bool:
+        """Jev's read on whether this nudge would help or just interrupt.
+
+        The heuristics fire on shape alone — ten minutes in one window is
+        "stuck" whether he is lost or in deep flow. Jev weighs the actual app,
+        title and what he has recently dismissed. True when Jev is off, so the
+        heuristics behave exactly as before.
+        """
+        from core import systemone
+        if not systemone.enabled(self._config, "nudge_gate"):
+            return True
+        recent = [f"{s.app}: {s.title[:80]}" for s in list(self._history)[-5:]]
+        p = await systemone.noul(
+            {"trigger": kind, "observation": situation, "recent_windows": recent,
+             "recent_suggestion_outcomes": list(self._outcomes),
+             "local_time": datetime.now().strftime("%a %H:%M")},
+            "Would a short, offer-to-help suggestion be welcome right now, rather "
+            "than an interruption?",
+            self._config, "nudge_gate",
+            criteria={"true": "He likely needs or would appreciate help at this moment",
+                      "false": "He is in flow, entertained, or has been turning these down"},
+        )
+        if p is None:
+            return True
+        keep = p >= float(systemone.setting(self._config, "nudge_gate", "min_probability", 0.5))
+        if not keep:
+            print(f"  [context] {kind} nudge skipped (jev p={p:.2f})")
+        return keep
+
     async def _draft(self, kind: str, situation: str) -> str:
         """One cheap text call to phrase the suggestion. No screenshots."""
         try:
@@ -315,7 +348,7 @@ class ContextTracker:
             resp = await generate(client,
                 model=self._cfg().get("draft_model", "gemini-3.5-flash-lite"),
                 contents=(
-                    "You are Freya, a proactive assistant. Based on this observation, write ONE "
+                    "You are Freyja, a proactive assistant. Based on this observation, write ONE "
                     "short, casual, genuinely useful suggestion to the user (max 15 words). Offer help, "
                     "don't nag. No emoji, no preamble.\n"
                     f"OBSERVATION ({kind}): {situation}"
@@ -348,6 +381,7 @@ class ContextTracker:
             )
         else:
             self._cooldown_len[kind] = min(self._cooldown_len.get(kind, 1800) * 2, 8 * 3600)
+        self._outcomes.append(f"{kind}: {'accepted' if accepted else 'dismissed'}")
 
 
 tracker = ContextTracker()
@@ -389,7 +423,7 @@ def get_active_window(args, ctx) -> str:
 
 @tool(
     "enable_context_awareness",
-    "Turn on always-on context awareness: Freya quietly tracks the active window and "
+    "Turn on always-on context awareness: Freyja quietly tracks the active window and "
     "offers occasional proactive suggestions (never screenshots without asking).",
 )
 async def enable_context_awareness(args, ctx) -> str:

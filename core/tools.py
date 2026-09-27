@@ -1,4 +1,6 @@
+import re
 import subprocess
+from core import proc
 import webbrowser
 import os
 import time
@@ -29,6 +31,39 @@ APP_PROCESS_MAP = {
 }
 
 
+def _close_by_process_name(name: str) -> str:
+    """Close an app the map doesn't know ("code", "blender") by its process name.
+
+    Politely — WM_CLOSE to its windows, like clicking X — rather than the map's
+    TASKKILL /F, since an unknown app may be holding unsaved work.
+    """
+    try:
+        import psutil
+        import win32con
+        import win32gui
+        import win32process
+    except ImportError as e:
+        return f"I can't look up running programs here ({e})."
+    want = re.sub(r"[\s\-_]+", "", name)
+    pids = {p.pid for p in psutil.process_iter(["name"])
+            if (p.info["name"] or "").lower().removesuffix(".exe") == want}
+    if not pids:
+        return f"Nothing called '{name}' is running."
+    closed = []
+
+    def visit(hwnd, _):
+        if win32gui.IsWindowVisible(hwnd) and win32gui.GetWindowText(hwnd):
+            _, pid = win32process.GetWindowThreadProcessId(hwnd)
+            if pid in pids:
+                win32gui.PostMessage(hwnd, win32con.WM_CLOSE, 0, 0)
+                closed.append(win32gui.GetWindowText(hwnd))
+    win32gui.EnumWindows(visit, None)
+    if not closed:
+        return f"{name} is running but has no window to close."
+    return (f"Asked {len(closed)} {name} window(s) to close ({'; '.join(closed[:3])}). "
+            "If there's unsaved work it will ask first.")
+
+
 # ══════════════════════════════════════════════
 #  1. OPEN APP
 # ══════════════════════════════════════════════
@@ -56,10 +91,10 @@ def open_app(name: str, config: dict) -> str:
 def close_app(name: str) -> str:
     """Kill an application process by name."""
     name = name.lower().strip()
-    processes = APP_PROCESS_MAP.get(name)
+    processes = APP_PROCESS_MAP.get(name) or APP_PROCESS_MAP.get(re.sub(r"[\s\-_]+", "", name))
 
     if not processes:
-        return f"I don't know the process name for {name}."
+        return _close_by_process_name(name)
 
     try:
         for proc in processes:
@@ -187,7 +222,7 @@ def set_reminder(message: str, minutes: int) -> str:
         # Windows toast notification as backup
         subprocess.Popen(
             f'powershell -Command "Add-Type -AssemblyName System.Windows.Forms; '
-            f'[System.Windows.Forms.MessageBox]::Show(\'{message}\', \'Freya Reminder\')"',
+            f'[System.Windows.Forms.MessageBox]::Show(\'{message}\', \'Freyja Reminder\')"',
             shell=True
         )
 
@@ -270,13 +305,8 @@ def run_terminal_command(command: str) -> str:
             return f"I won't run that command for safety reasons: {command}"
 
     try:
-        result = subprocess.run(
-            command,
-            shell=True,
-            capture_output=True,
-            text=True,
-            timeout=15
-        )
+        # core.proc: a piped command that times out would otherwise hang forever.
+        result = proc.run(command, timeout=15, shell=True)
         output = result.stdout.strip() or result.stderr.strip()
         if result.returncode:
             return f"Command failed (exit {result.returncode}): {output[:2000]}"
@@ -419,7 +449,7 @@ def switch_mode(mode: str) -> str:
         config = load_config()
     except Exception:
         config_path = os.path.join(os.path.dirname(__file__), '..', 'config', 'freya_config.json')
-        with open(config_path, 'r') as f:
+        with open(config_path, 'r', encoding='utf-8') as f:
             config = json.load(f)
             
     valid_modes = list(config.get("modes", {}).keys())
@@ -433,11 +463,13 @@ def switch_mode(mode: str) -> str:
         return f"Already in {mode} mode. Continue the current task."
     config_path = os.path.join(os.path.dirname(__file__), '..', 'config', 'freya_config.json')
     try:
-        with open(config_path, 'r') as f:
+        # Explicit UTF-8: the Windows default (cp1252) can't read the
+        # config's non-ASCII personality text.
+        with open(config_path, 'r', encoding='utf-8') as f:
             raw_config = json.load(f)
         raw_config['active_mode'] = mode
-        with open(config_path, 'w') as f:
-            json.dump(raw_config, f, indent=2)
+        with open(config_path, 'w', encoding='utf-8') as f:
+            json.dump(raw_config, f, indent=2, ensure_ascii=False)
         return f"MODE_SWITCHED:{mode}"
     except Exception as e:
         return f"Mode switch failed: {str(e)}"

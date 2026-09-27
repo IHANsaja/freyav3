@@ -28,9 +28,20 @@ def announce(text: str):
             await asyncio.wait_for(inject(text), 30)
         except (asyncio.TimeoutError, asyncio.CancelledError):
             pass
-    task = asyncio.create_task(deliver())
-    _announcements.add(task)
-    task.add_done_callback(_announcements.discard)
+
+    # Announcements are tracked so `clear_channels` can cancel them, and a Task
+    # may only be cancelled from its own loop. Callers are now background
+    # missions and sub-agents, so the task is always created on the main loop.
+    from core import background
+
+    async def _track():
+        task = asyncio.current_task()
+        if task is not None:
+            _announcements.add(task)
+            task.add_done_callback(_announcements.discard)
+        await deliver()
+
+    background.call_on_main(_track())
 
 _inject_fn = None
 _emit_fn = None
@@ -119,6 +130,12 @@ def set_channels(inject_fn, emit_fn):
     global _inject_fn, _emit_fn
     _inject_fn = inject_fn
     _emit_fn = emit_fn
+    # Whoever registers the channels owns the live session, so this is the loop
+    # every background power has to come back to in order to speak. Missions and
+    # sub-agents now run on their own loop (core/background.py) and would
+    # otherwise touch `session` and the inject lock from the wrong thread.
+    from core import background
+    background.set_main_loop()
 
 
 def clear_channels():
@@ -158,8 +175,12 @@ async def inject(text: str, priority: str = "normal"):
         print(f"  [runtime] mid-conversation — dropped nudge: {text[:70]}")
         return
 
+    # `_inject_fn` is FreyaModel._inject_text: it touches the live session and an
+    # asyncio.Lock created on the main loop, so it must run there even when the
+    # caller is a mission or sub-agent on the background loop.
+    from core import background
     try:
-        await _inject_fn(text)
+        await background.on_main(_inject_fn(text))
     except Exception as e:
         print(f"  [runtime] inject failed: {e}")
 

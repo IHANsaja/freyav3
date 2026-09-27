@@ -36,7 +36,7 @@ export default function MissionStatusCard({ mission }: { mission?: MissionPayloa
     <HudCard title="Mission Status">
       {!mission ? (
         <p className="text-[11px] leading-relaxed" style={{ color: "var(--text-tertiary)" }}>
-          No mission running. Give Freya a big multi-step goal and the plan,
+          No mission running. Give Freyja a big multi-step goal and the plan,
           progress and verification land here.
         </p>
       ) : (

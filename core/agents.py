@@ -36,7 +36,7 @@ DEFAULT_AGENTS = {
     "researcher": {
         "model": "gemini-3.5-flash",
         "system": (
-            "You are Freya's research sub-agent. Investigate the task properly — do not answer "
+            "You are Freyja's research sub-agent. Investigate the task properly — do not answer "
             "from what you already know.\n"
             "For straightforward read-only research, use web_search and web_fetch first. Use the browser only when interaction or JavaScript is required. Browser capability: `browser_research` searches DuckDuckGo, "
             "opens the actual pages and reads them, then hands you the findings. `web_search` is the quick path for a single fact or "
@@ -56,7 +56,7 @@ DEFAULT_AGENTS = {
     "coder": {
         "model": "gemini-3.5-flash",
         "system": (
-            "You are Freya's coding sub-agent. Complete the engineering task end to end: read the "
+            "You are Freyja's coding sub-agent. Complete the engineering task end to end: read the "
             "relevant files, make the change, run code/tests to verify. Be precise. Finish with a "
             "one-paragraph plain-English summary of what you changed and whether it worked."
         ),
@@ -66,7 +66,7 @@ DEFAULT_AGENTS = {
     "operator": {
         "model": "gemini-3.5-flash",
         "system": (
-            "You are Freya's desktop-operator sub-agent. Drive the Windows GUI through the "
+            "You are Freyja's desktop-operator sub-agent. Drive the Windows GUI through the "
             "accessibility API — never guess coordinates. Workflow: focus_window to bring the "
             "target app forward; read_screen_elements or find_element to see the real controls; "
             "then control_element (click/type/toggle/select/expand) — it returns the result so "
@@ -80,7 +80,7 @@ DEFAULT_AGENTS = {
 
 DEFAULT_AGENTS["cli"] = {
     "model": "gemini-3.5-flash",
-    "system": "You are Freya's local command-line agent. Complete authorized tasks using terminal commands, direct file readers and APIs. Inspect first, act, then verify actual exit status and artifacts. Follow the existing safety and approval gates. Do not use GUI or screenshots as a shortcut. Report missing CLI capabilities honestly.",
+    "system": "You are Freyja's local command-line agent. Complete authorized tasks using terminal commands, direct file readers and APIs. Inspect first, act, then verify actual exit status and artifacts. Follow the existing safety and approval gates. Do not use GUI or screenshots as a shortcut. Report missing CLI capabilities honestly.",
     "tools": ["run_terminal_command", "run_code", "read_file", "read_document", "ocr_document", "write_file", "edit_file", "find_on_pc", "list_dir", "search_files", "web_search", "web_fetch"],
 }
 
@@ -109,7 +109,7 @@ def _declarations(spec: dict, config: dict):
     from core.registry import _REGISTRY
     if "run_terminal_command" in allowed and "run_terminal_command" not in _REGISTRY:
         decls.append(types.FunctionDeclaration(name="run_terminal_command",
-            description="Run a shell command through Freya's safety and approval gate.",
+            description="Run a shell command through Freyja's safety and approval gate.",
             parameters=OBJ({"command": P(STR)}, ["command"])))
     # A name in an agent's tool list that the registry can't supply is silently
     # dropped, and the agent then fails at a task it was configured to do with
@@ -161,11 +161,14 @@ async def react_loop(system: str, task: str, tool_names: list[str], model: str,
                 args = dict(fc.args or {})
                 if fc.name not in allowed:
                     raise ExecutionError(f"Tool unavailable to this agent: {fc.name}")
-                call = registry_dispatch(fc.name, args, ctx)
-                owner = getattr(ctx, "owner_loop", None)
-                if owner is not None and owner is not asyncio.get_running_loop():
-                    call = asyncio.wrap_future(asyncio.run_coroutine_threadsafe(call, owner))
-                result = await bounded(call,
+                # Dispatch stays on THIS loop. It used to be marshalled onto the
+                # live session's loop via `ctx.owner_loop`, which undid the
+                # thread isolation below: the agent's thread only ever held the
+                # Gemini calls, while every tool — browser, screen, file scan —
+                # ran on the voice loop and the user could not talk to her.
+                # The session-bound pieces (speech, dashboard events, approval
+                # futures) marshal themselves now, in core/background.py.
+                result = await bounded(registry_dispatch(fc.name, args, ctx),
                     (config or {}).get("missions", {}).get("tool_timeout_s", 180))
                 if str(result).lower().startswith(("command failed", "command timed out", "tool error", "unknown tool", "mcp call failed")):
                     raise ExecutionError(f"{fc.name} failed; inspect tool output before retrying")
@@ -191,11 +194,14 @@ def quota_hit(e: Exception) -> bool:
 
 def _emit_threadsafe(main_loop: asyncio.AbstractEventLoop, coro):
     """Marshal an async runtime call from the worker thread back onto the live
-    session's loop. Fire-and-forget — the worker never blocks on the result."""
-    try:
-        asyncio.run_coroutine_threadsafe(coro, main_loop)
-    except Exception as e:
-        print(f"  [agents] cross-loop emit failed: {e}")
+    session's loop. Fire-and-forget — the worker never blocks on the result.
+
+    `main_loop` is kept for call-site compatibility; the destination is resolved
+    centrally now so it stays correct across reconnects, when the live session
+    gets a new loop but the agent thread is still holding the old one.
+    """
+    from core import background
+    background.call_on_main(coro)
 
 
 def _run_agent_thread(job_id: str, agent_type: str, task: str, config: dict,
@@ -219,7 +225,6 @@ def _run_agent_thread(job_id: str, agent_type: str, task: str, config: dict,
     already uses, and for exactly the same reason.
     """
     ctx = ToolContext(config, session=None, source=f"agent:{job_id}")
-    ctx.owner_loop = main_loop
 
     async def _do_run():
         spec = _spec(agent_type, config)

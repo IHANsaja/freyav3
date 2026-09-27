@@ -27,7 +27,7 @@ const rajdhani = Rajdhani({
 });
 
 export const metadata: Metadata = {
-  title: "F.R.E.Y.A V3.0 — Archival System",
+  title: "FREYJA V3.0 — Archival System",
   description: "Crimson command core online. Neural pathways synchronized for directive input.",
 };
 

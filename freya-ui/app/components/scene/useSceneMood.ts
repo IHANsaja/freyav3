@@ -1,11 +1,12 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useRef } from "react";
 import { useFrame } from "@react-three/fiber";
 import * as THREE from "three";
 import type { AvatarIntent } from "../../hooks/useFreyaSocket";
 import type { PersonaPayload } from "../../types/events";
 import { ExpressionAccent } from "../avatar/manifest";
+import { useAvatarOverlay } from "./useAvatarOverlay";
 
 export type VisualState = "idle" | "listening" | "speaking" | "interrupted" | "thinking" | "working";
 
@@ -53,28 +54,7 @@ export function useSceneMood(
     color: new THREE.Color("#0f9c6e"),
   });
 
-  const [dancing, setDancing] = useState(false);
-  const [override, setOverride] = useState<VisualState | null>(null);
-
-  useEffect(() => {
-    if (!avatarIntent) return;
-    if (avatarIntent.intent === "state") {
-      if (avatarIntent.name === "dance") {
-        setDancing(true);
-        const timer = setTimeout(() => setDancing(false), avatarIntent.durationMs ?? 10000);
-        return () => clearTimeout(timer);
-      }
-      if (avatarIntent.name === "thinking" || avatarIntent.name === "working") {
-        setOverride(avatarIntent.name as VisualState);
-      } else {
-        setOverride(null);
-      }
-    }
-  }, [avatarIntent]);
-
-  useEffect(() => {
-    if (state === "speaking" || state === "interrupted") setOverride(null);
-  }, [state]);
+  const { dancing, override } = useAvatarOverlay(state, avatarIntent);
 
   const sessionVisual: VisualState =
     state === "listening" || state === "speaking" || state === "interrupted" || state === "thinking" ? (state as VisualState) : "idle";

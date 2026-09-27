@@ -30,7 +30,7 @@ export default function ModeTabs({ modes, activeMode, connected, onSelect }: Mod
   };
 
   return (
-    <div className="flex items-center justify-center gap-2 flex-wrap" role="tablist" aria-label="Freya mode">
+    <div className="flex items-center justify-center gap-2 flex-wrap" role="tablist" aria-label="Freyja mode">
       {Object.entries(modes).map(([id, m]) => {
         const active = activeMode === id;
         return (

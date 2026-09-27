@@ -154,7 +154,7 @@ export default function PortraitCard({ state, avatarIntent, engine, onExpression
             className="text-lg font-bold tracking-[0.12em]"
             style={{ fontFamily: "var(--font-display)", color: "var(--text-primary)" }}
           >
-            F.R.E.Y.A
+            FREYJA
           </p>
           <p className="text-[8px] tracking-[0.18em] uppercase mt-0.5" style={{ color: "var(--text-secondary)", fontFamily: "var(--font-ui)" }}>
             Field Response &amp; Exploration Analytic

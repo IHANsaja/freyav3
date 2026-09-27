@@ -71,7 +71,7 @@ export default function ActionButtons({ isRunning, micPaused, connected, onToggl
     <div className="flex items-center justify-center gap-4">
       <Magnetic
         onClick={onToggleRun}
-        ariaLabel={isRunning ? "Stop Freya" : "Start Freya"}
+        ariaLabel={isRunning ? "Stop Freyja" : "Start Freyja"}
         disabled={!connected}
         className="group px-9 py-3.5 rounded-full text-xs font-bold tracking-[0.2em] uppercase"
         style={{
@@ -88,7 +88,7 @@ export default function ActionButtons({ isRunning, micPaused, connected, onToggl
             <circle cx="8" cy="8" r="1.6" fill="currentColor" stroke="none" />
             <path d="M8 1v2.2 M8 12.8V15 M1 8h2.2 M12.8 8H15" />
           </svg>
-          {isRunning ? "STOP FREYA" : "START FREYA"}
+          {isRunning ? "STOP FREYJA" : "START FREYJA"}
         </span>
       </Magnetic>
 

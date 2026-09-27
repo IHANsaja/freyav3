@@ -213,6 +213,9 @@ memory/freya_memory.db-shm
 # A memory export — plain-text personal profile and session history.
 memory/freya_memory.imported.md
 
+# Scheduled reminders — what he asked to be reminded about, and when.
+memory/schedule.json
+
 # Vector embeddings of the same memory (core/rag_memory.py).
 memory/rag_db/
 

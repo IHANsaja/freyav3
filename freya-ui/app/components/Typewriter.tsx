@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 
 interface TypewriterProps {
-  text: string;          // target text (may keep growing as Freya streams)
+  text: string;          // target text (may keep growing as Freyja streams)
   className?: string;
   charsPerTick?: number; // how many chars to reveal per frame
   tickMs?: number;       // frame interval

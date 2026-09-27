@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState } from "react";
 import { AudioDevice, FreyaConfig, FreyaState } from "../hooks/useFreyaSocket";
 import AccessControlPanel from "./AccessControlPanel";
 import MemoryPanel from "./MemoryPanel";
@@ -34,14 +34,21 @@ export default function SettingsModal({
   const [localModel, setLocalModel] = useState("");
   const [localVoice, setLocalVoice] = useState("");
   const [localInputDevice, setLocalInputDevice] = useState<number | "">("");
+  const [localOutputDevice, setLocalOutputDevice] = useState<number | "">("");
   const [saving, setSaving] = useState(false);
 
-  // Sync state when props load or change
-  useEffect(() => {
-    if (config?.active_model) setLocalModel(config.active_model);
-    if (config?.active_voice) setLocalVoice(config.active_voice);
-    if (config?.input_device_index != null) setLocalInputDevice(config.input_device_index);
-  }, [config]);
+  // Reset the drafts from config whenever it changes or the modal opens, so
+  // DISCARD really discards. Done during render (React's "adjusting state when
+  // a prop changes" pattern) rather than in an effect, which would render the
+  // stale drafts first.
+  const [syncedFrom, setSyncedFrom] = useState<{ config: FreyaConfig | null; isOpen: boolean } | null>(null);
+  if (syncedFrom?.config !== config || syncedFrom?.isOpen !== isOpen) {
+    setSyncedFrom({ config, isOpen });
+    setLocalModel(config?.active_model ?? "");
+    setLocalVoice(config?.active_voice ?? "");
+    setLocalInputDevice(config?.input_device_index ?? "");
+    setLocalOutputDevice(config?.output_device_index ?? "");
+  }
 
   if (!isOpen) return null;
 
@@ -54,8 +61,12 @@ export default function SettingsModal({
       if (localVoice !== config?.active_voice && !isRunning) {
         onVoiceChange(localVoice);
       }
-      if (localInputDevice !== "" && localInputDevice !== config?.input_device_index && !isRunning) {
-        onAudioDeviceChange(localInputDevice);
+      if (!isRunning) {
+        const input =
+          localInputDevice !== "" && localInputDevice !== config?.input_device_index ? localInputDevice : undefined;
+        const output =
+          localOutputDevice !== "" && localOutputDevice !== config?.output_device_index ? localOutputDevice : undefined;
+        if (input !== undefined || output !== undefined) onAudioDeviceChange(input, output);
       }
       onClose();
     } catch (e) {
@@ -119,7 +130,7 @@ export default function SettingsModal({
               </div>
             </div>
             {isRunning && (
-              <p className="text-[10px] text-outline/60 mt-0.5">Note: Model configuration locked while Freya is active.</p>
+              <p className="text-[10px] text-outline/60 mt-0.5">Note: Model configuration locked while Freyja is active.</p>
             )}
           </div>
 
@@ -151,7 +162,7 @@ export default function SettingsModal({
               })}
             </div>
             {isRunning && (
-              <p className="text-[10px] text-outline/60 mt-0.5">Note: Voice configuration locked while Freya is active.</p>
+              <p className="text-[10px] text-outline/60 mt-0.5">Note: Voice configuration locked while Freyja is active.</p>
             )}
           </div>
 
@@ -183,7 +194,40 @@ export default function SettingsModal({
               </div>
             </div>
             {isRunning && (
-              <p className="text-[10px] text-outline/60 mt-0.5">Note: Mic device locked while Freya is active — stop and restart to apply.</p>
+              <p className="text-[10px] text-outline/60 mt-0.5">Note: Mic device locked while Freyja is active — stop and restart to apply.</p>
+            )}
+          </div>
+
+          {/* AUDIO_OUTPUT_DEVICE — which speaker PyAudio plays her voice on */}
+          <div className="flex flex-col gap-2">
+            <div className="flex items-center gap-2 text-[11px] font-bold text-outline uppercase tracking-wider">
+              <span>🔊</span>
+              <span>AUDIO_OUTPUT_DEVICE</span>
+            </div>
+            <div className="relative">
+              <select
+                aria-label="Audio output device"
+                value={localOutputDevice}
+                onChange={(e) => setLocalOutputDevice(e.target.value === "" ? "" : Number(e.target.value))}
+                disabled={isRunning || audioDevices.output.length === 0}
+                className="w-full bg-surface-container-lowest border border-outline-variant/40 text-on-surface text-xs
+                           px-4 py-3 focus:outline-none focus:border-primary-container disabled:opacity-40
+                           appearance-none font-mono tracking-wider uppercase cursor-pointer"
+                style={{ borderRadius: "0px" }}
+              >
+                {audioDevices.output.length === 0 && <option value="">NO OUTPUT DEVICES FOUND</option>}
+                {audioDevices.output.map((d) => (
+                  <option key={d.index} value={d.index} className="bg-surface-container-lowest text-on-surface">
+                    [{d.index}] {d.name}
+                  </option>
+                ))}
+              </select>
+              <div className="pointer-events-none absolute inset-y-0 right-0 flex items-center px-4 text-primary">
+                <span className="text-[10px]">▼</span>
+              </div>
+            </div>
+            {isRunning && (
+              <p className="text-[10px] text-outline/60 mt-0.5">Note: Speaker device locked while Freyja is active — stop and restart to apply.</p>
             )}
           </div>
 

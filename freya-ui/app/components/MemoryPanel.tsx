@@ -14,6 +14,20 @@ interface MemoryItem {
 
 const KINDS = ["all", "preference", "person", "project", "deadline", "followup", "fact", "session_summary"];
 
+async function fetchMemoryItems(kind: string, query: string): Promise<MemoryItem[] | null> {
+    const params = new URLSearchParams();
+    if (kind !== "all") params.set("kind", kind);
+    if (query.trim()) params.set("q", query.trim());
+    try {
+        const res = await fetch(`http://localhost:8000/memory/items?${params}`);
+        const data = await res.json();
+        return data.items ?? [];
+    } catch (e) {
+        console.error("memory load failed", e);
+        return null;
+    }
+}
+
 interface MemoryPanelProps {
     /** bump to force a refetch (wired to the memory_changed WS event) */
     refreshKey?: number;
@@ -30,21 +44,21 @@ export default function MemoryPanel({ refreshKey = 0 }: MemoryPanelProps) {
     const [newItem, setNewItem] = useState({ kind: "fact", subject: "", content: "" });
 
     const load = useCallback(async () => {
-        const params = new URLSearchParams();
-        if (kind !== "all") params.set("kind", kind);
-        if (query.trim()) params.set("q", query.trim());
-        try {
-            const res = await fetch(`http://localhost:8000/memory/items?${params}`);
-            const data = await res.json();
-            setItems(data.items ?? []);
-        } catch (e) {
-            console.error("memory load failed", e);
-        }
+        const next = await fetchMemoryItems(kind, query);
+        if (next) setItems(next);
     }, [kind, query]);
 
+    // Every keystroke in search starts a fetch; drop responses for anything but
+    // the latest filter, or a slow older search could overwrite newer results.
     useEffect(() => {
-        load();
-    }, [load, refreshKey]);
+        let cancelled = false;
+        fetchMemoryItems(kind, query).then((next) => {
+            if (next && !cancelled) setItems(next);
+        });
+        return () => {
+            cancelled = true;
+        };
+    }, [kind, query, refreshKey]);
 
     const saveEdit = async (id: number) => {
         await fetch(`http://localhost:8000/memory/items/${id}`, {
@@ -189,7 +203,7 @@ export default function MemoryPanel({ refreshKey = 0 }: MemoryPanelProps) {
                         value={newItem.content}
                         onChange={(e) => setNewItem({ ...newItem, content: e.target.value })}
                         onKeyDown={(e) => e.key === "Enter" && addItem()}
-                        placeholder="What should Freya remember?"
+                        placeholder="What should Freyja remember?"
                         className="bg-surface-container-lowest border border-outline-variant/40 text-[11px] px-2 py-1 font-mono focus:outline-none focus:border-primary-container"
                         style={{ borderRadius: 0 }}
                     />

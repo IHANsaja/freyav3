@@ -196,17 +196,39 @@ def type_text(text: str, interval: float = 0.05) -> str:
             return f"Type failed: {str(e)}"
 
 
+# Spoken names → pyautogui names. pyautogui silently ignores a name it doesn't
+# know, so "left windows" pressed nothing and still reported success.
+_KEY_ALIASES = {
+    "windows": "win", "left windows": "winleft", "right windows": "winright",
+    "windows key": "win", "start": "win", "start menu": "win", "super": "win",
+    "control": "ctrl", "ctl": "ctrl", "return": "enter", "esc": "escape",
+    "del": "delete", "page up": "pageup", "page down": "pagedown",
+    "arrow up": "up", "arrow down": "down", "arrow left": "left", "arrow right": "right",
+    "caps lock": "capslock", "print screen": "printscreen", "spacebar": "space",
+}
+
+
+def _key_name(name: str) -> str | None:
+    k = name.strip().lower()
+    k = _KEY_ALIASES.get(k, k)
+    return k if k in pyautogui.KEYBOARD_KEYS else None
+
+
 def press_key(key: str) -> str:
     """Press a keyboard key or hotkey combination."""
     try:
         # Handle combos like "ctrl+c", "ctrl+shift+t"
-        if "+" in key:
-            keys = [k.strip() for k in key.split("+")]
-            pyautogui.hotkey(*keys)
-            return f"Pressed hotkey: {key}"
-        else:
-            pyautogui.press(key)
-            return f"Pressed key: {key}"
+        parts = [k for k in key.split("+")] if "+" in key else [key]
+        names = [_key_name(k) for k in parts]
+        if not all(names):
+            bad = [p.strip() for p, n in zip(parts, names) if not n]
+            return (f"Key press failed: {', '.join(repr(b) for b in bad)} isn't a key I know. "
+                    "Use names like win, enter, escape, ctrl+c, alt+tab.")
+        if len(names) > 1:
+            pyautogui.hotkey(*names)
+            return f"Pressed hotkey: {'+'.join(names)}"
+        pyautogui.press(names[0])
+        return f"Pressed key: {names[0]}"
     except Exception as e:
         return f"Key press failed: {str(e)}"
 

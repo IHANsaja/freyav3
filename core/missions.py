@@ -135,7 +135,16 @@ class MissionOrchestrator:
         self._missions[mission.id] = mission
         await self._publish(mission, "created")
         config = {**config, "_quota_mission": mission.id}
-        mission.task = asyncio.create_task(self._run(mission, config))
+        # Off the voice loop. A mission is minutes of planner calls, ReAct steps,
+        # tool dispatch and verification; run as a task here it shared the loop
+        # with mic capture and playback, and every tool that blocks inside an
+        # `async def` (browser, UI-Automation, PyAutoGUI) stalled the audio path
+        # with it. The handle stays awaitable and cancellable from the caller's
+        # loop, so `cancel` from a voice tool and `await mission.task` both work.
+        from core import background
+        mission.task = background.spawn_awaitable(
+            self._run(mission, config, owner=asyncio.get_running_loop())
+        )
         return mission
 
     def cancel(self, mission_id: str) -> Optional[Mission]:
@@ -147,7 +156,10 @@ class MissionOrchestrator:
             if step.status not in ("done", "failed"):
                 step.status = "skipped"
                 step.outcome = "cancelled"
-        asyncio.create_task(self._publish(mission, "status"))
+        # `cancel` is sync and may be called from either loop (voice tool or a
+        # dashboard request), so don't assume a running loop owns the publish.
+        from core import background
+        background.call_on_main(self._publish(mission, "status"))
         if mission.task:
             mission.task.cancel()
         return mission
@@ -165,9 +177,25 @@ class MissionOrchestrator:
 
     # ── Run loop ───────────────────────────────────────────────────────────
 
-    async def _run(self, mission: Mission, config: dict):
+    async def _run(self, mission: Mission, config: dict, owner=None):
+        # `cancel` marks the mission and then cancels the handle. It used to be
+        # enough on its own: the run was a task on the caller's own loop, so a
+        # cancel in the same tick landed before the first line ever executed.
+        # Now the run starts on the background loop and the two can genuinely
+        # race, so the decision already recorded on the mission wins.
+        from core import background
+        # One hop to the main loop before doing anything. The main loop can only
+        # service it once the caller of `start` yields, so any `cancel` issued in
+        # that same synchronous block is guaranteed to have been recorded by the
+        # time this returns — restoring the ordering the old same-loop task got
+        # for free.
+        await background.on_loop(owner, asyncio.sleep(0))
+        if mission.status == "cancelled":
+            return
         try:
             await bounded(self._plan(mission, config), config.get("missions", {}).get("model_timeout_s", 90))
+            if mission.status == "cancelled":
+                return
             if not mission.steps:
                 mission.status = "failed"
                 mission.report = "I couldn't break that goal into steps."
@@ -350,6 +378,22 @@ class MissionOrchestrator:
     async def _verify_step(self, mission: Mission, step: MissionStep,
                            evidence: list[str], config: dict) -> tuple[bool, str]:
         mcfg = (config or {}).get("missions", {})
+        # Jev can confirm a clear pass in well under a second, but it can't
+        # say WHY a step failed — so anything short of a confident pass still
+        # goes to the Gemini verifier, whose reason feeds the report.
+        from core import systemone
+        p = await systemone.noul(
+            {"step_instruction": step.detail,
+             "executor_summary": (step.result or "")[:1500],
+             "tool_evidence": evidence[-12:]},
+            "Did the executed step accomplish `step_instruction`, judging only from "
+            "`executor_summary` and `tool_evidence`?",
+            config, "mission_verify",
+            criteria={"true": "The substance was delivered; style differences are fine",
+                      "false": "Missing substance: empty results, errors, refusals or declined approvals"},
+        )
+        if p is not None and p >= float(systemone.setting(config, "mission_verify", "pass_at", 0.9)):
+            return True, f"Verified by Jev (p={p:.2f})"
         schema = types.Schema(
             type=types.Type.OBJECT,
             properties={

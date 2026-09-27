@@ -181,7 +181,40 @@ def build_declarations(config: dict) -> list[types.FunctionDeclaration]:
     return decls
 
 
+_NOT_FOUND = ("cannot find the file", "cannot find the path", "there's nothing at",
+              "no such file", "doesn't exist", "does not exist", "not found")
+
+
+def _path_hint(result, args: dict):
+    """A path that is one space or dash off ("site-plan-v2.png" for
+    "site-plan v2.png") used to come back as a bare 'not found', and she
+    stalled. Name the real files it probably meant."""
+    if not isinstance(result, str) or not any(s in result.lower() for s in _NOT_FOUND):
+        return result
+    import difflib
+    import os
+    for value in (args or {}).values():
+        if not isinstance(value, str) or not value or os.path.exists(value):
+            continue
+        folder, base = os.path.split(value)
+        if not base or not os.path.isdir(folder):
+            continue
+        try:
+            names = os.listdir(folder)
+        except OSError:
+            continue
+        close = difflib.get_close_matches(base, names, n=3, cutoff=0.6)
+        if close:
+            return (f"{result}\n[Close matches in {folder}: "
+                    + "; ".join(close) + " — if one is what he meant, use its exact name.]")
+    return result
+
+
 async def _execute(name: str, args: dict, ctx: ToolContext, entry: dict | None) -> str:
+    return _path_hint(await _execute_raw(name, args, ctx, entry), args)
+
+
+async def _execute_raw(name: str, args: dict, ctx: ToolContext, entry: dict | None) -> str:
     """Actually run the tool: registry handler, MCP call, or legacy fallback."""
     # MCP tools live outside the registry.
     if entry is None and name.startswith("mcp__"):

@@ -435,7 +435,7 @@ export default function DrawingLayer({
             }}
             onClick={eraser && !d.locked ? () => onErase(d.id) : undefined}
           >
-            {d.author === "freya" && <title>Drawn by Freya</title>}
+            {d.author === "freya" && <title>Drawn by Freyja</title>}
             {shape(d.kind, d.points, frame, d.text, d)}
           </g>
         ))}

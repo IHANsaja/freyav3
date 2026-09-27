@@ -231,6 +231,21 @@ if (Test-Path $envPath) {
         Write-Warn2 "No key entered - .env written with a placeholder"
     }
 
+    # Jev (TypeSafe System One) is early-access. The key alone switches it on:
+    # with it Freya makes fast routing/triage decisions via Jev, without it she
+    # runs on Gemini only - nothing else to configure either way.
+    Write-Host ""
+    Write-Host "    Optional: Jev (TypeSafe) API key - early-access users only." -ForegroundColor White
+    Write-Host "    Press Enter to skip; Freya then runs on Gemini only." -ForegroundColor DarkGray
+    $jevKey = Read-Host "    TYPESAFE_API_KEY"
+    if ([string]::IsNullOrWhiteSpace($jevKey)) {
+        $jevLine = "# TYPESAFE_API_KEY="
+        Write-Ok "No Jev key - Freya will use Gemini only"
+    } else {
+        $jevLine = "TYPESAFE_API_KEY=$($jevKey.Trim())"
+        Write-Ok "Jev key saved - Freya will use Jev with Gemini as fallback"
+    }
+
     $envBody = @"
 # Freya v3 - environment
 # Get a key at https://aistudio.google.com/apikey
@@ -240,6 +255,10 @@ GEMINI_API_KEY=$key
 # does not consume the live-voice quota. Falls back to GEMINI_API_KEY.
 # GEMINI_AGENT_API_KEY=
 # GEMINI_MEMORY_API_KEY=
+
+# Optional, early access: Jev (TypeSafe System One). Setting this key turns Jev
+# on; leave it unset and Freya runs on Gemini only.
+$jevLine
 "@
     $envBody | Out-File -FilePath $envPath -Encoding utf8
     Write-Ok "Wrote .env"
@@ -274,7 +293,15 @@ $startBody = @'
 $root = Split-Path -Parent $MyInvocation.MyCommand.Path
 Start-Process powershell -ArgumentList "-NoExit","-Command","cd '$root'; .\venv\Scripts\python.exe server.py"
 Start-Process powershell -ArgumentList "-NoExit","-Command","cd '$root\freya-ui'; npm run dev"
-Start-Sleep -Seconds 6
+# The dashboard's first compile can take 15+ seconds; open it once it answers
+# instead of after a fixed delay that often landed on an error page.
+Write-Host "Waiting for the dashboard to come up..."
+for ($i = 0; $i -lt 90; $i++) {
+    try {
+        Invoke-WebRequest "http://127.0.0.1:3000" -UseBasicParsing -TimeoutSec 2 | Out-Null
+        break
+    } catch { Start-Sleep -Seconds 1 }
+}
 Start-Process "http://localhost:3000"
 '@
 $startBody | Out-File -FilePath $startScript -Encoding utf8
@@ -295,6 +322,11 @@ if ((Get-Content $envPath -Raw) -match "PASTE_YOUR_GEMINI_API_KEY_HERE") {
 } else {
     Write-Host " Start everything:  .\start-freya.ps1" -ForegroundColor White
     Write-Host " Then open:         http://localhost:3000" -ForegroundColor Gray
+}
+if ((Get-Content $envPath -Raw) -match "(?m)^\s*TYPESAFE_API_KEY=\S") {
+    Write-Host " Jev: on (TYPESAFE_API_KEY set)" -ForegroundColor DarkGray
+} else {
+    Write-Host " Jev: off - Gemini only (add TYPESAFE_API_KEY to .env if you have early access)" -ForegroundColor DarkGray
 }
 Write-Host ""
 Write-Host " Headless CLI instead:  .\venv\Scripts\python.exe main.py" -ForegroundColor DarkGray

@@ -185,6 +185,27 @@ async def update_memory(api_key: str, transcript: list[str], current_memory: str
         print("  Session too short to extract memories.")
         return
 
+    from core import systemone
+    try:
+        from config import load_config
+        config = load_config()
+    except Exception:
+        config = {}
+
+    # Most sessions are chit-chat and commands. Jev spots those in well under a
+    # second, so the Gemini extraction below only runs when there is something
+    # to extract.
+    p = await systemone.noul(
+        transcript[-120:],
+        "Does this conversation reveal any NEW durable fact worth remembering across "
+        "sessions — a preference, a person, an ongoing project, a deadline or "
+        "follow-up, or something notable about the user?",
+        config, "memory_triage",
+    )
+    if p is not None and p < float(systemone.setting(config, "memory_triage", "skip_below", 0.1)):
+        print(f"  Nothing durable in this session (jev p={p:.2f}); skipping extraction.")
+        return
+
     print("\n  Updating Freya's memory...")
     conversation_text = "\n".join(transcript)
     today = datetime.now().strftime("%Y-%m-%d %H:%M")
@@ -218,16 +239,19 @@ TRANSCRIPT:
             data = json.loads(response.text or "{}")
             store = get_store()
             added = 0
-            for item in data.get("items", []):
+            items = [i for i in data.get("items", []) if str(i.get("content", "")).strip()]
+            # Calibrated importance from Jev where it is confident; the
+            # extractor's own guess otherwise.
+            jev = await systemone.memory_importance(
+                [f"{i.get('subject', '')}: {i.get('content', '')}" for i in items], config)
+            for item, jev_importance in zip(items, jev or [None] * len(items)):
                 content = str(item.get("content", "")).strip()
-                if not content:
-                    continue
                 store.add(
                     kind=str(item.get("kind", "fact")),
                     subject=str(item.get("subject", "General"))[:80],
                     content=content,
-                    importance=int(item.get("importance", 2) or 2),
-                    due_at=(str(item.get("due_at")) or None) or None,
+                    importance=jev_importance or int(item.get("importance", 2) or 2),
+                    due_at=item.get("due_at") or None,
                     source="session_extraction",
                 )
                 added += 1

@@ -1,4 +1,19 @@
 """Shared execution policy, appended after configurable personality prompts."""
+# Voice only (core/model.py): sub-agents and the browser agent do not speak,
+# so "say a sentence before each call" would only confuse them.
+WORK_RHYTHM = """
+TALK FIRST, THEN WORK — ONE JOB AT A TIME:
+Before you start any piece of work (anything beyond body language), say one short,
+friendly sentence about what you're about to do — "Sure, let me find that for you" —
+and THEN make the call. Never work in silence and only speak once it's done.
+While a job is running you can keep chatting freely: answer questions, react, keep
+him company. But don't start any new action until the running one has finished. If
+he asks for something else meanwhile, say you'll do it right after the current task;
+it queues automatically and starts on its own, so never call it twice.
+When a task finishes, carry on: if the request needs another step, say what's next
+in one short sentence and do it; otherwise tell him the outcome in plain words.
+"""
+
 TOOLS_FIRST = """
 CLI FIRST, TOOLS FIRST, VISION WHEN NEEDED:
 Prefer terminal commands and direct file/API tools over opening or clicking apps.

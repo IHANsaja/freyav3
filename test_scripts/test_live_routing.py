@@ -173,6 +173,41 @@ class StreamingTests(unittest.IsolatedAsyncioTestCase):
         await self.run_model(session, dispatch, scenario)
         self.assertTrue(stopped.is_set())
 
+    async def test_one_job_at_a_time_while_she_keeps_talking(self):
+        session = FakeSession(); release_a = asyncio.Event(); order = []
+        async def dispatch(name, args, ctx):
+            order.append(('start', name))
+            if name == 'slow_a':
+                await release_a.wait()
+            order.append(('end', name))
+            return f'{name} done'
+        def call(i, n, **a):
+            return message(tool_call=types.LiveServerToolCall(function_calls=[types.FunctionCall(id=i, name=n, args=a)]))
+        def result(i):
+            return next((r.response['result'] for r in session.responses if r.id == i), None)
+        def notes():
+            return [c.kwargs['turns'].parts[0].text for c in session.send_client_content.await_args_list
+                    if c.kwargs.get('turns')]
+        async def scenario(obj, played, task):
+            await session.frames.put(call('a', 'slow_a'))
+            while result('a') is None: await asyncio.sleep(.005)
+            self.assertIn('still running', result('a'))
+            await session.frames.put(call('b', 'work_b'))          # new work mid-job
+            await session.frames.put(call('c', 'set_expression', expression='calm'))  # instant
+            while result('b') is None or result('c') is None: await asyncio.sleep(.005)
+            self.assertIn('Queued', result('b'))
+            self.assertEqual(result('c'), 'set_expression done')  # ran now, not queued
+            self.assertNotIn(('start', 'work_b'), order)           # b waits for a
+            release_a.set()
+            while len([n for n in notes() if 'Task finished' in n]) < 2: await asyncio.sleep(.01)
+            self.assertLess(order.index(('end', 'slow_a')), order.index(('start', 'work_b')))
+            finished = [n for n in notes() if 'Task finished' in n]
+            self.assertIn('slow_a done', finished[0]); self.assertIn('work_b done', finished[1])
+            self.assertTrue(all('Carry on' in n for n in finished))
+            while obj._pending_tools: await asyncio.sleep(.005)
+        with patch('core.model.SLOW_TOOL_SECONDS', 0.05):
+            await self.run_model(session, dispatch, scenario, model=LIVE_MODEL)
+
     async def test_mode_switch_returns_tool_result_then_reconnects(self):
         session = FakeSession()
         async def scenario(obj, played, task):
@@ -251,5 +286,50 @@ class RunnerTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(all(a['continue_task'] for a in attempts[2:]))
         self.assertEqual(len({id(a['transcript']) for a in attempts}), 1)
         self.assertIn('preserve public API', '\n'.join(attempts[-1]['transcript'].get()))
+
+class ThinkingFailureTests(unittest.IsolatedAsyncioTestCase):
+    run_model = StreamingTests.run_model
+
+    def test_failure_phrase_detection(self):
+        from core.live_protocol import is_thinking_failure
+        for said in ("I'm sorry, a system error occurred.",
+                     "Ihan, I apologize, but a system error occurred while I was planning that.",
+                     "I am so sorry, but an error occurred and I couldn't load that information."):
+            self.assertTrue(is_thinking_failure(said), said)
+        for said in ("The parser error occurred because rows were dropped.",
+                     "Let's map out that architecture.", "Sorry, which folder did you mean?"):
+            self.assertFalse(is_thinking_failure(said), said)
+
+    def test_route_falls_back_from_thinking_to_standard_live(self):
+        from core.live_protocol import ThinkingTaskFailed
+        route = LiveRoute(THINKING_LIVE_MODEL, {})
+        self.assertEqual(route.fallback(ThinkingTaskFailed('x')), LIVE_MODEL)
+
+    async def _speak_and_finish(self, model, text):
+        session = FakeSession()
+        async def scenario(obj, played, task):
+            await session.frames.put(message(server_content=types.LiveServerContent(
+                output_transcription=types.Transcription(text=text))))
+            await session.frames.put(message(server_content=types.LiveServerContent(
+                turn_complete=True, interaction_status='IDLE')))
+            await asyncio.sleep(0.2)
+            return task
+        result = {}
+        async def wrapped(obj, played, task):
+            await scenario(obj, played, task)
+            result['done'] = task.done()
+            result['exc'] = task.exception() if task.done() and not task.cancelled() else None
+        await self.run_model(session, AsyncMock(), wrapped, model=model)
+        return result
+
+    async def test_thinking_apology_raises_for_fallback(self):
+        from core.live_protocol import ThinkingTaskFailed
+        r = await self._speak_and_finish(THINKING_LIVE_MODEL, "I'm sorry, a system error occurred.")
+        self.assertIsInstance(r['exc'], ThinkingTaskFailed)
+
+    async def test_standard_model_apology_is_left_alone(self):
+        r = await self._speak_and_finish(LIVE_MODEL, "I'm sorry, a system error occurred.")
+        self.assertFalse(r['done'])
+
 
 if __name__ == '__main__': unittest.main()

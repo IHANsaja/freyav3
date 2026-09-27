@@ -33,7 +33,45 @@ def _get_collection():
     os.makedirs(_DB_DIR, exist_ok=True)
     client = chromadb.PersistentClient(path=os.path.abspath(_DB_DIR))
     _collection = client.get_or_create_collection("freya_knowledge")
+    try:
+        _purge_stale_memory_chunks(_collection)
+    except Exception:
+        pass
     return _collection
+
+
+_PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+_MEMORY_DIR = os.path.join(_PROJECT_ROOT, "memory")
+
+
+def _is_template(path: str) -> bool:
+    return ".example." in os.path.basename(path).lower()
+
+
+def _purge_stale_memory_chunks(col) -> int:
+    """Drop chunks indexed from files in memory/ that are gone or are the
+    placeholder templates. Left in, recall() answered "what do you know about
+    me" with the template's "[Your Name]" lines and the pre-structured-store
+    markdown log. Folders the user indexed elsewhere are never touched."""
+    stale = []
+    got = col.get(include=["metadatas"])
+    for chunk_id, meta in zip(got.get("ids") or [], got.get("metadatas") or []):
+        source = str((meta or {}).get("source") or "")
+        if not source or source.startswith("web:") or source == "memory":
+            continue
+        path = os.path.abspath(source if os.path.isabs(source)
+                               else os.path.join(_PROJECT_ROOT, source))
+        try:
+            if os.path.commonpath([path, _MEMORY_DIR]) != _MEMORY_DIR:
+                continue
+        except ValueError:      # different drive on Windows
+            continue
+        if _is_template(path) or not os.path.exists(path):
+            stale.append(chunk_id)
+    if stale:
+        col.delete(ids=stale)
+        print(f"  [rag] removed {len(stale)} stale memory chunk(s).")
+    return len(stale)
 
 
 def _embed(texts: list[str]) -> list[list[float]]:
@@ -93,7 +131,7 @@ def upsert_memory_item(doc_id: str, text: str):
 # ══════════════════════════════════════════════
 @tool(
     "recall",
-    "Semantically search Freya's long-term memory and any indexed documents for relevant info. "
+    "Semantically search Freyja's long-term memory and any indexed documents for relevant info. "
     "Use when the user asks what you remember about something, or references his notes/files.",
     OBJ({"query": P(STR)}, ["query"]),
     gate="rag.enabled",
@@ -132,7 +170,7 @@ def recall(args, ctx) -> str:
 
 @tool(
     "index_folder",
-    "Index a folder of documents/notes into Freya's knowledge base so she can recall from them "
+    "Index a folder of documents/notes into Freyja's knowledge base so she can recall from them "
     "later. Reads common text files recursively.",
     OBJ({"path": P(STR)}, ["path"]),
     gate="rag.enabled",
@@ -144,9 +182,12 @@ def index_folder(args, ctx) -> str:
     total, files = 0, 0
     try:
         for root, _dirs, names in os.walk(path):
-            if any(skip in root for skip in ("node_modules", ".git", "__pycache__", ".next")):
+            if any(skip in root for skip in ("node_modules", ".git", "__pycache__", ".next",
+                                             "rag_db", "browser_profile")):
                 continue
             for name in names:
+                if _is_template(name):
+                    continue   # placeholder templates, not knowledge
                 if os.path.splitext(name)[1].lower() in _TEXT_EXT:
                     fp = os.path.join(root, name)
                     try:

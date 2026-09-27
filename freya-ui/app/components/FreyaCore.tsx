@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { useEffect, useMemo, useRef } from "react";
 import { Canvas, useFrame } from "@react-three/fiber";
 import { OrbitControls } from "@react-three/drei";
 import * as THREE from "three";
@@ -15,6 +15,7 @@ import * as THREE from "three";
 import type { AvatarIntent } from "../hooks/useFreyaSocket";
 import type { PersonaPayload } from "../types/events";
 import { EXPRESSION_ACCENTS, ExpressionAccent } from "./avatar/manifest";
+import { useAvatarOverlay } from "./scene/useAvatarOverlay";
 
 type VisualState = "idle" | "listening" | "speaking" | "interrupted" | "thinking" | "working";
 
@@ -301,44 +302,11 @@ function CoreEntity({
 }
 
 export default function FreyaCore({ state, avatarIntent, persona }: FreyaCoreProps) {
-  const [dancing, setDancing] = useState(false);
-  const [override, setOverride] = useState<VisualState | null>(null);
-  const [accent, setAccent] = useState<ExpressionAccent | null>(null);
-  const [accentIntensity, setAccentIntensity] = useState(0.7);
-
   // Avatar intents drive the core too: dance, thinking/working overlays, and
   // expression accents (color + glow bias) — same events the 3D figure uses.
-  useEffect(() => {
-    if (!avatarIntent) return;
-    if (avatarIntent.intent === "state") {
-      if (avatarIntent.name === "dance") {
-        setDancing(true);
-        const timer = setTimeout(
-          () => setDancing(false),
-          avatarIntent.durationMs ?? 10000
-        );
-        return () => clearTimeout(timer);
-      }
-      if (avatarIntent.name === "thinking" || avatarIntent.name === "working") {
-        setOverride(avatarIntent.name);
-      } else {
-        setOverride(null);
-      }
-    } else if (avatarIntent.intent === "expression") {
-      const found = EXPRESSION_ACCENTS[avatarIntent.name];
-      if (found) {
-        setAccent(found);
-        setAccentIntensity(avatarIntent.intensity ?? 0.7);
-        const timer = setTimeout(() => setAccent(null), 12000);
-        return () => clearTimeout(timer);
-      }
-    }
-  }, [avatarIntent]);
-
-  // Speaking/interrupted always reclaim the core from thinking/working overlays.
-  useEffect(() => {
-    if (state === "speaking" || state === "interrupted") setOverride(null);
-  }, [state]);
+  const { dancing, override, expression } = useAvatarOverlay(state, avatarIntent);
+  const accent: ExpressionAccent | null = expression ? EXPRESSION_ACCENTS[expression.name] ?? null : null;
+  const accentIntensity = expression?.intensity ?? 0.7;
 
   const sessionVisual: VisualState =
     state === "listening" || state === "speaking" || state === "interrupted" || state === "thinking" ? state : "idle";

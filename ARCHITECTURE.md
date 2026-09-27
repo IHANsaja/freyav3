@@ -34,6 +34,9 @@ graph TD
     DayContext["📅 core/day_context.py<br>(Rolling Day + Rotation)"]
     Identity["🪪 core/user_identity.py<br>(MEMORY.md → who he is)"]
     Runtime["⚡ core/runtime.py<br>(inject / emit / transcript)"]
+    Activity["🟢 core/activity_overlay.py<br>(What she is doing now)"]
+    Jev["⚡ core/systemone.py<br>(Jev · optional, key-gated)"]
+    Quota["⏱️ core/quota.py<br>(pacing · retries · flash→lite)"]
 
     %% Existing superpowers
     Agents["🤖 core/agents.py<br>(react_loop + Sub-agents)"]
@@ -84,6 +87,12 @@ graph TD
     Runtime -->|emit| EventBus
 
     ModelEngine -->|session end transcript| MemoryStore
+    ModelEngine -->|tool start/finish · state| Activity
+    Approvals -->|approval waits| Activity
+    RegDispatcher -.->|tool routing| Jev
+    Missions -.->|step verify| Jev
+    Missions & Agents -->|generate| Quota
+    Quota --> GeminiText
     MemoryStore <-->|extraction| GeminiText
 
     %% Styling
@@ -95,7 +104,7 @@ graph TD
 
     class Main,Server,Config,AudioEngine,ModelEngine,RegDispatcher,SkillLoader primary;
     class GeminiLive,GeminiText external;
-    class EventBus,Approvals,Missions,Avatar,MemoryStore,ContextWatch,DayContext,Identity,Runtime platform;
+    class EventBus,Approvals,Missions,Avatar,MemoryStore,ContextWatch,DayContext,Identity,Runtime,Activity,Jev,Quota platform;
     class Agents,Screen,BrowserAgent,Ambient,SelfExtend,Scheduler,MachineIndex,Organizer superpower;
     class UI frontend;
 ```
@@ -111,6 +120,30 @@ This is the heart of real-time interaction using the asynchronous `google-genai`
 - **Tool Routing**: Function calls are dispatched through the specialized **Async Tool Registry** (`core/registry.py`).
 - **Proactive Influx**: A `core/runtime.py` text channel enables background agents or ambient screen-watching tasks to inject natural speech into the active live session unprompted.
 - **Session Continuity**: The server emits a fresh session-resumption handle throughout a session; a GoAway raises `SessionRotation` so the client leaves voluntarily and reconnects with that handle. If a handle is missing or rejected, `_send_recap()` replays the transcript tail instead.
+- **Model fallback** (`core/live_protocol.py:LiveRoute`): quota/unavailable errors move to the next model in the route (3.8 Extended Thinking → 3.8 Live → 3.1 Flash Live). A server-side `1011 Internal error` is retried once on the same model and falls back on the second in a row — it used to burn all five reconnect attempts on a model that was down.
+
+### Tool Scheduling: talk first, one job at a time (`core/model.py:execute_tools`)
+A single executor runs tools in order, so desktop actions never overlap. On top of that:
+
+- **Background after 2 s.** A tool still running after `SLOW_TOOL_SECONDS` is answered *"still running — tell him what you're doing, keep chatting, don't start anything else"*, so the voice never goes mute during long work. Only `switch_mode`, the screen-capture pair and `search_tools` stay foreground.
+- **Queued, not blocked.** While a job is in flight (`busy`), a new work call is answered immediately with *"Queued: this starts automatically as soon as X finishes"* and runs when X is done; its result arrives through the same channel as a background result. Instant, read-only calls (`INSTANT_TOOLS`: avatar body language, `check_agents`, `mission_status`, `list_pending_actions`) run at once and never wait behind work.
+- **"Carry on", delivered in order.** A finished job's result is sent as *"Task finished (…). Carry on with what the user asked…"* — not *"report the outcome"*, which ended find-then-open chains after the find. Delivery waits for her to stop speaking and him to pause, behind a FIFO lock so results land in the order the jobs finished. It deliberately does **not** use `runtime.inject`, which waits for zero pending tools and drops the line after 20 s — with a queued job running, the earlier result was silently lost.
+- **Talk first** is policy, not plumbing: `task_policy.WORK_RHYTHM` (voice model only; sub-agents don't speak) tells her to say one short sentence before starting any work and never to narrate only afterwards.
+
+### Stall Recovery (`core/model.py:run`)
+Gemini 3.8 Live has proactive audio permanently enabled — it may *choose* not to respond — and
+occasionally closes a turn after a tool result without the next call. Each case is caught and logged:
+
+| Symptom | Detector | Response |
+| :--- | :--- | :--- |
+| Turn completes with no audio, words or call after he spoke / after a tool result | `turn["output"]` flag at `turn_complete` | One nudge 1.5 s later quoting what he said (`[live] empty model turn`) |
+| Tool result, then nothing for 8 s (24 s in Extended Thinking) | `watch_for_stall` vs `activity` timestamps | One nudge (`live.stall_nudge_s`), skipped if the empty-turn nudge already fired |
+| Call syntax spoken aloud (`,name:open_path}`) | `_SPOKEN_ANY_CALL` against real tool names | Scrubbed from the transcript; she's told to make the call — once until a real call or new user speech |
+| Mic paused, then silent after resume | — | `audio_stream_end` is sent on pause, as the Live API requires for gaps over ~1 s |
+
+Every nudge is bounded to one per silence, so none of them can loop.
+
+**Console output is UTF-8** (`server.py`/`main.py` reconfigure stdout/stderr with `errors="replace"`). The tool log prints sit inside the executor's `try`; under a piped cp1252 console an emoji or Sinhala string in a result raised there, and a tool that had *succeeded* was reported to the model as failed.
 
 ### Context Budget (`core/model.py:_compression_budget`)
 The Live API compresses the context with a sliding window once it passes `trigger_tokens`,
@@ -122,17 +155,20 @@ shrinking it back to `target_tokens`. Both are configurable under `freya.*` and 
 | model input limit | 131,072 | Google |
 | `compression_trigger_tokens` | 96,000 | config |
 | `compression_target_tokens` | 32,000 | config |
-| immovable baseline (system prompt + 108 tool declarations) | ~12,200 | code |
-| conversation retained after a compression | ~19,800 | result |
+| immovable baseline (system prompt + 27 core tool declarations) | ~6,250 | code |
+| conversation retained after a compression | ~25,700 | result |
 
 The baseline is re-sent on **every turn**, so it is both a per-turn cost and a permanent
-deduction from the target. `_compression_budget()` measures it from the exact declarations
-being sent (wire JSON, not the pydantic repr, which overstates by ~28%), prints it at startup,
-and shouts if `target <= baseline`:
+deduction from the target. `core/tool_index.py` keeps it small: only a core set of tools is
+declared in full; the rest (~96) are listed by name and reached through `search_tools` →
+`run_tool`, which goes through the same `registry.dispatch` (gates, sandbox, approvals).
+`_compression_budget()` measures the baseline from the exact declarations being sent (wire
+JSON, not the pydantic repr, which overstates by ~28%), prints it at startup, and shouts if
+`target <= baseline`:
 
 ```
-Context budget: baseline ~12,173 tok (prompt 2,763 + 108 tools 9,410)
-                trigger 96,000 / target 32,000 -> ~19,827 tok for conversation
+Context budget: baseline ~6,257 tok (prompt 3,603 + 27 tools 2,654)
+                trigger 96,000 / target 32,000 -> ~25,743 tok for conversation
 ```
 
 > The original settings were `trigger=16,000` with `target` unset (the server then assumes
@@ -149,6 +185,15 @@ Freya uses a dynamic registry instead of static dispatched calls:
 - **Order matters: guard, then approve.** `safety.guard()` runs *before* `needs_approval()`. A hard-refused action must never generate an approval card — asking the user to authorise a write into `C:\Windows` that will then be refused anyway trains him to click yes on prompts that mean nothing.
 - **Safety**: The guard (`core/safety.py`) blocks outright-destructive commands and enforces the zone rules and allow-list; `needs_approval()` routes *sensitive* calls through the approval gate (`core/approvals.py`) before execution — including legacy and MCP tools.
 - `ToolContext.source` ("live" vs "mission:<id>") decides whether an approval defers the work (voice session never blocks) or genuinely awaits the user's decision (background mission step).
+- **Near-miss path hints.** When a tool reports that a path does not exist but its folder does, `_path_hint()` appends the closest real names from that folder (`site-plan-v2.png` → `site-plan v2.png`). One wrapper around `_execute` covers every tool; a bare "not found" used to leave her stalled.
+- **`run_tool` normalises arguments**: object keys that arrive still JSON-quoted (`{'"path"': …}`) are unquoted before the required-argument check.
+
+### Process Execution (`core/proc.py`)
+`subprocess.run(..., timeout=N)` kills only the direct child when time runs out and then waits
+for its pipes — which the rest of an `a | b` pipeline (or any helper the child spawned) still
+holds, so it never returns. In the live loop that wedged the tool executor and every call
+queued behind it. `proc.run()` kills the whole tree (`taskkill /T`) before re-raising
+`TimeoutExpired`; the terminal tool, `run_code`, skill scripts and career scripts all use it.
 
 ## 🦾 Superpowers Layer (v3.5+)
 
@@ -158,6 +203,7 @@ Specialized skills configured by flags in `config/freya_config.json`:
 For heavy multi-step tasks that cannot block the live session:
 - **Sub-agents**: Delegated ReAct loops for 'researcher', 'coder', or 'operator' agents running in background.
 - **Browser Automation**: `browser_task` autonomous, agentic web driving using direct Chromium control.
+- **Model calls go through `core/quota.py:generate`**: per-model RPM pacing, bounded retries, and a classifier that tells daily quota, per-minute limits and transient 5xx apart. When retries run out on a model with a fallback (`quota.fallback_models`, default `gemini-3.5-flash → gemini-3.5-flash-lite`), the request is retried **once** on the fallback — an overloaded flash (37 s to answer "ok" while flash-lite took 1.5 s) used to fail whole missions and agents. The fallback call is marked so it can never fall back again.
 
 ### 2. Screen Interaction (`core/screen.py`)
 Precision interaction with the Windows GUI:
@@ -207,6 +253,12 @@ rows, which are history rather than standing facts. Nothing is hidden — `recal
 `list_memories` and the vector store still reach every row. `dedupe()` and
 `purge_trivial_day_summaries()` run once per process from `load_memory()`, soft-deleting
 (`active = 0`, the same mechanism as `forget`) repeated contents and empty day close-outs.
+
+Due dates are ISO strings or `NULL`: `_clean_due()` normalises on write and read, and the store
+repairs old rows on open. Session extraction used to store `str(None)` — the literal `"None"` —
+which the Memory panel showed as *"due None"* and which sorts after every real date. The vector
+store drops chunks sourced from files in `memory/` that no longer exist or are `*.example.*`
+templates, so `recall` can't answer "what do you know about me" with *"[Your Name]"*.
 
 ### Session Recall (`core/runtime.py` + `recall_conversation`)
 `FreyaModel.run()` publishes the live `TranscriptCollector` through `runtime.set_transcript()`
@@ -312,6 +364,58 @@ secondary monitors; the capture scan still brackets the primary monitor only, be
 `capture_screen` grabs `sct.monitors[1]`. Config lives under `overlay` — `enabled`, `fps`,
 `intensity`, `palette`, and per-effect toggles.
 
+### Activity Pill (`core/activity_overlay.py`)
+A small always-on-top pill at the top-centre of the screen that says what she is doing right
+now — *Thinking…*, *Searching your PC for "resume"*, *Opening report.pdf*, *Waiting for your
+OK* — with a running timer after 3 s, fading ~1 s after the last activity. 3.8 Live is silent
+while a tool runs, so without it a 20-second disk search looked exactly like a hang.
+
+- **Driven by the model loop, not polled**: `tool_started`/`tool_finished` from the executor,
+  `heard()` on user transcription (→ *Thinking* once he pauses and nothing has come back),
+  `responding()` on any model output, `set_state()` via `FreyaModel._set_state`, and approval
+  waits from the event bus. `describe()` turns each tool call (including `run_tool`'s inner
+  call) into a plain sentence; body-language tools show nothing.
+- **Built not to interfere with the desktop she drives**: click-through
+  (`WS_EX_TRANSPARENT`), never activates (`WS_EX_NOACTIVATE`, shown with `SW_SHOWNOACTIVATE`),
+  and excluded from capture (`WDA_EXCLUDEFROMCAPTURE`) so `capture_screen` never shows her own
+  status. Creating a Tk root grabs the foreground even while withdrawn, so the previous
+  foreground window is restored immediately — otherwise the first pill would have pulled focus
+  away from the window `press_key` was about to type into.
+- Same threading pattern as `desktop_popup.py` (one Tk thread fed by a queue); every public
+  call is a no-op when `activity_overlay.enabled` is false. `FREYA_OVERLAY_CAPTURABLE=1`
+  keeps it in screenshots for checking the look.
+
+### System One / Jev (`core/systemone.py`) — optional
+Jev (TypeSafe) answers typed yes/no, pick-one and score questions in ~70–500 ms. It is
+early-access, so **the key is the switch**: `TYPESAFE_API_KEY` present → used; absent or blank →
+never contacted, and every caller takes the path it had before Jev. `system_one.features.<name>:
+false` keeps one feature on Gemini even with a key. The startup log states which.
+
+| Feature | With Jev | Without a key |
+| :--- | :--- | :--- |
+| `tool_routing` | Semantic pick in `search_tools` | Keyword ranking |
+| `mission_verify` | Pass at p ≥ 0.9 before calling the verifier | Gemini verifier |
+| `mode_routing` | Auto-switch to Complex Tasks at p ≥ 0.85 | Model's own `switch_mode` |
+| `nudge_gate` | Suppresses unwelcome context nudges | Nudges allowed (heuristics + rate limits still apply) |
+| `memory_triage` | Skip extraction for chit-chat; per-item importance | Gemini extraction always; its own importance |
+| `approval_risk` | Risk label on approval cards | No label; approval still required |
+
+Failures return `None` and open a 60 s circuit breaker, so an outage costs one timeout, not one per turn.
+
+### Trading Lab (`core/trading/`, `freya-ui/app/trading/`)
+The page owns the session; she follows it. The page keeps live-market (*observation*)
+sessions and reports the one on screen through `POST /trading/workspace`;
+`guide._current_view()` picks the most recently focused tab. `open_trading_lab` therefore:
+reuses that session when a tab is open (no duplicate tab); otherwise opens `/trading` in **his**
+browser and waits for the page to report in; and returns `not_confirmed` — with an instruction
+not to claim it is open — if it never does. It used to create a *replay* session and only
+return a URL: nothing opened, she said it had, and the page then discarded that session and
+made its own, so her later chart tools acted on a session nobody could see.
+
+The chart keeps every candle in view (`autoFit`) until he zooms, pans or picks a range: a single
+`fitContent()` on mount could run before the panel had its final width — or any width — which
+left the candles bunched against the right edge.
+
 ### Machine Awareness (`core/machine_index.py`, `core/system_tools.py`, `core/context_watch.py`)
 The design goal is that Freya never asks *"where is it installed?"* or *"what are you doing?"* —
 both are questions she can answer herself, and asking makes her feel like a chatbot with a
@@ -344,6 +448,25 @@ psutil, so it reports the owning *program* and marks the foreground one, grouped
 `attention()` used for card routing. Both read on demand — the context tracker stays off, so
 this is answering when asked, not surveillance.
 
+**Documents come in versions.** For apps, `find_on_pc` gives one confident answer. For
+documents and media it lists up to five, ranked by how many of his words the file name
+contains and *then* newest first — pure newest-first let `freya_memory.db` (one word) outrank
+the actual *FREYA CONSTITUTION v1.2.pdf* (two). Matching is separator-blind (`_squash`:
+"fullstack" ↔ "Full Stack"), non-documents are filtered out, vanished files are dropped, and a
+thin index is topped up with a live disk walk that tolerates one wrong word in a 3+ word query.
+The old *"that's the one — don't ask him to confirm"* wording is kept for apps only; on
+documents it handed back last year's CV right after he said it wasn't the latest.
+
+**Acting on windows.** Title lookups are sticky: `_find_window()` remembers which window a title
+resolved to for 10 minutes and otherwise prefers the one in front. The list is in z-order and
+minimising sends a window to the bottom, so *"minimise VS Code, maximise it, close it"* used to
+act on three different windows and close the wrong one. `close_app` falls back from its fixed
+process map to the running process of that name and closes its windows with `WM_CLOSE` (like
+clicking X, so unsaved work still prompts) rather than `TASKKILL /F`. `press_key` translates
+spoken names (`start` → `win`, `left windows` → `winleft`) and refuses unknown keys — pyautogui
+silently ignores them, which reported a key press that never happened. `set_volume` uses
+pycaw's `EndpointVolume` (2025+ API) with the old `Activate` path as fallback.
+
 **Tidying.** `core/organizer.py` sorts a folder into type buckets in a single call rather than
 one `move_item` round-trip per file. It skips shortcuts, hidden files and anything `zone_of()`
 calls protected, and writes an undo manifest (`memory/organize_undo.json`) — it runs without an
@@ -354,6 +477,13 @@ Modes now carry `voice_override`, `speech_style`, `theme` (accent/glow/core para
 `avatar_idle`; the server publishes `persona` events that recolor the UI and repose the
 avatar. Every capability module is a skill with a manifest; the loader stamps each tool
 with its owning skill for the `/skills` catalog and per-skill gate toggles.
+
+The system prompt is assembled per session as *personality* (config, per-mode addendum) →
+*routing* → `WORK_RHYTHM` → `TOOLS_FIRST` → Trading Lab / mission rules → the deferred-tool
+index. The default personality is warm and friendly (greets him, uses his name now and then,
+encouraging when something fails) while keeping its playful edge; the rhythm rules — talk
+first, one job at a time, carry on when a task finishes — live in code (`core/task_policy.py`)
+so every persona gets them.
 
 ---
 
@@ -382,6 +512,24 @@ committed files.
 > turns a repo into a diary the moment its state directory is tracked, and the failure is silent:
 > the code looks fine, and the leak is in files nobody reads during review.
 
+### Network Surface
+The API can approve pending actions, change the sandbox and drive the desktop, and it has no
+authentication of its own, so it is confined to this machine:
+
+- **Loopback bind** — `uvicorn` listens on `127.0.0.1`, not `0.0.0.0`.
+- **WebSocket origin allowlist** — CORS does not apply to WebSockets, so `/ws` checks `Origin`
+  against `DASHBOARD_ORIGINS` itself and closes anything else with 1008 before `accept()`.
+  Before this, any page open in the browser could connect and send `approval_response
+  {approved: true}`. Non-browser local clients send no `Origin` and are allowed (the bind already
+  keeps them on this machine).
+- **Validated writes** — `/config` rejects unknown models, voices and device indexes;
+  `/memory/items` rejects empty content and non-integer importance (HTTP 400 via
+  `UserFacingError`), instead of persisting values that only fail at the next session start.
+- **A dead socket ends its receive loop.** A failed send in the writer task marks the socket
+  closed without raising `WebSocketDisconnect` in the reader; every receive then failed
+  instantly, and the `continue` became a tight loop that pinned a CPU core and flooded the log.
+  The loop now exits when either side's state is no longer `CONNECTED`.
+
 ---
 
 ## 🧪 Test Surface
@@ -390,10 +538,15 @@ Offline, no mic, no quota, no network — `test_scripts/`:
 
 | Suite | Proves |
 | :--- | :--- |
-| `test_smoke.py` | Config loads from the template; all 23 skills import; every declared tool has a handler; no duplicate declarations; harmless tools need no approval while `delete_item`/`shutdown_computer` still do; the guard refuses writes into Windows and moves of a git repo |
+| `test_smoke.py` | Config loads from the template; all 24 skills import; every declared tool has a handler; no duplicate declarations; harmless tools need no approval while `delete_item`/`shutdown_computer` still do; the guard refuses writes into Windows and moves of a git repo |
 | `test_awareness.py` | `open_app` is declared exactly once and no longer advertises only config keys; window enumeration reports processes and marks focus |
 | `test_search.py` | Token-based index ranking; `live_search` matches multi-word queries; `search_files` honours its time budget |
 | `test_organizer.py` | Tidy → undo restores the folder byte-for-byte; shortcuts, dotfiles and nested repos untouched; re-running is a no-op |
+| `test_live_routing.py` (pytest) | The live loop against a fake Gemini session: slow tools don't block audio, cancellation, mode handoff, and **one job at a time** — background, queued reply, instant expression, ordered "carry on" delivery |
+| `test_session_resilience.py` | Second consecutive 1011 falls back, auth errors never do; flash → flash-lite fallback happens once and never loops; spoken key names map and unknown keys are refused |
+| `test_find_documents.py` | Newest-first among equal matches, more words beat newer partial matches, separator-blind names, vanished files dropped, apps keep one answer |
+| `test_systemone.py` | The key is the only switch; without it no request ever reaches Jev and every helper returns its fallback value |
+| `test_activity_overlay.py` / `test_trading_open.py` | Pill wording for every tool shape; `open_trading_lab` reuses the open tab, opens the browser only when needed, never claims an unconfirmed open |
 
 ---
 
@@ -401,5 +554,5 @@ Offline, no mic, no quota, no network — `test_scripts/`:
 
 | Surface | Description |
 | :--- | :--- |
-| **REST API** | Model/voice config, structured memory CRUD (`/memory/items`), skill catalog (`/skills`), session lifecycle (`/start`, `/stop`), dev event injection (`/debug/emit`). |
-| **WebSocket** | Real-time pushes for `transcript`/`speech` streaming, `tool` results, `state` changes, `mission` progress, `approval` requests, `avatar` intents, `suggestion` chips, `context` line, `day` rotations, and `persona` themes. Client→server: `approval_response`, `mission_command`, `suggestion_response`, plus session/config controls. |
+| **REST API** | Model/voice/audio-device config (validated), structured memory CRUD (`/memory/items`), skill catalog (`/skills`), session lifecycle (`/start`, `/stop`), Trading Lab (`/trading/*`), dev event injection (`/debug/emit`). Loopback only. |
+| **WebSocket** | Real-time pushes for `transcript`/`speech` streaming, `tool` results, `state` changes, `mission` progress, `approval` requests, `avatar` intents, `suggestion` chips, `context` line, `day` rotations, and `persona` themes. Client→server: `approval_response`, `mission_command`, `suggestion_response`, `set_listening`, plus session/config controls. Browser clients must come from a dashboard origin. |

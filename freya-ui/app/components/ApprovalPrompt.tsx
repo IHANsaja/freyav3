@@ -23,6 +23,28 @@ function useCountdown(expiresAt: number, windowS = 120) {
     return fraction;
 }
 
+const RISK_LABELS = ["", "Harmless", "Low risk", "Moderate", "High risk", "Severe"];
+
+/** Jev's advisory risk rating (1-5). Informational only: approval is still required. */
+function RiskBadge({ risk }: { risk: number }) {
+    const level = Math.max(1, Math.min(5, risk));
+    const hot = level >= 4;
+    return (
+        <span
+            title="Risk estimate from System One (advisory)"
+            className={`text-[10px] font-mono font-bold tracking-widest uppercase px-2 py-0.5 rounded-full border ${
+                hot
+                    ? "border-red-400/60 text-red-300 bg-red-500/10"
+                    : level === 3
+                      ? "border-amber-400/50 text-amber-200 bg-amber-500/10"
+                      : "border-outline-variant/40 text-outline"
+            }`}
+        >
+            {RISK_LABELS[level]}
+        </span>
+    );
+}
+
 function ApprovalCard({
     action,
     onRespond,
@@ -54,10 +76,11 @@ function ApprovalCard({
                 <span className="text-[10px] font-mono tracking-widest uppercase text-outline ml-auto">
                     {fromMission ? "MISSION" : action.tool}
                 </span>
+                {action.risk !== undefined && <RiskBadge risk={action.risk} />}
             </div>
 
             <p className="text-sm text-parchment leading-relaxed mb-1">
-                Freya wants to <span className="font-semibold">{action.summary}</span>
+                Freyja wants to <span className="font-semibold">{action.summary}</span>
             </p>
             {action.argsPreview && (
                 <p className="text-[11px] font-mono text-outline truncate mb-3">

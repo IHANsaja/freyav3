@@ -8,9 +8,39 @@ from google import genai
 from google.genai import types
 from core.tools import dispatch
 from core import runtime
-from core.task_policy import TOOLS_FIRST
-from core.live_protocol import ModeChange, Interaction, is_thinking, setup_options, tool_behavior, routing_instruction
+
+# A tool still running after this long is answered "running in background" so
+# the live model can keep talking; the result is injected when it finishes.
+SLOW_TOOL_SECONDS = 2.0
+# Tools whose response must be the real result (the model's next move depends
+# on it immediately, or the result drives session control flow).
+# Everything else that runs past SLOW_TOOL_SECONDS goes to the background so she
+# can keep talking; its result comes back as a "task finished — carry on" note,
+# which is what keeps a find-then-open chain going.
+FOREGROUND_TOOLS = {"switch_mode", "look_at_screen", "capture_screen", "search_tools"}
+# Instant and read-only: safe to answer immediately even while a job is running,
+# so a status question or a facial expression never waits behind real work.
+INSTANT_TOOLS = {"set_expression", "set_gesture", "set_idle_state", "trigger_emphasis",
+                 "trigger_thinking", "trigger_listening", "animate_transition",
+                 "check_agents", "mission_status", "list_pending_actions"}
+
+
+def _effective_tool(name: str, args: dict) -> str:
+    """run_tool(name=X) is X as far as scheduling is concerned."""
+    if name == "run_tool":
+        return str((args or {}).get("name") or name)
+    return name
+
+
+# A real tool call written into her speech instead of made: ",name:open_path}",
+# 'run_tool{"name": "list_dir"...'. Only names that are actual tools count.
+_SPOKEN_ANY_CALL = re.compile(r"""(?:\bname\s*["']?\s*[:=]\s*["']?|\b)([a-z]+(?:_[a-z]+)+)\s*["']?\s*[({}]""")
+from core.task_policy import TOOLS_FIRST, WORK_RHYTHM
+from core.live_protocol import (ModeChange, ThinkingTaskFailed, Interaction, is_thinking,
+                                is_thinking_failure, setup_options, tool_behavior, routing_instruction)
 from core.registry import build_declarations, dispatch as registry_dispatch, ToolContext
+from core import tool_index  # registers search_tools / run_tool
+from core import activity_overlay as activity_ui
 import base64
 
 # ─────────────────────────────────────────────
@@ -34,6 +64,64 @@ _SPEECH_NOISE = re.compile(
     | \[SILENT[^\]]*\]             # our own silent-note marker, if it ever echoes
     """
 )
+
+
+# Body-language calls the model sometimes SPEAKS instead of calling, e.g.
+# "set_expression(expression='calm', intensity=0.7)". The transcription also
+# renders it with spaces ("set expression(...)"), so underscores are optional.
+_AVATAR_TOOLS = ("set_expression", "set_gesture", "set_idle_state", "trigger_emphasis",
+                 "trigger_thinking", "trigger_listening", "animate_transition")
+_SPOKEN_CALL = re.compile(
+    r"\b(" + "|".join(t.replace("_", r"[_ ]?") for t in _AVATAR_TOOLS) + r")\s*\(([^)]*)\)?",
+    re.IGNORECASE,
+)
+_CALL_ARG = re.compile(r"(\w+)\s*[=:]\s*['\"]?([\w.]+)['\"]?")
+
+
+def _extract_spoken_calls(text: str) -> tuple[str, list[tuple[str, dict]]]:
+    """Pull spoken avatar tool calls out of her text. Returns the text without
+    them, plus (tool, args) pairs so they can be run for real instead."""
+    calls = []
+
+    def grab(m):
+        name = re.sub(r"[_ ]", "", m.group(1).lower())
+        tool = next(t for t in _AVATAR_TOOLS if t.replace("_", "") == name)
+        args = {}
+        for k, v in _CALL_ARG.findall(m.group(2) or ""):
+            try:
+                args[k] = float(v) if k == "intensity" else v
+            except ValueError:
+                args[k] = v
+        calls.append((tool, args))
+        return " "
+
+    return re.sub(r"\s{2,}", " ", _SPOKEN_CALL.sub(grab, text)).strip(), calls
+
+
+def _trace_frame(response) -> None:
+    """Print a Live server frame minus audio bytes and routine transcription."""
+    try:
+        data = response.model_dump(exclude_none=True, mode="json")
+    except Exception as e:
+        print(f"  [trace] unprintable frame: {e}")
+        return
+    sc = data.get("server_content") or {}
+    for part in (sc.get("model_turn") or {}).get("parts") or []:
+        if "inline_data" in part:
+            part["inline_data"] = f"<{part['inline_data'].get('mime_type', 'audio')}>"
+    sc.pop("input_transcription", None)
+    sc.pop("output_transcription", None)
+    if not sc:
+        data.pop("server_content", None)
+    data.pop("session_resumption_update", None)
+    if data.get("server_content", {}).get("model_turn", {}).get("parts") and all(
+            isinstance(p.get("inline_data"), str) and len(p) == 1
+            for p in data["server_content"]["model_turn"]["parts"]):
+        data["server_content"]["model_turn"] = "<audio>"
+        if data["server_content"] == {"model_turn": "<audio>"}:
+            return  # pure audio chunk: too noisy to print
+    if data:
+        print(f"  [trace] {json.dumps(data, ensure_ascii=False)[:1500]}")
 
 
 def _clean_speech(text: str) -> str:
@@ -62,7 +150,7 @@ TOOL_DECLARATIONS = [
     ),
     types.FunctionDeclaration(
         name="switch_mode",
-        description="Switch Freya into a different operational mode, e.g. coding or language learning.",
+        description="Switch Freyja into a different operational mode, e.g. coding or language learning.",
         parameters=types.Schema(
             type=types.Type.OBJECT,
             properties={
@@ -150,7 +238,7 @@ TOOL_DECLARATIONS = [
     ),
     types.FunctionDeclaration(
         name="dance_for_user",
-        description="Make Freya perform a random dance animation when the user asks her to dance (e.g., 'can you dance for me', 'show me a dance', 'dance').",
+        description="Make Freyja perform a random dance animation when the user asks her to dance (e.g., 'can you dance for me', 'show me a dance', 'dance').",
         parameters=types.Schema(
             type=types.Type.OBJECT,
             properties={},
@@ -244,6 +332,7 @@ class FreyaModel:
         self.resume_handle = resume_handle
         self.continue_task = continue_task
         self._interaction = Interaction(is_thinking(model_id))
+        activity_ui.configure(config)
         self._pending_tools = 0
         self.session = None
         self.connected = False
@@ -315,7 +404,7 @@ class FreyaModel:
             except Exception:
                 return len(str(d))
 
-        prompt_tokens = len(self.personality or "") // 4
+        prompt_tokens = (len(self.personality or "") + len(getattr(self, "_tool_index_prompt", ""))) // 4
         tool_tokens = sum(_decl_chars(d) for d in declarations) // 4
         baseline = prompt_tokens + tool_tokens
 
@@ -343,7 +432,13 @@ class FreyaModel:
         }
         # Built once so the budget can be measured against the exact list that
         # gets sent — the declarations ARE most of the immovable baseline.
-        declarations = TOOL_DECLARATIONS + build_declarations(self.config)
+        # With tool_index enabled only a core set goes out in full; the rest is
+        # listed by name in the prompt and reached via search_tools/run_tool.
+        declarations, deferred = tool_index.split(
+            TOOL_DECLARATIONS + build_declarations(self.config), self.config)
+        self._tool_index_prompt = tool_index.index_prompt(deferred)
+        if deferred:
+            print(f"  Tool index: {len(declarations)} tools loaded, {len(deferred)} deferred")
         behavior = tool_behavior(self.model_id)
         if behavior:
             declarations = [d.model_copy(update={"behavior": types.Behavior(behavior)}) for d in declarations]
@@ -360,7 +455,7 @@ class FreyaModel:
                 )
             ),
             system_instruction=types.Content(
-                parts=[types.Part(text=self.personality + "\n\n" + routing_instruction(self.config, self.model_id) + "\n\n" + TOOLS_FIRST + "\n" +
+                parts=[types.Part(text=self.personality + "\n\n" + routing_instruction(self.config, self.model_id) + "\n\n" + WORK_RHYTHM + TOOLS_FIRST + "\n" +
                     "TRADING LAB: Call get_trading_lab_context with no session_id first before answering questions about the active chart or paper account. It resolves the focused workspace automatically; do not ask the user for a session before trying it. Use its structured facts (chart_legend, recent_candles, market_summary, live_price, indicators, orders) instead of screenshots; never capture_screen for the Trading Lab. For questions about colored lines, use chart_legend and answer the original question directly. Explaining indicator mechanics does not require a thesis. Do not replace the answer with an acknowledgment or offer to explain. "
                     "TRADING TEACHER: In the Trading Lab you are the user's patient, warm trading teacher. Assume they know NOTHING about trading unless get_trading_learner_profile says otherwise; call it at the start of any trading conversation. "
                     "Speak in plain everyday words. Avoid jargon; if a term is unavoidable (candle, EMA, RSI, support, stop loss...), explain it simply with an everyday analogy the first time, and only use terms the profile says they already understand. "
@@ -377,7 +472,8 @@ class FreyaModel:
                     "research and verification; use start_mission for that multi-step goal. "
                     "Only say a mission started after start_mission returns its id. "
                     "When a research method fails, use available search/fetch alternatives within "
-                    "the authorized read-only task instead of asking permission to keep researching.")]
+                    "the authorized read-only task instead of asking permission to keep researching."
+                    + ("\n\n" + self._tool_index_prompt if self._tool_index_prompt else ""))]
             ),
             input_audio_transcription=types.AudioTranscriptionConfig(),
             output_audio_transcription=types.AudioTranscriptionConfig(),
@@ -432,6 +528,12 @@ class FreyaModel:
 
     async def on_state(self, value: str):
         pass  # overridden in server.py
+
+    async def _set_state(self, value: str):
+        # The desktop activity pill follows her state too; server.py's
+        # on_state override only reaches the dashboard.
+        activity_ui.set_state(value)
+        await self.on_state(value)
 
     async def on_event(self, event_type: str, payload: dict):
         pass  # overridden in server.py — generic events (agent/mcp/schedule/ambient)
@@ -562,7 +664,39 @@ class FreyaModel:
         pending_playback_chunks = 0
         tool_queue = asyncio.Queue(maxsize=64)
         cancelled_calls = set()
+        _bg_reports = set()  # keeps background-result injections alive
         seen_calls = set()
+        # Last time the model / the user produced anything (speech, a call,
+        # transcription). The stall watchdog compares these to when a tool
+        # result was sent.
+        activity = {"model": time.monotonic(), "user": time.monotonic()}
+        # Real tool calls since she last said anything. 3.8 Live waits on each
+        # call, so a long search was a long silence: 35 calls, nothing spoken.
+        silent_calls = {"n": 0}
+        # What the current model turn has produced, for spotting empty turns:
+        # Gemini Live sometimes closes a turn with no audio, no words and no
+        # call — after the user spoke, or after a tool result — and she then
+        # sat mute until spoken to again.
+        turn = {"output": False, "user_text": "", "after_tool": False, "nudged": False,
+                "spoken_fix": False}
+        # One job at a time: the tool running in the background right now (None
+        # when idle), and calls that arrived meanwhile — answered "queued" at
+        # once so she keeps talking, then run in order when the job finishes.
+        busy = {"name": None}
+        deferred_ids = set()
+        report_lock = asyncio.Lock()
+        stall_nudge_s = float((self.config or {}).get("live", {}).get("stall_nudge_s", 8))
+        # live.trace: print every non-audio server frame (diagnostics only).
+        trace_frames = bool((self.config or {}).get("live", {}).get("trace", False))
+        # Jev mode routing: only from the default mode, and only when automatic
+        # escalation is allowed at all (live.auto_complex_mode).
+        from core import systemone
+        cfg = self.config or {}
+        route_queue = asyncio.Queue() if (
+            systemone.enabled(cfg, "mode_routing")
+            and cfg.get("live", {}).get("auto_complex_mode", True)
+            and cfg.get("active_mode", "default") == "default"
+        ) else None
 
         # Connect any configured MCP servers BEFORE building the tool list so
         # their tools are advertised to Gemini in this session.
@@ -643,6 +777,16 @@ class FreyaModel:
                     if paused != last_paused:
                         last_paused = paused
                         print("  🔇 Mic paused." if paused else "  🔊 Mic resumed.")
+                        if paused:
+                            # The Live API needs audioStreamEnd whenever the mic
+                            # stream stops for more than ~1 s. Without it the
+                            # server's voice-activity detector is left mid-stream,
+                            # and after Resume it stopped noticing when the user
+                            # finished talking: turns piled up unanswered.
+                            try:
+                                await session.send_realtime_input(audio_stream_end=True)
+                            except Exception as exc:
+                                print(f"  [mic] audio_stream_end failed: {exc}")
                         await runtime.emit("mic", {"paused": paused})
                     if paused:
                         continue
@@ -656,6 +800,119 @@ class FreyaModel:
                         audio=types.Blob(data=data, mime_type="audio/pcm;rate=16000")
                     )
 
+            async def watch_for_stall(sent_at: float):
+                # Gemini Live sometimes ends its turn silently after a lookup-
+                # only step (search_tools → schema) instead of making the next
+                # call: she then sat mute mid-task until the user spoke again.
+                # One nudge per tool result, so this can never loop.
+                wait = stall_nudge_s * (3 if self._interaction.extended else 1)
+                await asyncio.sleep(wait)
+                if activity["model"] > sent_at or activity["user"] > sent_at:
+                    return
+                if self._pending_tools or runtime.is_paused() or model_speaking.is_set():
+                    return
+                if turn["nudged"]:
+                    return      # the empty-turn check already nudged this silence
+                turn["nudged"] = True
+                print(f"  [live] model went quiet {wait:.0f}s after a tool result; nudging it on.")
+                try:
+                    await session.send_client_content(
+                        turns=types.Content(role="user", parts=[types.Part(text=(
+                            "[SYSTEM NOTE: you received the tool result above and then stopped. "
+                            "Carry on with the user's request now: make the next tool call you "
+                            "need, or tell the user the outcome. Do not mention this note.]"))]),
+                        turn_complete=True,
+                    )
+                except Exception as exc:
+                    print(f"  [live] stall nudge failed: {exc}")
+
+            async def nudge_empty_turn(user_text: str, after_tool: bool):
+                # Give a real reply a moment to start; any new speech, call or
+                # user audio in that window means the turn wasn't dead.
+                marker = (activity["model"], activity["user"])
+                await asyncio.sleep(1.5)
+                if (activity["model"], activity["user"]) != marker:
+                    return
+                if self._pending_tools or runtime.is_paused() or model_speaking.is_set():
+                    return
+                turn["nudged"] = True
+                if user_text:
+                    note = (f'[SYSTEM NOTE: the user just said: "{user_text[:500]}" and your turn '
+                            "ended with no reply. Respond to it now, making any tool calls it "
+                            "needs. Do not mention this note.]")
+                else:
+                    note = ("[SYSTEM NOTE: your turn ended right after a tool result with no reply. "
+                            "Carry on with the user's request: make the next call or tell him the "
+                            "outcome. Do not mention this note.]")
+                print("  [live] empty model turn; nudging it to respond.")
+                try:
+                    await session.send_client_content(
+                        turns=types.Content(role="user", parts=[types.Part(text=note)]),
+                        turn_complete=True,
+                    )
+                except Exception as exc:
+                    print(f"  [live] empty-turn nudge failed: {exc}")
+
+            async def report_finished(tool_name, tool_args, call_id, result, how):
+                """A background or queued job is done: log it and tell her to carry
+                on. 'Carry on', not just 'report': the old note only asked for
+                the outcome, so find-then-open chains stopped after the find."""
+                print(f"  Result ({how}): {result}")
+                if self.transcript:
+                    self.transcript.add("Tool", f"{tool_name}: {str(result)[:1600]}")
+                await self.on_tool(tool_name, tool_args, str(result))
+                if call_id in cancelled_calls:
+                    return
+                label = activity_ui.describe(tool_name, tool_args) or tool_name
+                note = (f"[Task finished ({label}). Result: {str(result)[:1600]}. Carry on with what the "
+                        "user asked: if it needs another step, say in one short sentence what you'll do "
+                        "next and do it now; otherwise tell him the outcome briefly.]")
+
+                async def deliver():
+                    # Not runtime.inject: that waits for zero pending tools and
+                    # DROPS the line after 20 s — with a queued job running, the
+                    # result of the one before it was silently lost. Wait only
+                    # for her to finish speaking and him to pause, then send.
+                    # The lock (FIFO) keeps results in the order jobs finished.
+                    async with report_lock:
+                        for _ in range(240):                   # ≤ 60 s
+                            user_pausing = time.monotonic() - activity["user"] > 1.2
+                            if not model_speaking.is_set() and user_pausing:
+                                break
+                            await asyncio.sleep(0.25)
+                        try:
+                            await session.send_client_content(
+                                turns=types.Content(role="user", parts=[types.Part(text=note)]),
+                                turn_complete=True)
+                        except Exception as exc:
+                            print(f"  [live] could not deliver task result: {exc}")
+
+                # Not awaited, so the next queued job starts right away.
+                _bg_reports.add(t := asyncio.create_task(deliver()))
+                t.add_done_callback(_bg_reports.discard)
+
+            async def answer_while_busy(fc, queued: bool):
+                """A call that arrived while another job is running. Instant,
+                read-only calls run now; real work is acknowledged as queued so
+                she can keep talking, and runs when the current job is done."""
+                name = getattr(fc, "name", "")
+                args = dict(fc.args) if getattr(fc, "args", None) else {}
+                try:
+                    if not queued:
+                        result = await registry_dispatch(name, args, ToolContext(self.config, session=session))
+                    else:
+                        result = (f"Queued: this starts automatically as soon as the current task "
+                                  f"({busy['name']}) finishes — one job at a time. Tell the user in one "
+                                  "short sentence that it's next, and keep chatting. Don't call it again.")
+                        print(f"  Tool queued behind {busy['name']}: {name}({args})")
+                    await session.send_tool_response(function_responses=[types.FunctionResponse(
+                        id=fc.id, name=name, response={"result": result})])
+                except Exception as exc:
+                    print(f"  [live] answering a call during a busy job failed: {exc}")
+                finally:
+                    if not queued:          # a queued call is counted down by the executor
+                        self._pending_tools -= 1
+
             async def execute_tools():
                 # One executor preserves desktop action order while the receiver
                 # continues streaming fillers, audio, cancellation and status.
@@ -668,8 +925,58 @@ class FreyaModel:
                         tool_args = dict(fc.args) if fc.args else {}
                         call_id = fc.id
                         print(f"  Tool : {tool_name}({tool_args})")
+                        activity_ui.tool_started(call_id, tool_name, tool_args)
                         ctx = ToolContext(self.config, session=session)
-                        result = await registry_dispatch(tool_name, tool_args, ctx)
+                        if call_id in deferred_ids:
+                            # Already answered "queued"; its turn has come. Run it
+                            # to completion and report through the task-finished note.
+                            deferred_ids.discard(call_id)
+                            busy["name"] = tool_name
+                            try:
+                                result = await registry_dispatch(tool_name, tool_args, ctx)
+                            finally:
+                                busy["name"] = None
+                            await report_finished(tool_name, tool_args, call_id, result, "queued")
+                            continue
+                        # The 3.8 Live model declares tools BLOCKING: it stays
+                        # silent until the function response arrives, so a
+                        # long tool (running a script, a big file operation)
+                        # left her mute for its whole duration. A tool still
+                        # running after SLOW_TOOL_SECONDS is answered with a
+                        # "running in background" response so she can keep
+                        # talking; the real result is injected when it lands.
+                        # The executor still awaits it before the next call,
+                        # so desktop actions keep their order.
+                        job = asyncio.create_task(registry_dispatch(tool_name, tool_args, ctx))
+                        try:
+                            await asyncio.wait({job}, timeout=SLOW_TOOL_SECONDS)
+                            if not job.done() and _effective_tool(tool_name, tool_args) not in FOREGROUND_TOOLS:
+                                await session.send_tool_response(
+                                    function_responses=[types.FunctionResponse(
+                                        id=call_id,
+                                        name=tool_name,
+                                        response={"result": (
+                                            f"{tool_name} is still running. If you haven't yet, tell "
+                                            "the user in one short sentence what you're doing, then keep "
+                                            "chatting normally. Don't start any other action until it "
+                                            "finishes — anything new he asks for will queue and run right "
+                                            "after. You'll get the result as soon as it lands; don't claim "
+                                            "an outcome yet."
+                                        )},
+                                    )]
+                                )
+                                await self.on_tool(tool_name, tool_args, "Running in background…")
+                                busy["name"] = tool_name
+                                try:
+                                    result = await job
+                                finally:
+                                    busy["name"] = None
+                                await report_finished(tool_name, tool_args, call_id, result, "background")
+                                continue
+                            result = await job
+                        finally:
+                            if not job.done():
+                                job.cancel()
                         print(f"  Result: {result}")
 
                         if call_id in cancelled_calls:
@@ -746,18 +1053,62 @@ class FreyaModel:
                             await session.send_client_content(turn_complete=True)
                             print("  Screen sent to Gemini (client_content).")
                         else:
+                            sent = result
+                            # Body-language tools are silent by design; don't count them.
+                            if not str(result).startswith("[SILENT"):
+                                silent_calls["n"] += 1
+                                if silent_calls["n"] % 4 == 0:
+                                    sent = (f"{result}\n[NOTE: that's {silent_calls['n']} tool calls "
+                                            "without a word to the user. Before your next call, tell "
+                                            "him in one short sentence what you're doing or what "
+                                            "you've found so far.]")
                             await session.send_tool_response(
                                 function_responses=[types.FunctionResponse(
                                     id=call_id,
                                     name=tool_name,
-                                    response={"result": result}
+                                    response={"result": sent}
                                 )]
                             )
+                        # The model's continuation after this result is a new
+                        # stretch of the turn: judge it on its own output.
+                        turn["output"] = False
+                        turn["after_tool"] = True
                         await self.on_tool(tool_name, tool_args, result)
+                        _bg_reports.add(w := asyncio.create_task(watch_for_stall(time.monotonic())))
+                        w.add_done_callback(_bg_reports.discard)
                         if tool_name == "switch_mode" and result.startswith("MODE_SWITCHED:"):
                             await audio_queue.join()
                             raise ModeChange(result.split(":", 1)[1])
+                    except ModeChange:
+                        raise
+                    except Exception as exc:
+                        # A tool failure is the model's problem to report, not a
+                        # reason to tear down the voice session. Before this,
+                        # anything `dispatch` RAISED (a disabled tool, a broken
+                        # approval policy) escaped this coroutine, killed the
+                        # task group and reconnected — while the model, which
+                        # never got a function response, just said something had
+                        # gone wrong. Answer the call with the real error instead.
+                        from core.errors import log_error
+                        log_error(f"live.tool.{getattr(fc, 'name', '?')}", exc)
+                        print(f"  Tool FAILED: {getattr(fc, 'name', '?')}: "
+                              f"{type(exc).__name__}: {exc}")
+                        try:
+                            await session.send_tool_response(
+                                function_responses=[types.FunctionResponse(
+                                    id=getattr(fc, "id", None),
+                                    name=getattr(fc, "name", None),
+                                    response={"result": (
+                                        f"Tool {getattr(fc, 'name', '?')} failed: "
+                                        f"{type(exc).__name__}: {exc}. Tell the user plainly "
+                                        f"what failed and why; do not retry blindly."
+                                    )},
+                                )]
+                            )
+                        except Exception as send_exc:
+                            log_error("live.tool.send_error_response", send_exc)
                     finally:
+                        activity_ui.tool_finished(getattr(fc, "id", None), getattr(fc, "name", ""))
                         self._pending_tools -= 1
                         tool_queue.task_done()
 
@@ -765,6 +1116,44 @@ class FreyaModel:
                 nonlocal pending_playback_chunks
                 freya_buffer = ""
                 user_buffer = ""
+                thinking_failed = False
+
+                def queue_call(fc):
+                    """Queue one function call, deduped by id.
+
+                    Called from BOTH delivery channels. `response.tool_call` is
+                    the classic one; 3.8 Live (thinking) can also deliver a call
+                    as a `function_call` PART of the model turn, and those parts
+                    used to be dropped on the floor — the loop below only ever
+                    looked at `inline_data`. A dropped call never reached
+                    `execute_tools`, so nothing was logged, no function response
+                    was ever sent, and the model (non-blocking, so it does not
+                    wait) reported that something had failed.
+                    """
+                    if fc is None or not getattr(fc, "name", None):
+                        return
+                    fc_id = getattr(fc, "id", None)
+                    if fc_id and fc_id in seen_calls:
+                        return
+                    if fc_id:
+                        seen_calls.add(fc_id)
+                    turn["output"] = True
+                    activity_ui.responding()
+                    turn["nudged"] = False
+                    turn["spoken_fix"] = False
+                    self._pending_tools += 1
+                    if busy["name"] and getattr(fc, "id", None):
+                        # A job is running: answer now (instant tools run, work is
+                        # queued) so she isn't frozen until it completes.
+                        args = dict(fc.args) if getattr(fc, "args", None) else {}
+                        queued = _effective_tool(fc.name, args) not in INSTANT_TOOLS
+                        if queued:
+                            deferred_ids.add(fc.id)
+                            tool_queue.put_nowait(fc)
+                        _bg_reports.add(a := asyncio.create_task(answer_while_busy(fc, queued)))
+                        a.add_done_callback(_bg_reports.discard)
+                        return
+                    tool_queue.put_nowait(fc)
 
                 async def flush_user():
                     # Emit the user's words as ONE complete utterance instead
@@ -773,6 +1162,8 @@ class FreyaModel:
                     full = user_buffer.strip()
                     user_buffer = ""
                     if full:
+                        turn["user_text"] = full
+                        turn["spoken_fix"] = False
                         print(f"  You  : {full}")
                         # Speech is presence. Without this the context tracker
                         # reads a long spoken session as an empty chair.
@@ -781,11 +1172,63 @@ class FreyaModel:
                             self.transcript.add("User", full)
                         self._note_day_turn(full)
                         await self.on_transcript("User", full)
+                        if route_queue is not None:
+                            route_queue.put_nowait(full)
 
                 async def flush_freya(cut: bool = False):
-                    nonlocal freya_buffer
-                    full = freya_buffer.strip()
+                    nonlocal freya_buffer, thinking_failed
+                    full, spoken_calls = _extract_spoken_calls(freya_buffer.strip())
                     freya_buffer = ""
+                    if spoken_calls:
+                        # She read a body-language call out loud instead of
+                        # making it. Show it the proper way (the avatar
+                        # actually changes) and keep it out of the transcript.
+                        for tool_name, tool_args in spoken_calls:
+                            print(f"  Spoken tool call caught: {tool_name}({tool_args})")
+                            try:
+                                result = await registry_dispatch(
+                                    tool_name, tool_args, ToolContext(self.config, session=session))
+                                await self.on_tool(tool_name, tool_args, str(result))
+                            except Exception as exc:
+                                print(f"  Spoken tool call failed: {exc}")
+                        try:
+                            await session.send_client_content(
+                                turns=types.Content(role="user", parts=[types.Part(text=(
+                                    "[SYSTEM NOTE: you just said a body-language tool call out "
+                                    "loud. Never speak tool names or arguments; call "
+                                    "set_expression and the other avatar tools silently. "
+                                    "Do not reply to this note.]"))]),
+                                turn_complete=False,
+                            )
+                        except Exception:
+                            pass
+                    if full and not cut:
+                        from core.registry import registered_names
+                        # Registry tools plus the legacy ones declared in this file
+                        # (run_terminal_command, close_app, ...).
+                        known = (set(registered_names()) | {d.name for d in TOOL_DECLARATIONS}
+                                 | {"run_tool", "search_tools"})
+                        spoken = [n for n in _SPOKEN_ANY_CALL.findall(full)
+                                  if n in known and n not in _AVATAR_TOOLS]
+                        if spoken:
+                            print(f"  Spoken tool call caught: {spoken[0]} ({full[:80]!r})")
+                            if len(full) < 80:
+                                full = ""      # nothing but call debris: keep it out of the record
+                            if not turn.get("spoken_fix"):
+                                turn["spoken_fix"] = True
+                                try:
+                                    await session.send_client_content(
+                                        turns=types.Content(role="user", parts=[types.Part(text=(
+                                            f"[SYSTEM NOTE: you said a {spoken[0]} call out loud "
+                                            "instead of making it. Make the actual function call "
+                                            "now — never speak call syntax. Do not mention this "
+                                            "note.]"))]),
+                                        turn_complete=True,
+                                    )
+                                except Exception:
+                                    pass
+                    if full and not cut and self._interaction.extended and is_thinking_failure(full):
+                        thinking_failed = True
                     if full:
                         if cut:
                             full += " …"
@@ -797,6 +1240,8 @@ class FreyaModel:
 
                 while True:
                     async for response in session.receive():
+                        if trace_frames:
+                            _trace_frame(response)
                         # ── Keep the resumption token fresh ──
                         # The server emits a new handle throughout the session.
                         # Stashing the latest one means a reconnect (planned or
@@ -823,18 +1268,14 @@ class FreyaModel:
                         if cancellation:
                             cancelled_calls.update(cancellation.ids or [])
                         if response.tool_call is not None:
+                            activity["model"] = time.monotonic()
                             await flush_user()
                             await flush_freya()
                             for fc in response.tool_call.function_calls:
-                                if fc.id and fc.id in seen_calls:
-                                    continue
-                                if fc.id:
-                                    seen_calls.add(fc.id)
-                                tool_queue.put_nowait(fc)
-                                self._pending_tools += 1
+                                queue_call(fc)
                         if pending_playback_chunks == 0 and self._interaction.utterance_complete:
                             model_speaking.clear()
-                            await self.on_state(self._interaction.state_after_playback())
+                            await self._set_state(self._interaction.state_after_playback())
                         if response.server_content is None:
                             continue
 
@@ -853,7 +1294,7 @@ class FreyaModel:
                             await flush_freya(cut=True)
                             pending_playback_chunks = 0
                             model_speaking.clear()
-                            await self.on_state("interrupted")
+                            await self._set_state("interrupted")
                             continue
 
                         # Accumulate input transcription fragments silently
@@ -861,6 +1302,8 @@ class FreyaModel:
                         if inp:
                             text = getattr(inp, 'text', str(inp)).strip()
                             if text:
+                                activity_ui.heard()
+                                activity["user"] = time.monotonic()
                                 user_buffer += " " + text
 
                         # Buffer Freya's words — don't emit yet
@@ -868,28 +1311,98 @@ class FreyaModel:
                         if out:
                             text = _clean_speech(getattr(out, 'text', str(out)) or "")
                             if text:
+                                activity["model"] = time.monotonic()
+                                silent_calls["n"] = 0
+                                turn["output"] = True
+                                activity_ui.responding()
+                                turn["nudged"] = False
                                 # Model started answering → the user's turn is over
                                 await flush_user()
                                 freya_buffer += " " + text
                                 # Stream the fragment live so the UI can type it out
-                                # in the center of the scene as she speaks.
-                                await runtime.emit("speech", {"text": text})
+                                # in the center of the scene as she speaks. A
+                                # whole spoken tool call in one fragment is
+                                # dropped from the caption; flush_freya handles
+                                # the rest.
+                                caption, _ = _extract_spoken_calls(text)
+                                if caption:
+                                    await runtime.emit("speech", {"text": caption})
 
                         if sc.model_turn is not None:
+                            activity["model"] = time.monotonic()
                             for part in sc.model_turn.parts:
+                                part_call = getattr(part, "function_call", None)
+                                if part_call is not None:
+                                    await flush_user()
+                                    await flush_freya()
+                                    queue_call(part_call)
                                 if part.inline_data is not None:
+                                    turn["output"] = True
+                                    activity_ui.responding()
+                                    turn["nudged"] = False
                                     if not model_speaking.is_set():
                                         model_speaking.set()
-                                        await self.on_state("speaking")
+                                        await self._set_state("speaking")
                                     pending_playback_chunks += 1
                                     await audio_queue.put(part.inline_data.data)
 
                         if getattr(sc, 'turn_complete', False):
                             await flush_user()
                             await flush_freya()
+                            if (not turn["output"] and not turn["nudged"]
+                                    and (turn["user_text"] or turn["after_tool"])):
+                                _bg_reports.add(n := asyncio.create_task(
+                                    nudge_empty_turn(turn["user_text"], turn["after_tool"])))
+                                n.add_done_callback(_bg_reports.discard)
+                            turn.update(output=False, user_text="", after_tool=False)
                             if pending_playback_chunks == 0:
                                 model_speaking.clear()
-                                await self.on_state(self._interaction.state_after_playback())
+                                await self._set_state(self._interaction.state_after_playback())
+                            if thinking_failed and self._interaction.idle:
+                                # Let the apology finish, then hand the task to
+                                # the regular Live model (see ThinkingTaskFailed).
+                                print("  Extended thinking dropped the task; resuming on the standard model.")
+                                if self.transcript:
+                                    self.transcript.add("Tool", "live: the reasoning model failed on "
+                                                        "Google's side; continue the same task now")
+                                await audio_queue.join()
+                                raise ThinkingTaskFailed("extended thinking background task failed")
+
+            async def route_modes():
+                # The fast model is told to call switch_mode(complex_tasks) for
+                # hard work, but it often answers first and escalates late or
+                # never. Jev reads each finished utterance in parallel and makes
+                # the switch itself when it is confident; the ModeChange path
+                # (transcript recap + continue_task) carries the goal across.
+                from core import systemone
+                from core.tools import switch_mode
+                switch_at = float(systemone.setting(self.config, "mode_routing", "switch_at", 0.85))
+                while True:
+                    utterance = await route_queue.get()
+                    if self._pending_tools:
+                        continue  # never reconnect under a running tool
+                    recent = self.transcript.get()[-6:] if self.transcript else []
+                    p = await systemone.noul(
+                        {"recent_conversation": recent, "latest_user_turn": utterance},
+                        "Does `latest_user_turn` ask for a task that needs multi-step "
+                        "reasoning, difficult debugging, architecture, or comparing and "
+                        "verifying research?",
+                        self.config, "mode_routing",
+                        criteria={"true": "Hard task that benefits from slow, careful reasoning",
+                                  "false": "Casual talk, a simple command, a straightforward "
+                                           "lookup, or a request to stay in the current mode"},
+                    )
+                    if p is None or p < switch_at:
+                        continue
+                    result = await loop.run_in_executor(None, switch_mode, "complex_tasks")
+                    if not result.startswith("MODE_SWITCHED:"):
+                        continue
+                    print(f"  [jev] complex task (p={p:.2f}), switching to complex_tasks")
+                    if self.transcript:
+                        self.transcript.add("Tool", f"switch_mode: {result}")
+                    await self.on_tool("switch_mode", {"mode": "complex_tasks", "via": "jev"}, result)
+                    await audio_queue.join()  # let her finish the current word
+                    raise ModeChange("complex_tasks")
 
             async def play_audio():
                 nonlocal pending_playback_chunks
@@ -904,21 +1417,20 @@ class FreyaModel:
                     pending_playback_chunks = max(0, pending_playback_chunks - 1)
                     if pending_playback_chunks == 0 and self._interaction.utterance_complete:
                         model_speaking.clear()
-                        await self.on_state(self._interaction.state_after_playback())
+                        await self._set_state(self._interaction.state_after_playback())
 
             try:
                 from core.voice_tasks import run_voice_tasks
-                await run_voice_tasks(
-                    send_audio(),
-                    receive_audio(),
-                    play_audio(),
-                    execute_tools()
-                )
+                workers = [send_audio(), receive_audio(), play_audio(), execute_tools()]
+                if route_queue is not None:
+                    workers.append(route_modes())
+                await run_voice_tasks(*workers)
             finally:
                 # Release the proactive channels and background loops bound to
                 # this session so the next reconnect starts clean.
                 self.session = None
                 runtime.clear_channels()
+                activity_ui.clear()     # nothing she was doing survives the session
                 try:
                     from core.scheduler import scheduler
                     scheduler.detach()

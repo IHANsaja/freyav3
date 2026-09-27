@@ -46,5 +46,6 @@ const getServerSnapshot = (): number => 0;
 export function useUptime(startedAt: number | null | undefined): string | null {
   const nowSeconds = useSyncExternalStore(subscribe, getSnapshot, getServerSnapshot);
   if (!startedAt || !nowSeconds) return null;
-  return format(Math.max(0, nowSeconds - startedAt));
+  // startedAt is fractional unix seconds from time.time().
+  return format(Math.max(0, nowSeconds - Math.floor(startedAt)));
 }

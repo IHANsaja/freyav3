@@ -150,7 +150,7 @@ export default function DrawingInspector({
               onClick={() => setSelected(d.id)}
             >
               {TOOLS[d.kind].label}
-              {d.author === "freya" ? " · Freya" : ""}
+              {d.author === "freya" ? " · Freyja" : ""}
             </button>
             <button
               aria-label={`${d.hidden ? "Show" : "Hide"} ${TOOLS[d.kind].label}`}

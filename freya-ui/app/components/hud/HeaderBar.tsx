@@ -25,6 +25,8 @@ const HAND_TRACKING_COLOR: Record<HandTrackingStatus, string> = {
   starting: "var(--text-secondary)",
   active: "var(--accent-green)",
   denied: "var(--accent-red)",
+  no_camera: "var(--accent-red)",
+  busy: "var(--accent-red)",
   unsupported: "var(--accent-red-dim)",
   error: "var(--accent-red-dim)",
 };
@@ -33,9 +35,11 @@ const HAND_TRACKING_LABEL: Record<HandTrackingStatus, string> = {
   idle: "Enable hand tracking (camera)",
   starting: "Starting camera…",
   active: "Disable hand tracking",
-  denied: "Camera access denied",
+  denied: "Camera access denied — allow it in the browser, then click to retry",
+  no_camera: "No camera found — click to retry",
+  busy: "Camera is in use by another app — close it, then click to retry",
   unsupported: "Hand tracking unsupported in this browser",
-  error: "Hand tracking failed to start",
+  error: "Hand tracking failed to start — click to retry",
 };
 
 const DIVIDER = <span aria-hidden className="w-px h-3 self-center" style={{ background: "var(--panel-border)" }} />;
@@ -81,7 +85,7 @@ export default function HeaderBar({
               textShadow: "0 0 12px rgba(34,224,160,0.55)",
             }}
           >
-            F.R.E.Y.A V3.0
+            FREYJA V3.0
           </h1>
           <p className="text-[8px] tracking-[0.3em] uppercase" style={{ color: "var(--text-secondary)", fontFamily: "var(--font-ui)" }}>
             Archival System

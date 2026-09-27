@@ -37,7 +37,7 @@ export default function SuggestionChips({ suggestions, onRespond }: SuggestionCh
                         <button
                             onClick={() => onRespond(s.id, false)}
                             className="px-2 py-1 text-[10px] font-mono tracking-widest uppercase text-outline hover:text-parchment transition-all"
-                            title="Dismiss (Freya nudges less after dismissals)"
+                            title="Dismiss (Freyja nudges less after dismissals)"
                         >
                             ✕
                         </button>

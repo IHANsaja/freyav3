@@ -93,8 +93,8 @@ export default function AccessControlPanel() {
   return (
     <div className="flex flex-col gap-3">
       <p className="text-[10px] leading-relaxed text-outline/70">
-        Folders Freya may modify. Leave the list empty to use the safe default
-        sandbox (your home folder and the Freya project).
+        Folders Freyja may modify. Leave the list empty to use the safe default
+        sandbox (your home folder and the Freyja project).
       </p>
 
       {/* Current allow-list */}
@@ -191,7 +191,7 @@ export default function AccessControlPanel() {
 
       {cfg.unrestricted && (
         <p className="text-[10px] leading-relaxed" style={{ color: "var(--danger)" }}>
-          Unrestricted: Freya can modify files anywhere on this machine.
+          Unrestricted: Freyja can modify files anywhere on this machine.
         </p>
       )}
       {error && (

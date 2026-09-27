@@ -151,7 +151,7 @@ scheduler = Scheduler()
 # ══════════════════════════════════════════════
 @tool(
     "schedule_task",
-    "Schedule something for the future that Freya will SAY out loud when due. Use for reminders "
+    "Schedule something for the future that Freyja will SAY out loud when due. Use for reminders "
     "and recurring briefings. Provide either minutes_from_now (one-shot) or daily_time HH:MM "
     "(every day).",
     OBJ({"action": P(STR, "What to remind/do, e.g. 'tell the user to join the standup' or "

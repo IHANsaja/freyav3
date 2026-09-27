@@ -668,7 +668,7 @@ export default function TradingPage() {
   async function talk() {
     setSideTab("guide");
     if (!connected) {
-      setError("Freya's backend is offline. Start server.py to talk with her.");
+      setError("Freyja's backend is offline. Start server.py to talk with her.");
       return;
     }
     if (!s) {
@@ -693,7 +693,7 @@ export default function TradingPage() {
       });
       if (!voiceOn) startFreya();
     } catch {
-      setError("Could not share the active chart with Freya. Try again.");
+      setError("Could not share the active chart with Freyja. Try again.");
     }
   }
   function evidence(id: string) {
@@ -778,14 +778,14 @@ export default function TradingPage() {
           <span className="simulation-badge">PAPER ACCOUNT</span>
           <span className="connection">
             <i className={connected ? "online" : ""} />
-            {connected ? "Freya connected" : "Standalone mode"}
+            {connected ? "Freyja connected" : "Standalone mode"}
           </span>
           <button
             className={`subtle voice-toggle ${voiceOn ? "on" : ""}`}
             onClick={() => (voiceOn ? stopFreya() : talk())}
             disabled={!connected}
           >
-            {voiceOn ? "■ End conversation" : "🎙 Talk to Freya"}
+            {voiceOn ? "■ End conversation" : "🎙 Talk to Freyja"}
           </button>
         </div>
       </header>
@@ -1755,7 +1755,7 @@ export default function TradingPage() {
               aria-pressed={sideTab === "guide"}
               onClick={() => setSideTab("guide")}
             >
-              🎙 Talk with Freya
+              🎙 Talk with Freyja
             </button>
           </div>
           {sideTab === "ticket" ? (
@@ -1908,7 +1908,7 @@ export default function TradingPage() {
                   <br />A better decision.
                 </h2>
                 <p>
-                  Talk it through out loud. Freya reads this workspace directly
+                  Talk it through out loud. Freyja reads this workspace directly
                   (chart, candles, indicators and your paper account), no
                   screenshots needed.
                 </p>
@@ -1917,7 +1917,7 @@ export default function TradingPage() {
                 <i />{" "}
                 {s
                   ? `${s.symbol} · ${s.interval / 60}m · ${selected ? "selected candle" : "latest candle"}`
-                  : "Open a session so Freya has a chart to discuss"}
+                  : "Open a session so Freyja has a chart to discuss"}
               </div>
               <div className="voice-controls">
                 <span className={`voice-state ${voiceState}`}>
@@ -1928,7 +1928,7 @@ export default function TradingPage() {
                       : micPaused
                         ? "Mic muted"
                         : voiceState === "speaking"
-                          ? "Freya is speaking…"
+                          ? "Freyja is speaking…"
                           : "Listening…"}
                 </span>
                 {voiceOn ? (
@@ -1978,7 +1978,7 @@ export default function TradingPage() {
               </div>
               {voiceOn && (
                 <div className="freya-actions" aria-live="polite">
-                  <small>Freya&apos;s actions</small>
+                  <small>Freyja&apos;s actions</small>
                   {toolLog
                     .filter((t) => TRADING_TOOL_LABELS[t.name])
                     .slice(-5)
@@ -2011,7 +2011,7 @@ export default function TradingPage() {
               )}
               <p className="muted">
                 Voice uses the microphone and speakers on the computer running
-                Freya. She can explain and coach, but she only places paper
+                Freyja. She can explain and coach, but she only places paper
                 orders if you explicitly ask.
               </p>
             </div>

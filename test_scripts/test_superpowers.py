@@ -6,6 +6,11 @@ WITHOUT opening the Gemini Live audio session. Run from the project root:
 """
 
 import asyncio
+import sys
+
+# Tool output includes emoji and window titles in any script; a redirected
+# cp1252 console would crash the print, not the tool.
+sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 import json
 import os
 import sys

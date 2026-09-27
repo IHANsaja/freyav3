@@ -11,6 +11,7 @@ that one tool group rather than crashing the whole assistant.
 
 import os
 import subprocess
+import time
 
 from core.registry import register, tool, OBJ, P, STR, INT, BOOL
 from core.user_paths import resolve_user_path
@@ -300,9 +301,36 @@ def _background_procs(windowed: set[str]) -> str:
     return ", ".join(shown) + more + "."
 
 
+# The window each title query last resolved to. "Minimize VS Code, maximize it,
+# close it" is one window to a person, but the list is in z-order and
+# minimizing moves a window to the bottom — so each step used to grab a
+# different match, and the final close hit the user's other VS Code window.
+_last_window: dict[str, tuple[int, float]] = {}
+_WINDOW_MEMORY_S = 600
+
+
 def _find_window(title: str):
-    wins = _windows().getWindowsWithTitle(title)
-    return wins[0] if wins else None
+    gw = _windows()
+    wins = [w for w in gw.getWindowsWithTitle(title) if w.title]
+    if not wins:
+        return None
+    key = title.strip().lower()
+    remembered = _last_window.get(key)
+    pick = None
+    if remembered and time.time() - remembered[1] < _WINDOW_MEMORY_S:
+        pick = next((w for w in wins if w._hWnd == remembered[0]), None)
+    if pick is None:
+        # Otherwise the one in front (usually the one just opened or focused),
+        # then any visible one, then whatever is left.
+        try:
+            front = gw.getActiveWindow()
+        except Exception:
+            front = None
+        pick = (next((w for w in wins if front is not None and w._hWnd == front._hWnd), None)
+                or next((w for w in wins if not w.isMinimized), None)
+                or wins[0])
+    _last_window[key] = (pick._hWnd, time.time())
+    return pick
 
 
 @tool(
@@ -378,8 +406,12 @@ def set_volume(args, ctx) -> str:
         from pycaw.pycaw import AudioUtilities, IAudioEndpointVolume
         level = max(0, min(100, int(args.get("level", 50))))
         devices = AudioUtilities.GetSpeakers()
-        iface = devices.Activate(IAudioEndpointVolume._iid_, CLSCTX_ALL, None)
-        vol = cast(iface, POINTER(IAudioEndpointVolume))
+        # pycaw 2025+ wraps the device in an AudioDevice that exposes the
+        # endpoint volume directly and no longer has .Activate().
+        vol = getattr(devices, "EndpointVolume", None)
+        if vol is None:
+            iface = devices.Activate(IAudioEndpointVolume._iid_, CLSCTX_ALL, None)
+            vol = cast(iface, POINTER(IAudioEndpointVolume))
         vol.SetMasterVolumeLevelScalar(level / 100.0, None)
         return f"Volume set to {level}%."
     except Exception as e:
