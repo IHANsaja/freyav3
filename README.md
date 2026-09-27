@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="docs/assets/freyja-logo.png" alt="Freyja" width="100%">
+</p>
+
 # 🌌 Freya v3.0
 
 **Trading Lab:** open `/trading` for simulation-only BTC/ETH practice, replay,
