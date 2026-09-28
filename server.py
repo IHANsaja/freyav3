@@ -677,6 +677,22 @@ async def update_persona_endpoint(body: dict):
     return JSONResponse({"status": "updated", "active_model": new_cfg["active_model"]})
 
 
+@app.post("/persona/dismiss")
+async def dismiss_persona_setup():
+    """The first-run customizer was closed without saving: remember that it has
+    been offered, so it doesn't reopen on every load. Settings are untouched —
+    she keeps her defaults, and the header button still opens the customizer."""
+    config_path = os.path.join("config", "freya_config.json")
+    with open(config_path, "r", encoding="utf-8") as f:
+        config = json.load(f)
+    persona = config.setdefault("persona", {})
+    if not persona.get("setup_done"):
+        persona["setup_done"] = True
+        with open(config_path, "w", encoding="utf-8") as f:
+            json.dump(config, f, indent=2)
+    return JSONResponse({"status": "dismissed"})
+
+
 def _resolved_audio_devices(config):
     from core.audio import resolve_device
     audio = config.get("audio", {})
