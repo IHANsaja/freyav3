@@ -132,3 +132,40 @@ export interface HealthPayload {
     resting_tools: string[];
     ts: number;
 }
+
+// ── Activity feed (core/activity.py) — what she is doing right now ──
+export type ActivityPhase =
+    | "idle" | "listening" | "hearing" | "thinking" | "speaking"
+    | "working" | "approval" | "recovering";
+
+export type ToolCategory =
+    | "search" | "file" | "app" | "screen" | "system" | "web"
+    | "memory" | "agent" | "trading" | "display" | "other";
+
+export interface ActivityTool {
+    id: string;
+    name: string;
+    label: string;
+    category: ToolCategory;
+    startedAt: number;                      // unix seconds
+    mode: "foreground" | "background" | "queued";
+}
+
+export interface ActivityRecent extends ActivityTool {
+    status: "ok" | "error" | "timeout" | "resting";
+    detail: string;
+    ms: number;
+    endedAt: number;
+}
+
+export interface ActivityPayload {
+    phase: ActivityPhase;
+    label: string;
+    state: string;
+    heardAt: number | null;                 // last user transcription fragment
+    tools: ActivityTool[];
+    approvals: { id: string; summary: string }[];
+    recent: ActivityRecent[];
+    stats: { calls: number; failures: number; tool_ms: number };
+    ts: number;
+}

@@ -853,6 +853,13 @@ async def get_status():
     return JSONResponse(_session_payload())
 
 
+@app.get("/activity")
+async def get_activity():
+    """What she is doing right now, and the recent tool history."""
+    from core.activity import feed
+    return JSONResponse(feed.snapshot())
+
+
 @app.get("/health")
 async def get_health():
     """Component health under the recovery protocol (see core/resilience.py)."""
@@ -1047,6 +1054,8 @@ async def websocket_endpoint(websocket: WebSocket):
     # Recovery protocol: the dashboard always knows what state she is in.
     try:
         await websocket.send_json({"type": "health", "payload": health.snapshot()})
+        from core.activity import feed
+        await websocket.send_json({"type": "activity", "payload": feed.snapshot()})
     except Exception:
         pass
 

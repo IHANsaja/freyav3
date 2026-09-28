@@ -917,7 +917,7 @@ class FreyaModel:
 
             tool_timeout_s = float(cfg.get("live", {}).get("tool_timeout_s", 300))
 
-            async def settle(job, tool_name, tool_args):
+            async def settle(job, tool_name, tool_args, call_id=None):
                 """Await a tool job under the recovery protocol: bounded by
                 `live.tool_timeout_s`, recorded in the circuit breaker, and any
                 failure turned into a result she can talk about. A hung tool
@@ -933,6 +933,7 @@ class FreyaModel:
                 except (asyncio.TimeoutError, TimeoutError):
                     tripped = breaker.failure(key)
                     print(f"  Tool TIMEOUT: {key} after {tool_timeout_s:.0f}s")
+                    activity_ui.tool_outcome(call_id, "timeout", f"stopped after {tool_timeout_s:.0f}s")
                     if tripped:
                         health.set("tools", DEGRADED, f"{key} is resting after repeated failures")
                     return (f"Tool {key} took longer than {tool_timeout_s:.0f}s and was stopped. "
@@ -942,11 +943,16 @@ class FreyaModel:
                     from core.errors import log_error
                     log_error(f"live.tool.{key}", exc)
                     print(f"  Tool FAILED: {key}: {type(exc).__name__}: {exc}")
+                    activity_ui.tool_outcome(call_id, "error", f"{type(exc).__name__}: {exc}")
                     if breaker.failure(key):
                         health.set("tools", DEGRADED, f"{key} is resting after repeated failures")
                     return (f"Tool {key} failed: {type(exc).__name__}: {exc}. Tell the user plainly "
                             "what failed and why; do not retry blindly — try another route if there is one.")
                 breaker.success(key)
+                # The tool ran but answered with bad news: not the breaker's
+                # business (the tool works), but the dashboard shows it as failed.
+                if isinstance(result, str) and result.lstrip().lower().startswith(("error", "failed")):
+                    activity_ui.tool_outcome(call_id, "error", result.strip()[:160])
                 if health.get("tools").state != OK and not breaker.open_tools():
                     health.ok("tools")
                 return result
@@ -971,6 +977,7 @@ class FreyaModel:
                             # rests instead of costing another full timeout.
                             resting = breaker.resting_message(effective)
                             print(f"  Tool resting: {effective}")
+                            activity_ui.tool_outcome(call_id, "resting", "failed repeatedly; resting")
                             if call_id in deferred_ids:
                                 deferred_ids.discard(call_id)
                                 await report_finished(tool_name, tool_args, call_id, resting, "queued")
@@ -986,7 +993,7 @@ class FreyaModel:
                             busy["name"] = tool_name
                             try:
                                 result = await settle(registry_dispatch(tool_name, tool_args, ctx),
-                                                      tool_name, tool_args)
+                                                      tool_name, tool_args, call_id)
                             finally:
                                 busy["name"] = None
                             await report_finished(tool_name, tool_args, call_id, result, "queued")
@@ -1019,14 +1026,15 @@ class FreyaModel:
                                     )]
                                 )
                                 await self.on_tool(tool_name, tool_args, "Running in background…")
+                                activity_ui.tool_mode(call_id, "background")
                                 busy["name"] = tool_name
                                 try:
-                                    result = await settle(job, tool_name, tool_args)
+                                    result = await settle(job, tool_name, tool_args, call_id)
                                 finally:
                                     busy["name"] = None
                                 await report_finished(tool_name, tool_args, call_id, result, "background")
                                 continue
-                            result = await settle(job, tool_name, tool_args)
+                            result = await settle(job, tool_name, tool_args, call_id)
                         finally:
                             if not job.done():
                                 job.cancel()
@@ -1144,6 +1152,7 @@ class FreyaModel:
                         # gone wrong. Answer the call with the real error instead.
                         from core.errors import log_error
                         log_error(f"live.tool.{getattr(fc, 'name', '?')}", exc)
+                        activity_ui.tool_outcome(getattr(fc, "id", None), "error", f"{type(exc).__name__}: {exc}")
                         print(f"  Tool FAILED: {getattr(fc, 'name', '?')}: "
                               f"{type(exc).__name__}: {exc}")
                         try:

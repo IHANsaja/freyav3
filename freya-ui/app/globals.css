@@ -31,6 +31,7 @@
   --font-mono: var(--font-mono), monospace;
   --font-display: var(--font-orbitron), sans-serif;
   --font-ui: var(--font-rajdhani), sans-serif;
+  --font-rune: var(--font-runic), "Segoe UI Historic", serif;
 }
 
 :root {
@@ -393,4 +394,30 @@ a:focus-visible,
 }
 ::-webkit-scrollbar-thumb:hover {
   background: var(--color-primary);
+}
+
+/* ── Activity indicator (header) ── */
+.activity-dots::after {
+  content: "";
+  display: inline-block;
+  width: 1.2em;
+  text-align: left;
+  animation: activity-dots 1.2s steps(4, end) infinite;
+}
+@keyframes activity-dots {
+  0% { content: ""; }
+  25% { content: "."; }
+  50% { content: ".."; }
+  75% { content: "..."; }
+}
+.rune-charged {
+  animation: rune-charge 1.8s ease-in-out infinite;
+}
+@keyframes rune-charge {
+  0%, 100% { text-shadow: 0 0 2px currentColor; opacity: 0.8; }
+  50% { text-shadow: 0 0 10px currentColor, 0 0 18px currentColor; opacity: 1; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .activity-dots::after { animation: none; content: "…"; }
+  .rune-charged { animation: none; }
 }

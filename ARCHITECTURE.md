@@ -399,6 +399,15 @@ while a tool runs, so without it a 20-second disk search looked exactly like a h
   call is a no-op when `activity_overlay.enabled` is false. `FREYA_OVERLAY_CAPTURABLE=1`
   keeps it in screenshots for checking the look.
 
+### Activity Feed (`core/activity.py` → header `ActivityIndicator`)
+The pill's big sibling on the dashboard. `activity_overlay`'s public calls forward every event here as well, so the two can never disagree. It publishes an `activity` event (also `GET /activity`, and sent to every new dashboard) only when something visible changes:
+
+- **phase** — idle / listening / hearing / thinking / speaking / working / approval / recovering, in that priority (a dropped link beats an approval beats work). "Thinking" is derived on the client from `heardAt`, so no timer runs server-side.
+- **tools** — every call in flight with its plain-English label, category and mode (`background` once it outlives the talk-first window).
+- **recent / stats** — the tool-usage log: last 12 calls with outcome (`ok`, `error`, `timeout`, `resting`) and duration; session totals. Outcomes come from `model.settle` (exceptions, timeouts, the breaker) and from results that start with "Error"/"Failed".
+
+The header shows the phase as an Elder Futhark rune (ᚲ Kenaz, the torch, for search; ᚠ Fehu for trading; ᚺ Hagalaz for a dropped link…), the sentence, a timer, and a failure mark; clicking opens the log. The desktop pill gained a step counter ("Step 3 · Opening report.pdf"), a red flash when a step fails or times out, and an amber "Reconnecting" line fed from `health`.
+
 ### System One / Jev (`core/systemone.py`) — optional
 Jev (TypeSafe) answers typed yes/no, pick-one and score questions in ~70–500 ms. It is
 early-access, so **the key is the switch**: `TYPESAFE_API_KEY` present → used; absent or blank →

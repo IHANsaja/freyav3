@@ -5,6 +5,7 @@ import type {
     CardEventPayload,
     ContextPayload,
     HealthPayload,
+    ActivityPayload,
     MissionEventPayload,
     MissionPayload,
     PendingApproval,
@@ -182,6 +183,7 @@ export function useFreyaSocketConnection() {
     const [contextInfo, setContextInfo] = useState<ContextPayload | null>(null);
     const [persona, setPersona] = useState<PersonaPayload | null>(null);
     const [health, setHealth] = useState<HealthPayload | null>(null);
+    const [activity, setActivity] = useState<ActivityPayload | null>(null);
     const [linkErrors, setLinkErrors] = useState<LinkError[]>([]);
     const [pingMs, setPingMs] = useState<number | null>(null);
     const linkErrorSeq = useRef(0);
@@ -579,6 +581,8 @@ export function useFreyaSocketConnection() {
                     } else {
                         setApprovals((prev) => prev.filter((a) => a.id !== p.id));
                     }
+                } else if (msg.type === "activity") {
+                    setActivity(msg.payload as ActivityPayload);
                 } else if (msg.type === "health") {
                     setHealth(msg.payload as HealthPayload);
                 } else if (msg.type === "session") {
@@ -759,6 +763,7 @@ export function useFreyaSocketConnection() {
         contextInfo,
         persona,
         health,
+        activity,
         // Actions
         startFreya,
         stopFreya,

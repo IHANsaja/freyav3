@@ -65,6 +65,7 @@ export default function Home() {
     suggestions,
     persona,
     health,
+    activity,
     audioDevices,
     startFreya,
     stopFreya,
@@ -298,6 +299,7 @@ export default function Home() {
           connected={connected}
           status={status}
           health={health}
+          activity={activity}
           modeLabel={modeLabel}
           onOpenSettings={() => setIsSettingsOpen(true)}
           onOpenCustomizer={openCustomizer}
