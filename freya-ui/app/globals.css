@@ -350,11 +350,17 @@ body {
   to { opacity: 1; transform: none; }
 }
 
-/* Hide the native cursor while the reticle cursor is active (fine pointers only) */
+/* Hide the native cursor while the rune cursor is active (fine pointers only).
+   Text fields keep the native I-beam, so the caret position stays obvious. */
 @media (pointer: fine) {
   body.hud-cursor-active,
   body.hud-cursor-active * {
     cursor: none !important;
+  }
+  body.hud-cursor-active input:not([type="button"]):not([type="submit"]):not([type="checkbox"]):not([type="radio"]):not([type="range"]),
+  body.hud-cursor-active textarea,
+  body.hud-cursor-active [contenteditable="true"] {
+    cursor: text !important;
   }
 }
 
@@ -658,4 +664,109 @@ section:hover .hud-card-runes {
 @media (prefers-reduced-motion: reduce) {
   .intro-css-ring span { animation-duration: 0.01s; }
   .intro-css-core, .intro-letter-rune, .intro-letter-latin, .intro-caption, .intro-subtitle { animation-duration: 0.01s; }
+}
+
+/* ══════════════════════════════════════════════
+   RUNE CURSOR (components/hud/CustomCursor.tsx)
+   A gold point at the hotspot inside a jade diamond, with a gold ember trail behind it.
+   ══════════════════════════════════════════════ */
+.rune-cursor {
+  position: fixed;
+  inset: 0;
+  z-index: 300;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.2s ease;
+  --cursor-gold: #f2b45a;
+}
+.rune-cursor[data-visible] { opacity: 1; }
+.rune-cursor[data-mode="text"] { opacity: 0; }
+
+/* Each anchor sits exactly on its point; children centre on it. */
+.rune-cursor-anchor {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 0;
+  height: 0;
+  will-change: transform;
+}
+.rune-cursor-anchor > span {
+  position: absolute;
+  left: 0;
+  top: 0;
+  translate: -50% -50%;
+}
+
+/* The hotspot: a small gold point. */
+.rune-cursor-point {
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: var(--cursor-gold);
+  box-shadow: 0 0 6px var(--cursor-gold);
+  transition: scale 0.15s ease;
+}
+
+/* The cut gem: a diamond outline in the persona accent. */
+.rune-cursor-gem {
+  width: 18px;
+  height: 18px;
+  border: 1.5px solid var(--accent-red);
+  border-radius: 2px;
+  rotate: 45deg;
+  opacity: 0.85;
+  box-shadow: 0 0 10px -2px var(--accent-red), inset 0 0 6px -3px var(--accent-red);
+  transition: rotate 0.28s cubic-bezier(0.2, 0.9, 0.3, 1.2), scale 0.22s ease, opacity 0.2s ease,
+    border-color 0.2s ease;
+}
+/* Corner notches: hidden at rest, they light up when the rune locks on. */
+.rune-cursor-gem i {
+  position: absolute;
+  width: 5px;
+  height: 5px;
+  border: 0 solid var(--cursor-gold);
+  opacity: 0;
+  transition: opacity 0.2s ease, translate 0.25s ease;
+}
+.rune-cursor-gem .n { top: -4px; left: -4px; border-top-width: 1.5px; border-left-width: 1.5px; }
+.rune-cursor-gem .e { top: -4px; right: -4px; border-top-width: 1.5px; border-right-width: 1.5px; }
+.rune-cursor-gem .s { bottom: -4px; right: -4px; border-bottom-width: 1.5px; border-right-width: 1.5px; }
+.rune-cursor-gem .w { bottom: -4px; left: -4px; border-bottom-width: 1.5px; border-left-width: 1.5px; }
+
+.rune-cursor[data-mode="hover"] .rune-cursor-gem {
+  rotate: 0deg;
+  scale: 1.35;
+  opacity: 1;
+}
+.rune-cursor[data-mode="hover"] .rune-cursor-gem i { opacity: 1; }
+.rune-cursor[data-mode="hover"] .rune-cursor-point { scale: 1.25; }
+
+.rune-cursor[data-pressed] .rune-cursor-gem { scale: 0.8; }
+.rune-cursor[data-pressed][data-mode="hover"] .rune-cursor-gem { scale: 1.1; }
+
+/* Gold ember trailing behind. */
+.rune-cursor-ember {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: radial-gradient(circle, #ffe2a8 0%, var(--cursor-gold) 45%, transparent 75%);
+  opacity: 0.55;
+  filter: blur(0.3px);
+}
+
+/* Press ring. */
+.rune-cursor-pulse {
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  border: 1px solid var(--cursor-gold);
+  opacity: 0;
+}
+.rune-cursor-pulse-anchor.is-live .rune-cursor-pulse {
+  animation: rune-cursor-pulse 0.5s ease-out forwards;
+}
+@keyframes rune-cursor-pulse {
+  from { opacity: 0.9; scale: 0.6; }
+  to { opacity: 0; scale: 2.6; }
 }
