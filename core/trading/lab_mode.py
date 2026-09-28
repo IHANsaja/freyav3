@@ -41,6 +41,33 @@ class LabPresence:
         self._requested_at = 0.0             # when we last asked for the teacher
         self._return_task: asyncio.Task | None = None
         self._greet_task: asyncio.Task | None = None
+        self.greet_pending = False           # voice started from the lab: greet on first sync
+
+    # ── starting a conversation from inside the lab ──
+    def prepare_start(self) -> str | None:
+        """"Talk to Freyja" was pressed in the Trading Lab: start the session
+        already in teacher mode rather than switching (and reconnecting) after
+        the lab's next sync. Returns the mode she starts in, or None if unchanged."""
+        from config import load_config
+        from core.tools import switch_mode
+        config = load_config()
+        if not (config.get("trading") or {}).get("teacher_mode", True):
+            return None
+        if TEACHER not in (config.get("modes") or {}):
+            return None
+        mode = config.get("active_mode", "default")
+        self.opted_out = False
+        self._cancel_return()
+        if mode == TEACHER:
+            self.greet_pending = True
+            return TEACHER
+        if mode in KEEP_MODES:
+            return None
+        if switch_mode(TEACHER).startswith("MODE_SWITCHED:"):
+            self.return_to = mode
+            self.greet_pending = True
+            return TEACHER
+        return None
 
     # ── inputs ──
     def lab_in_use(self) -> bool:
@@ -61,6 +88,11 @@ class LabPresence:
         if self.lab_in_use():
             self._cancel_return()
             if not runtime.is_live():
+                return
+            if self.greet_pending and mode == TEACHER:
+                # Started from the lab: say hello about the chart on screen.
+                self.greet_pending = False
+                self._schedule_greeting(service, body)
                 return
             pending = time.monotonic() - self._requested_at < SWITCH_PENDING_S
             if self.return_to is not None and mode != TEACHER and not pending:
@@ -91,8 +123,13 @@ class LabPresence:
             from config import load_config
             from core import runtime
             target, self.return_to = self.return_to, None
+            self.greet_pending = False
             if target and load_config().get("active_mode") == TEACHER:
-                await runtime.request_mode(target, "left_trading_lab")
+                if not await runtime.request_mode(target, "left_trading_lab"):
+                    # No live session (he ended the call in the lab): put the
+                    # config back so the next conversation starts as usual.
+                    from core.tools import switch_mode
+                    await asyncio.get_running_loop().run_in_executor(None, switch_mode, target)
         finally:
             self._return_task = None
 

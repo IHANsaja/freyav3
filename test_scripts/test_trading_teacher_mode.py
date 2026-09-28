@@ -97,3 +97,43 @@ class PresenceTests(unittest.IsolatedAsyncioTestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class StartFromLabTests(unittest.TestCase):
+    def prepare(self, mode, result="MODE_SWITCHED:trading_teacher"):
+        p = LabPresence()
+        with patch("config.load_config", return_value=_cfg(mode)), \
+             patch("core.tools.switch_mode", return_value=result) as switched:
+            started = p.prepare_start()
+        return p, started, switched
+
+    def test_starts_as_teacher_and_remembers_previous_mode(self):
+        p, started, switched = self.prepare("coding")
+        self.assertEqual(started, TEACHER)
+        switched.assert_called_once_with(TEACHER)
+        self.assertEqual(p.return_to, "coding")
+        self.assertTrue(p.greet_pending)
+
+    def test_already_teacher_just_greets(self):
+        p, started, switched = self.prepare(TEACHER)
+        self.assertEqual(started, TEACHER)
+        switched.assert_not_called()
+        self.assertTrue(p.greet_pending)
+
+    def test_keep_modes_untouched(self):
+        p, started, switched = self.prepare("complex_tasks")
+        self.assertIsNone(started)
+        switched.assert_not_called()
+
+
+class ReturnWithoutLiveSessionTests(unittest.IsolatedAsyncioTestCase):
+    async def test_restores_config_when_no_session_is_live(self):
+        p = LabPresence()
+        p.return_to = "coding"
+        with patch.object(lab_mode, "RETURN_GRACE_S", 0), \
+             patch("config.load_config", return_value=_cfg(TEACHER)), \
+             patch("core.runtime.request_mode", AsyncMock(return_value=False)), \
+             patch("core.tools.switch_mode", return_value="MODE_SWITCHED:coding") as switched, \
+             patch.object(p, "lab_in_use", return_value=False):
+            await p._return_after_grace()
+        switched.assert_called_once_with("coding")

@@ -579,11 +579,18 @@ async def restart_freya():
 #  REST ENDPOINTS
 # ══════════════════════════════════════════════
 @app.post("/start")
-async def start_freya():
+async def start_freya(context: str | None = None):
     global freya_task, freya_running, freya_started_at
     async with _voice_lifecycle_lock:
         if freya_task is not None and not freya_task.done():
             return JSONResponse({"status": "already running"})
+        if context == "trading_lab":
+            # Started from the Trading Lab: begin as the trading teacher.
+            try:
+                from core.trading.lab_mode import presence
+                presence.prepare_start()
+            except Exception as exc:
+                log_error("start.trading_lab", exc, level=logging.WARNING)
         _begin_session()
     await broadcast({"type": "session", "payload": _session_payload()})
     return JSONResponse({"status": "started"})
@@ -1142,7 +1149,7 @@ async def _dispatch_ws_message(websocket: WebSocket, msg_type, data: dict):
         from core import desktop_popup
         desktop_popup.set_viewer(id(websocket), bool(data.get("watching")))
     elif msg_type == "start":
-        await start_freya()
+        await start_freya(context=data.get("context"))
     elif msg_type == "stop":
         await stop_freya()
     elif msg_type == "set_model":

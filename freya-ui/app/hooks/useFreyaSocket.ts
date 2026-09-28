@@ -667,7 +667,11 @@ export function useFreyaSocketConnection() {
         outbox.current = [...outbox.current, { payload, at: Date.now() }].slice(-20);
     }, []);
 
-    const startFreya = useCallback(() => send({ type: "start" }), [send]);
+    /** `context: "trading_lab"` starts her already in Trading Teacher mode. */
+    const startFreya = useCallback(
+        (context?: "trading_lab") => send({ type: "start", ...(context ? { context } : {}) }),
+        [send]
+    );
     const stopFreya = useCallback(() => send({ type: "stop" }), [send]);
 
     const setModel = useCallback((model: string) => {
