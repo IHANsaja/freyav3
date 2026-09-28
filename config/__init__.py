@@ -75,10 +75,26 @@ def load_config():
     config["trading"].setdefault("gemini_model", TEXT_MODEL)
     return normalize_models(config)
 
+API_KEY_PLACEHOLDER = "PASTE_YOUR_GEMINI_API_KEY_HERE"
+
+
+def _clean_key(value):
+    """Strip what a paste into .env commonly drags along: spaces, quotes, a BOM."""
+    if not value:
+        return None
+    key = value.strip().lstrip("﻿").strip().strip("'\"").strip()
+    if not key or key == API_KEY_PLACEHOLDER:
+        return None
+    return key
+
+
 def get_api_key():
-    key = os.getenv("GEMINI_API_KEY")
+    key = _clean_key(os.getenv("GEMINI_API_KEY"))
     if not key:
-        raise ValueError("GEMINI_API_KEY not found in .env file!")
+        raise ValueError(
+            "GEMINI_API_KEY is missing from .env (or still the placeholder). "
+            "Get a key at https://aistudio.google.com/apikey and set GEMINI_API_KEY=... in .env."
+        )
     return key
 
 def get_active_model(config):
@@ -150,7 +166,7 @@ def get_app_path(config, app_name):
 
 def get_memory_api_key():
     """Get a separate API key for memory updates (falls back to main key)."""
-    key = os.getenv("GEMINI_MEMORY_API_KEY") or os.getenv("GEMINI_API_KEY")
+    key = _clean_key(os.getenv("GEMINI_MEMORY_API_KEY")) or _clean_key(os.getenv("GEMINI_API_KEY"))
     if not key:
         raise ValueError("No API key found for memory updates!")
     return key
@@ -162,8 +178,8 @@ def get_agent_api_key():
     Prefers GEMINI_AGENT_API_KEY, then GEMINI_MEMORY_API_KEY, then the main key. Using a
     secondary key keeps these from eating the live-voice key's quota, and if it belongs to a
     different Google project it taps a separate free-tier quota."""
-    key = (os.getenv("GEMINI_AGENT_API_KEY") or os.getenv("GEMINI_MEMORY_API_KEY")
-           or os.getenv("GEMINI_API_KEY"))
+    key = (_clean_key(os.getenv("GEMINI_AGENT_API_KEY")) or _clean_key(os.getenv("GEMINI_MEMORY_API_KEY"))
+           or _clean_key(os.getenv("GEMINI_API_KEY")))
     if not key:
         raise ValueError("No API key found for agents!")
     return key

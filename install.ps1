@@ -216,18 +216,72 @@ if (-not $SkipFrontend) {
 # -- 5. Configuration ------------------------------------------------------
 Write-Step "Configuring"
 
-$envPath = Join-Path $root ".env"
-if (Test-Path $envPath) {
-    Write-Ok ".env already exists - leaving it untouched"
-} else {
+$placeholderKey = "PASTE_YOUR_GEMINI_API_KEY_HERE"
+
+# Asks Google whether a key works, so a bad paste is caught here instead of as
+# "1008 invalid authentication credentials" five times over at first launch.
+# Returns "ok", "rejected", or "unknown" (offline / Google unreachable).
+function Test-GeminiKey ($k) {
+    try {
+        [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
+        Invoke-RestMethod -Uri "https://generativelanguage.googleapis.com/v1beta/models?pageSize=1" `
+            -Headers @{ "x-goog-api-key" = $k } -TimeoutSec 15 | Out-Null
+        return "ok"
+    } catch {
+        $status = 0
+        if ($_.Exception.Response) { $status = [int]$_.Exception.Response.StatusCode }
+        if ($status -in 400, 401, 403) { return "rejected" }
+        return "unknown"
+    }
+}
+
+# Prompts until Google accepts the key, or the user skips. Returns the key or $null.
+function Read-GeminiKey {
     Write-Host ""
     Write-Host "    Freya needs a Google Gemini API key (the free tier works)." -ForegroundColor White
     Write-Host "    Get one at: https://aistudio.google.com/apikey" -ForegroundColor DarkGray
     Write-Host "    Press Enter to skip and fill it in later." -ForegroundColor DarkGray
-    $key = Read-Host "    GEMINI_API_KEY"
+    for ($try = 1; $try -le 3; $try++) {
+        $k = Read-Host "    GEMINI_API_KEY"
+        if ([string]::IsNullOrWhiteSpace($k)) { return $null }
+        # Pasted keys often carry spaces or quotes along.
+        $k = $k.Trim().Trim('"', "'").Trim()
+        switch (Test-GeminiKey $k) {
+            "ok"      { Write-Ok "Google accepted the key"; return $k }
+            "unknown" { Write-Warn2 "Could not reach Google to check the key - saving it anyway"; return $k }
+            default {
+                Write-Fail "Google rejected that key (invalid authentication credentials)."
+                Write-Warn2 "Copy the whole key again from https://aistudio.google.com/apikey,"
+                Write-Warn2 "or create a new one there. Press Enter to skip."
+            }
+        }
+    }
+    Write-Warn2 "Still rejected - skipping. Put a working key in .env before starting Freya."
+    return $null
+}
 
-    if ([string]::IsNullOrWhiteSpace($key)) {
-        $key = "PASTE_YOUR_GEMINI_API_KEY_HERE"
+$envPath = Join-Path $root ".env"
+if (Test-Path $envPath) {
+    Write-Ok ".env already exists - leaving it untouched"
+    # Re-running the installer is how most people try to fix a bad key, so
+    # check the saved one and offer to replace it if Google refuses it.
+    $envText = Get-Content $envPath -Raw
+    if ($envText -match "(?m)^\s*GEMINI_API_KEY\s*=\s*(.*?)\s*$") {
+        $savedKey = $Matches[1].Trim().Trim('"', "'").Trim()
+        if ($savedKey -and $savedKey -ne $placeholderKey -and (Test-GeminiKey $savedKey) -eq "rejected") {
+            Write-Fail "Google rejects the GEMINI_API_KEY saved in .env."
+            $newKey = Read-GeminiKey
+            if ($newKey) {
+                $envText = [regex]::Replace($envText, "(?m)^\s*GEMINI_API_KEY\s*=.*$", "GEMINI_API_KEY=$newKey")
+                $envText | Out-File -FilePath $envPath -Encoding utf8 -NoNewline
+                Write-Ok "Updated GEMINI_API_KEY in .env"
+            }
+        }
+    }
+} else {
+    $key = Read-GeminiKey
+    if (-not $key) {
+        $key = $placeholderKey
         Write-Warn2 "No key entered - .env written with a placeholder"
     }
 

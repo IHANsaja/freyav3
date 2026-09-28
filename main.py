@@ -13,7 +13,7 @@ from config import load_config, get_api_key, get_memory_api_key, get_active_voic
 from config import get_mode_personality, get_mode_model  # ← add these
 from core.audio import MicStream, SpeakerStream
 from core.model import FreyaModel, is_rotation
-from core.live_protocol import LiveRoute, ModeChange, ThinkingTaskFailed
+from core.live_protocol import LiveRoute, ModeChange, ThinkingTaskFailed, is_auth_failure, AUTH_HELP
 from core.memory import load_memory, build_system_prompt, update_memory, TranscriptCollector
 
 config = load_config()
@@ -87,6 +87,10 @@ async def main():
                 # Carry the conversation forward whatever went wrong.
                 resume_handle = freya.resume_handle
 
+                if is_auth_failure(e):
+                    # A refused key fails identically on every retry.
+                    print(f"\n❌ {AUTH_HELP}\n   ({e})")
+                    break
                 if freya.connected and not isinstance(e, ModeChange):
                     continue_task = False
                 fallback = None if isinstance(e, ModeChange) else route.fallback(
