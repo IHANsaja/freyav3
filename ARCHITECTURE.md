@@ -122,6 +122,20 @@ This is the heart of real-time interaction using the asynchronous `google-genai`
 - **Session Continuity**: The server emits a fresh session-resumption handle throughout a session; a GoAway raises `SessionRotation` so the client leaves voluntarily and reconnects with that handle. If a handle is missing or rejected, `_send_recap()` replays the transcript tail instead.
 - **Model fallback** (`core/live_protocol.py:LiveRoute`): quota/unavailable errors move to the next model in the route (3.8 Extended Thinking → 3.8 Live → 3.1 Flash Live). A server-side `1011 Internal error` is retried once on the same model and falls back on the second in a row — it used to burn all five reconnect attempts on a model that was down.
 
+### Recovery Protocol (`core/resilience.py`)
+One rule for every layer: **a failure is contained, degraded around, retried, and reported — never terminal while the user wants her running.**
+
+| Step | What happens | Where |
+| :--- | :--- | :--- |
+| 1. Contain | `guard()` / `aguard()` run a step, log the traceback, return a fallback. Cancellation is never swallowed. | session setup + cleanup, config reloads |
+| 2. Degrade | Saved audio device fails → Windows default. Memory/prompt build fails → prompt without memory → last good prompt → base personality. A tool failing 3× in a row rests for 90 s (`ToolBreaker`); calls meanwhile are answered at once with "use another route". | `server._open_audio`, `server._build_personality`, `model.settle` |
+| 3. Retry forever | Live reconnects use capped, jittered backoff (2 s → 60 s) with **no attempt limit**; a session that ran > 60 s resets the streak. A clean server-side close is treated as a disconnect. A refused key waits for a new key and reconnects by itself. `supervise_freya()` restarts a session that crashed outside its own loop (e.g. no audio device yet). | `server.run_freya`, `server.supervise_freya` |
+| 4. Report | `health` holds per-component state (`live`, `mic`, `speaker`, `memory`, `tools`: ok / degraded / recovering / down), published as a `health` event, sent to every new dashboard, and served at `GET /health`. The header shows it. | `core/resilience.health` |
+
+Every tool call is bounded by `live.tool_timeout_s` (default 300 s): a hung tool used to hold the one-job executor forever.
+
+On the dashboard: each card sits in its own self-healing `ErrorBoundary autoRetry` (backoff 2 s → 60 s), both canvases rebuild after a lost WebGL context (`useWebGLRecovery`), a frame that fails to apply is skipped rather than thrown, and messages sent while the socket is reconnecting are queued and delivered on reconnect.
+
 ### Tool Scheduling: talk first, one job at a time (`core/model.py:execute_tools`)
 A single executor runs tools in order, so desktop actions never overlap. On top of that:
 
@@ -384,6 +398,29 @@ while a tool runs, so without it a 20-second disk search looked exactly like a h
 - Same threading pattern as `desktop_popup.py` (one Tk thread fed by a queue); every public
   call is a no-op when `activity_overlay.enabled` is false. `FREYA_OVERLAY_CAPTURABLE=1`
   keeps it in screenshots for checking the look.
+
+### Activity Feed (`core/activity.py` → header `ActivityIndicator`)
+The pill's big sibling on the dashboard. `activity_overlay`'s public calls forward every event here as well, so the two can never disagree. It publishes an `activity` event (also `GET /activity`, and sent to every new dashboard) only when something visible changes:
+
+- **phase** — idle / listening / hearing / thinking / speaking / working / approval / recovering, in that priority (a dropped link beats an approval beats work). "Thinking" is derived on the client from `heardAt`, so no timer runs server-side.
+- **tools** — every call in flight with its plain-English label, category and mode (`background` once it outlives the talk-first window).
+- **recent / stats** — the tool-usage log: last 12 calls with outcome (`ok`, `error`, `timeout`, `resting`) and duration; session totals. Outcomes come from `model.settle` (exceptions, timeouts, the breaker) and from results that start with "Error"/"Failed".
+
+The header shows the phase as an Elder Futhark rune (ᚲ Kenaz, the torch, for search; ᚠ Fehu for trading; ᚺ Hagalaz for a dropped link…), the sentence, a timer, and a failure mark; clicking opens the log. The desktop pill gained a step counter ("Step 3 · Opening report.pdf"), a red flash when a step fails or times out, and an amber "Reconnecting" line fed from `health`.
+
+### Trading Teacher (`config/teacher.py` + `core/trading/lab_mode.py`)
+Inside the Trading Lab she is a different person: a Socratic, risk-first investment and trading mentor (paper trading only; never real-money advice) instead of the companion who does things for him. It is a built-in mode — `load_config()` adds `trading_teacher` to any config that doesn't define its own — so it also appears as a mode tab (ᚠ Fehu, gold).
+
+`LabPresence` switches automatically. Every Trading Lab workspace sync (every 20 s, and on focus/visibility changes) calls `on_workspace`:
+
+| Situation | Action |
+| :--- | :--- |
+| Lab in use, voice session live, `trading.teacher_mode` on | `runtime.request_mode("trading_teacher")`; remember the mode to return to; once the new session is live, inject the lab briefing so her first line is about his chart |
+| He picks another mode himself while in the lab | Respected until the lab closes (a switch still landing within 30 s is not mistaken for this) |
+| Current mode is `complex_tasks` / `night_guardian` | Left alone |
+| Lab closed for 25 s | Back to the remembered mode — only if the lab put her in teacher mode |
+
+`runtime.request_mode` goes through the live session's own path (`FreyaModel.apply_mode_requests` → `switch_mode` → `ModeChange`), waiting for a pause and never reconnecting under a running tool, so the transcript recap carries the conversation across the change.
 
 ### System One / Jev (`core/systemone.py`) — optional
 Jev (TypeSafe) answers typed yes/no, pick-one and score questions in ~70–500 ms. It is

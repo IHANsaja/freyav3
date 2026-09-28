@@ -4,6 +4,8 @@ import type {
     AvatarIntentPayload,
     CardEventPayload,
     ContextPayload,
+    HealthPayload,
+    ActivityPayload,
     MissionEventPayload,
     MissionPayload,
     PendingApproval,
@@ -148,6 +150,8 @@ export interface FreyaConfig {
 // ── Hook ──
 export function useFreyaSocketConnection() {
     const ws = useRef<WebSocket | null>(null);
+    /** Messages sent while the socket was down; flushed on reconnect if still fresh. */
+    const outbox = useRef<{ payload: string; at: number }[]>([]);
     const counter = useRef(0);
     const freyaBuffer = useRef<string>("");
 
@@ -178,6 +182,8 @@ export function useFreyaSocketConnection() {
     const [suggestions, setSuggestions] = useState<SuggestionPayload[]>([]);
     const [contextInfo, setContextInfo] = useState<ContextPayload | null>(null);
     const [persona, setPersona] = useState<PersonaPayload | null>(null);
+    const [health, setHealth] = useState<HealthPayload | null>(null);
+    const [activity, setActivity] = useState<ActivityPayload | null>(null);
     const [linkErrors, setLinkErrors] = useState<LinkError[]>([]);
     const [pingMs, setPingMs] = useState<number | null>(null);
     const linkErrorSeq = useRef(0);
@@ -257,7 +263,7 @@ export function useFreyaSocketConnection() {
         // console.warn rather than console.error: the Next.js dev overlay counts
         // console.error as an issue and would bury real errors under a stack
         // trace on every reload. Same reasoning as socket.onerror below.
-        fetch("http://localhost:8000/config")
+        fetch("http://localhost:8000/config", { signal: AbortSignal.timeout(4000) })
             .then((r) => r.json())
             .then((cfg: FreyaConfig) => {
                 setConfig(cfg);
@@ -266,7 +272,7 @@ export function useFreyaSocketConnection() {
             .catch(() => {
                 console.warn("Freyja config unavailable — backend offline, will retry on reconnect.");
             });
-        fetch("http://localhost:8000/audio/devices")
+        fetch("http://localhost:8000/audio/devices", { signal: AbortSignal.timeout(4000) })
             .then((r) => r.json())
             .then((devices: { input: AudioDevice[]; output: AudioDevice[] }) => setAudioDevices(devices))
             .catch(() => {
@@ -276,7 +282,7 @@ export function useFreyaSocketConnection() {
         // Jobs already running before this tab opened: the WS events only
         // describe jobs that START while connected, so without this a reload
         // mid-task shows an empty agent list.
-        fetch("http://localhost:8000/agents")
+        fetch("http://localhost:8000/agents", { signal: AbortSignal.timeout(4000) })
             .then((r) => r.json())
             .then((d: { agents: AgentJob[] }) =>
                 // Merge, don't replace: the socket connects in parallel and
@@ -289,9 +295,13 @@ export function useFreyaSocketConnection() {
                 })
             )
             .catch(() => {});
-        fetch("http://localhost:8000/status")
+        fetch("http://localhost:8000/status", { signal: AbortSignal.timeout(4000) })
             .then((r) => r.json())
             .then((s: SessionInfo) => setSession(s))
+            .catch(() => {});
+        fetch("http://localhost:8000/health", { signal: AbortSignal.timeout(4000) })
+            .then((r) => (r.ok ? r.json() : null))
+            .then((h: HealthPayload | null) => { if (h?.overall) setHealth(h); })
             .catch(() => {});
     }, []);
 
@@ -336,6 +346,11 @@ export function useFreyaSocketConnection() {
                 reportVisibility();
                 setLinkStats((p) => ({ ...p, socketOpenedAt: Date.now(), reconnectAttempts: 0, connects: p.connects + 1 }));
                 console.log("Freyja WebSocket connected");
+                const fresh = outbox.current.filter((m) => Date.now() - m.at < 15_000);
+                outbox.current = [];
+                for (const m of fresh) {
+                    try { socket.send(m.payload); } catch { /* socket closed again; onclose retries */ }
+                }
                 // The socket coming up is the signal that the REST endpoints are
                 // live too — pull the config that failed while it was down.
                 loadConfigRef.current();
@@ -388,7 +403,7 @@ export function useFreyaSocketConnection() {
                 setLiveText(""); // turn done — stop the live typing line
             };
 
-            socket.onmessage = (event) => {
+            const handleMessage = (event: MessageEvent) => {
                 msgCounter.current.n++;
                 msgCounter.current.last = Date.now();
                 // A malformed frame used to throw straight out of onmessage
@@ -566,6 +581,10 @@ export function useFreyaSocketConnection() {
                     } else {
                         setApprovals((prev) => prev.filter((a) => a.id !== p.id));
                     }
+                } else if (msg.type === "activity") {
+                    setActivity(msg.payload as ActivityPayload);
+                } else if (msg.type === "health") {
+                    setHealth(msg.payload as HealthPayload);
                 } else if (msg.type === "session") {
                     setSession(msg.payload as SessionInfo);
                 } else if (["agent", "browser", "schedule", "ambient", "mcp"].includes(msg.type)) {
@@ -611,6 +630,17 @@ export function useFreyaSocketConnection() {
                 }
             };
 
+            // Recovery protocol: a frame whose payload doesn't match what a
+            // handler expects (a server running ahead of this build, a field
+            // missing) threw out of onmessage. Contain it to that one frame.
+            socket.onmessage = (event) => {
+                try {
+                    handleMessage(event);
+                } catch (e) {
+                    console.warn("Freyja: skipped a WebSocket frame that failed to apply.", e);
+                }
+            };
+
             ws.current = socket;
         };
 
@@ -622,12 +652,26 @@ export function useFreyaSocketConnection() {
 
     // ── Actions ──
     const send = useCallback((msg: object) => {
+        const payload = JSON.stringify(msg);
         if (ws.current?.readyState === WebSocket.OPEN) {
-            ws.current.send(JSON.stringify(msg));
+            try {
+                ws.current.send(payload);
+                return;
+            } catch {
+                // fall through: queue it for the next open socket
+            }
         }
+        // Recovery protocol: a click made while the link is re-establishing
+        // (Start, a mode switch, an approval) used to vanish. Hold it briefly
+        // and deliver it the moment the socket is back.
+        outbox.current = [...outbox.current, { payload, at: Date.now() }].slice(-20);
     }, []);
 
-    const startFreya = useCallback(() => send({ type: "start" }), [send]);
+    /** `context: "trading_lab"` starts her already in Trading Teacher mode. */
+    const startFreya = useCallback(
+        (context?: "trading_lab") => send({ type: "start", ...(context ? { context } : {}) }),
+        [send]
+    );
     const stopFreya = useCallback(() => send({ type: "stop" }), [send]);
 
     const setModel = useCallback((model: string) => {
@@ -722,6 +766,8 @@ export function useFreyaSocketConnection() {
         suggestions,
         contextInfo,
         persona,
+        health,
+        activity,
         // Actions
         startFreya,
         stopFreya,

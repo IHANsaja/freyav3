@@ -6,6 +6,10 @@ import * as THREE from "three";
 import type { AvatarIntent } from "../../hooks/useFreyaSocket";
 import type { ExpressionEvent } from "../avatar/AvatarController";
 import FreyaAvatar from "./FreyaAvatar";
+import { useWebGLRecovery } from "../../hooks/useWebGLRecovery";
+
+const lookAtFace = ({ camera }: { camera: { lookAt: (x: number, y: number, z: number) => void } }) =>
+  camera.lookAt(0, 0.58, 0);
 
 interface PortraitSceneProps {
   state: string;
@@ -96,13 +100,15 @@ export default function PortraitScene({
   onExpressionChange,
   frozen = false,
 }: PortraitSceneProps) {
+  const { canvasKey, onCreated } = useWebGLRecovery(lookAtFace);
   return (
     <PortraitErrorBoundary onError={onError}>
       <Canvas
+        key={canvasKey}
         camera={{ position: [-0.8, 0.40, 1.2], fov: 30 }}
         dpr={[1, 1.5]}
         gl={{ antialias: false, powerPreference: "high-performance" }}
-        onCreated={({ camera }) => camera.lookAt(0, 0.58, 0)}
+        onCreated={onCreated}
         style={{ width: "100%", height: "100%", background: "transparent" }}
       >
         {/* Key rim: hot red from behind-left so her edges glow */}

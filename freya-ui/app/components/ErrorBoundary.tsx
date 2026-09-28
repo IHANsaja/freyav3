@@ -13,10 +13,18 @@ interface Props {
    *  subtrees (e.g. the WebGL scene) where a visible error box would be worse
    *  than silence. The surrounding UI keeps working regardless. */
   silent?: boolean;
+  /** Recovery protocol: re-mount the subtree by itself after a failure, with
+   *  backoff (2 s, 4 s, 8 s … up to 60 s), so a transient fault — a WebGL
+   *  context loss, a malformed frame — heals without anyone clicking Retry.
+   *  A subtree that stays healthy for 30 s resets the backoff. */
+  autoRetry?: boolean;
+  /** Give up auto-retrying after this many attempts in a row (default 8). */
+  maxRetries?: number;
 }
 
 interface State {
   error: Error | null;
+  attempt: number;
 }
 
 /**
@@ -30,9 +38,11 @@ interface State {
  * own call sites. This is the backstop for the rest.
  */
 export default class ErrorBoundary extends Component<Props, State> {
-  state: State = { error: null };
+  state: State = { error: null, attempt: 0 };
+  private retryTimer: ReturnType<typeof setTimeout> | null = null;
+  private healthyTimer: ReturnType<typeof setTimeout> | null = null;
 
-  static getDerivedStateFromError(error: Error): State {
+  static getDerivedStateFromError(error: Error): Partial<State> {
     return { error };
   }
 
@@ -44,9 +54,30 @@ export default class ErrorBoundary extends Component<Props, State> {
       error,
       info.componentStack
     );
+    if (this.healthyTimer) clearTimeout(this.healthyTimer);
+    const { autoRetry, maxRetries = 8 } = this.props;
+    if (!autoRetry || this.state.attempt >= maxRetries) return;
+    const delay = Math.min(60_000, 2000 * 2 ** this.state.attempt);
+    if (this.retryTimer) clearTimeout(this.retryTimer);
+    this.retryTimer = setTimeout(() => {
+      this.setState((s) => ({ error: null, attempt: s.attempt + 1 }));
+    }, delay);
   }
 
-  reset = () => this.setState({ error: null });
+  componentDidUpdate(_prev: Props, prevState: State) {
+    // Came back from an error: if it stays up for 30 s, it's healthy again.
+    if (prevState.error && !this.state.error && this.state.attempt > 0) {
+      if (this.healthyTimer) clearTimeout(this.healthyTimer);
+      this.healthyTimer = setTimeout(() => this.setState({ attempt: 0 }), 30_000);
+    }
+  }
+
+  componentWillUnmount() {
+    if (this.retryTimer) clearTimeout(this.retryTimer);
+    if (this.healthyTimer) clearTimeout(this.healthyTimer);
+  }
+
+  reset = () => this.setState({ error: null, attempt: 0 });
 
   render() {
     const { error } = this.state;

@@ -12,6 +12,7 @@ from fastapi.responses import JSONResponse
 from starlette.websockets import WebSocketState
 
 from core.errors import log_error, error_payload, UserFacingError, logger
+from core.resilience import Backoff, guard, aguard, health, OK, DEGRADED, RECOVERING, DOWN
 
 # On Windows, Playwright launches Chromium via create_subprocess_exec, which only works
 # on the Proactor event loop. uvicorn may otherwise pick a Selector loop, and Chromium
@@ -215,19 +216,15 @@ async def run_freya():
     model_id = get_mode_model(config)
     voice = get_mode_voice(config)
     base_personality = get_personality(config)
-    memory = load_memory(config)
-    personality = build_system_prompt(get_mode_personality(config, base_personality), memory)
+    # Memory is an enhancement, not a precondition: a locked or corrupt store
+    # used to end the session before it began. She starts without it instead.
+    memory = guard("session.memory", load_memory, config, fallback="")
+    if memory == "":
+        health.set("memory", DEGRADED, "Memory unavailable this session; running without it")
+    personality = _build_personality(config, base_personality, memory)
     transcript = TranscriptCollector()
 
-    input_idx = config.get("audio", {}).get("input_device_index")
-    output_idx = config.get("audio", {}).get("output_device_index")
-
-    mic = MicStream(device_index=input_idx,
-                    device_name=config.get("audio", {}).get("input_device_name"))
-    speaker = SpeakerStream(device_index=output_idx,
-                            device_name=config.get("audio", {}).get("output_device_name"))
-    mic.start()
-    speaker.start()
+    mic, speaker = _open_audio(config)
     global _active_speaker
     _active_speaker = speaker
 
@@ -281,7 +278,10 @@ async def run_freya():
         # → the broadcast subscriber registered in lifespan().
 
     consecutive_failures = 0
-    max_reconnect_attempts = 5
+    # Past this many failures in a row the retries don't stop — they slow down
+    # to the backoff cap and the dashboard is told the link is unstable.
+    noisy_after = 5
+    backoff = Backoff(base=2, cap=60)
     resume_handle = None
     continue_task = False
     route = LiveRoute(model_id, config)
@@ -302,23 +302,46 @@ async def run_freya():
                 resume_handle=resume_handle,
                 continue_task=continue_task,
             )
+            session_began = time.monotonic()
             try:
+                health.set("live", RECOVERING if consecutive_failures else OK,
+                           f"Reconnecting to {route.model}" if consecutive_failures else "")
                 await freya.run(mic, speaker)
-                # Clean exit from run means session completed normally (or user stopped it without cancellation)
-                break
+                if not freya_running:
+                    break           # the user stopped her: a real, clean end
+                # The server closed the socket without an error or a GoAway.
+                # That used to end the session silently while the dashboard
+                # still said LISTENING. The user never asked to stop, so it is
+                # a disconnect like any other: resume and carry on.
+                resume_handle = freya.resume_handle
+                raise ConnectionResetError("live session closed by the server")
             except asyncio.CancelledError:
                 raise
             except Exception as e:
                 # Keep the server-side conversation state across the reconnect.
                 resume_handle = freya.resume_handle
+                # A session that ran a good while before failing was healthy:
+                # this failure starts a new streak rather than extending one.
+                if time.monotonic() - session_began > 60:
+                    consecutive_failures = 0
+                    backoff.reset()
 
                 if is_auth_failure(e):
-                    # A refused key fails identically on every retry: stop now
-                    # and say what to fix, instead of five vague reconnects.
+                    # A refused key fails identically on every retry, so don't
+                    # hammer the API — but don't give up either: wait for the key
+                    # to change (settings or .env) and carry straight on.
                     print(f"Freya session error: {AUTH_HELP} ({e})")
+                    health.set("live", DOWN, "API key refused — waiting for a new key")
                     await broadcast({"type": "transcript", "speaker": "Freya",
-                                     "text": f"[SESSION ERROR] {AUTH_HELP}"})
-                    break
+                                     "text": f"[SESSION ERROR] {AUTH_HELP} I'll reconnect by myself "
+                                             "as soon as the key changes."})
+                    if not await _wait_for_new_key(api_key):
+                        break
+                    api_key = get_api_key()
+                    resume_handle = None
+                    consecutive_failures = 0
+                    backoff.reset()
+                    continue
                 if freya.connected and not isinstance(e, ModeChange):
                     continue_task = False
                 fallback = None if isinstance(e, ModeChange) else route.fallback(
@@ -343,52 +366,174 @@ async def run_freya():
                     await asyncio.sleep(0.5)
                 else:
                     consecutive_failures += 1
-                    print(f"Freya session error (attempt {consecutive_failures}/{max_reconnect_attempts}): {e}")
-                    if consecutive_failures >= max_reconnect_attempts:
-                        await broadcast({
-                            "type": "transcript",
-                            "speaker": "Freya",
-                            "text": f"[SESSION ERROR] Max reconnect attempts reached. Connection stopped."
-                        })
-                        break
+                    delay = backoff.next()
+                    print(f"Freya session error (attempt {consecutive_failures}, retrying in "
+                          f"{delay:.0f}s): {e}")
+                    health.set("live", RECOVERING,
+                               f"Connection lost ({type(e).__name__}); retry {consecutive_failures} in {delay:.0f}s")
+                    note = (f"[Connection lost. Reconnecting to Gemini... Attempt {consecutive_failures}]"
+                            if consecutive_failures < noisy_after else
+                            f"[Connection lost. Link unstable — still reconnecting every {delay:.0f}s. "
+                            "Check the network or the API quota.]")
+                    # Say it once per streak when it's noisy, not every minute.
+                    if consecutive_failures <= noisy_after:
+                        await broadcast({"type": "transcript", "speaker": "Freya", "text": note})
+                    await _sleep_while_running(delay)
 
-                    await broadcast({
-                        "type": "transcript",
-                        "speaker": "Freya",
-                        "text": f"[Connection lost. Reconnecting to Gemini... Attempt {consecutive_failures}/{max_reconnect_attempts}]"
-                    })
-
-                    await asyncio.sleep(2 * consecutive_failures)
-
-                # Reload config and keys in case they were updated
-                config = load_config()
-                api_key = get_api_key()
+                # Reload config and keys in case they were updated. Guarded: a
+                # half-written config file must not end the session it configures.
+                config = guard("session.reload_config", load_config, fallback=config)
+                api_key = guard("session.reload_key", get_api_key, fallback=api_key) or api_key
                 previous_model = route.model
-                model_id = get_mode_model(config)
+                model_id = guard("session.reload_model", get_mode_model, config, fallback=model_id)
                 route.configure(model_id, config)
                 if route.model != previous_model:
                     resume_handle = None
-                voice = get_mode_voice(config)
-                base_personality = get_personality(config)
-                personality = build_system_prompt(get_mode_personality(config, base_personality), memory)
+                voice = guard("session.reload_voice", get_mode_voice, config, fallback=voice)
+                base_personality = guard("session.reload_personality", get_personality, config,
+                                         fallback=base_personality)
+                personality = _build_personality(config, base_personality, memory, fallback=personality)
     finally:
         freya_running = False
         if _active_speaker is speaker:
             _active_speaker = None
-        mic.stop()
-        speaker.stop()
+        # Every cleanup step is independent: one failing must not skip the rest
+        # (a mic that errors on close used to leave the speaker open and the
+        # session's memory unsaved).
+        guard("session.cleanup.mic", mic.stop)
+        guard("session.cleanup.speaker", speaker.stop)
         try:
             from core.mcp_client import mcp_manager
-            await mcp_manager.stop()
+            await aguard("session.cleanup.mcp", mcp_manager.stop(), timeout=10)
         except Exception:
             pass
         try:
             from core.browser.driver import shutdown_browser
-            shutdown_browser()
+            guard("session.cleanup.browser", shutdown_browser)
         except Exception:
             pass
-        await broadcast({"type": "state", "value": "idle"})
-        await update_memory(api_key, transcript.get(), memory)
+        health.set("live", OK, "")
+        await aguard("session.cleanup.broadcast", broadcast({"type": "state", "value": "idle"}))
+        await aguard("session.cleanup.memory", update_memory(api_key, transcript.get(), memory),
+                     timeout=120)
+
+
+def _build_personality(config, base_personality, memory, fallback=None) -> str:
+    """The system prompt, falling back rather than failing: first to the prompt
+    without memory, then to whatever worked last, then to the base personality."""
+    try:
+        return build_system_prompt(get_mode_personality(config, base_personality), memory)
+    except Exception as exc:
+        log_error("session.personality", exc, level=logging.WARNING)
+    try:
+        prompt = build_system_prompt(get_mode_personality(config, base_personality), "")
+        health.set("memory", DEGRADED, "Memory left out of the prompt after an error")
+        return prompt
+    except Exception as exc:
+        log_error("session.personality.no_memory", exc, level=logging.WARNING)
+    return fallback or base_personality or "You are Freyja, a warm and capable voice assistant."
+
+
+class AudioUnavailable(RuntimeError):
+    """Neither the saved device nor the Windows default could be opened."""
+
+
+def _open_audio(config):
+    """Open the mic and speaker, falling back to the Windows default device.
+
+    A saved device that was unplugged, renamed or grabbed exclusively by another
+    app used to raise straight out of run_freya and end the session. Now it
+    degrades to the default; only when that fails too is the session retried
+    by the supervisor (the device may come back — a headset being reconnected).
+    """
+    audio = config.get("audio", {}) or {}
+    opened = {}
+    for side, cls, part in (("input", MicStream, "mic"), ("output", SpeakerStream, "speaker")):
+        saved = (audio.get(f"{side}_device_index"), audio.get(f"{side}_device_name"))
+        choices = [saved] + ([(None, None)] if saved != (None, None) else [])
+        last_exc = None
+        for index, name in choices:
+            stream = None
+            try:
+                stream = cls(device_index=index, device_name=name)
+                stream.start()
+            except Exception as exc:
+                last_exc = exc
+                log_error(f"audio.open.{side}", exc, level=logging.WARNING)
+                if stream is not None:
+                    guard(f"audio.close.{side}", stream.stop)
+                continue
+            opened[side] = stream
+            if (index, name) == saved:
+                health.ok(part)
+            else:
+                health.set(part, DEGRADED, f"Saved {side} device failed; using the Windows default")
+            break
+        if side not in opened:
+            health.set(part, DOWN, f"No {side} device could be opened: {last_exc}")
+            for stream in opened.values():
+                guard("audio.close", stream.stop)
+            raise AudioUnavailable(f"no usable {side} device ({last_exc})")
+    return opened["input"], opened["output"]
+
+
+async def _sleep_while_running(seconds: float) -> None:
+    """Sleep, but wake early if the user stops the session meanwhile."""
+    deadline = time.monotonic() + seconds
+    while freya_running and time.monotonic() < deadline:
+        await asyncio.sleep(min(0.5, max(0.0, deadline - time.monotonic())))
+
+
+async def _wait_for_new_key(old_key) -> bool:
+    """After a refused key: wait until a different key is configured.
+    False if the user stopped the session while waiting."""
+    while freya_running:
+        await asyncio.sleep(5)
+        current = guard("session.key_poll", get_api_key, fallback=old_key)
+        if current and current != old_key:
+            print("  New API key detected — reconnecting.")
+            return True
+    return False
+
+
+# The user's intent, separate from whether a session is running this instant:
+# the supervisor restarts a crashed session only while this is set.
+_session_wanted = False
+
+
+async def supervise_freya():
+    """Run the voice session, restarting it if it crashes outside its own loop.
+
+    run_freya() recovers from anything the live connection throws. This is the
+    layer above it, for failures it can't catch from inside — the audio devices
+    not opening at all, a bug in setup. Before it existed such a crash ended
+    the session silently, the task holding an exception nobody read.
+    """
+    global freya_running
+    backoff = Backoff(base=2, cap=60)
+    while True:
+        began = time.monotonic()
+        try:
+            await run_freya()
+            return
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            log_error("session.supervisor", exc)
+            if not _session_wanted:
+                return
+            if time.monotonic() - began > 60:
+                backoff.reset()
+            delay = backoff.next()
+            health.set("live", RECOVERING,
+                       f"Session crashed ({type(exc).__name__}); restarting in {delay:.0f}s")
+            await aguard("session.supervisor.notify", broadcast({
+                "type": "transcript", "speaker": "Freya",
+                "text": f"[Connection lost. Restarting the voice session in {delay:.0f}s — {exc}]"}))
+            await asyncio.sleep(delay)
+            if not _session_wanted:
+                return
+            freya_running = True
 
 
 _voice_lifecycle_lock = asyncio.Lock()
@@ -396,8 +541,9 @@ _voice_lifecycle_lock = asyncio.Lock()
 
 async def _stop_voice_task():
     """Caller holds the lifecycle lock until the old session releases audio."""
-    global freya_task, freya_running, freya_started_at
+    global freya_task, freya_running, freya_started_at, _session_wanted
     freya_running = False
+    _session_wanted = False
     if _active_speaker is not None:
         _active_speaker.interrupt()
     task = freya_task
@@ -406,6 +552,15 @@ async def _stop_voice_task():
         await asyncio.gather(task, return_exceptions=True)
     freya_task = None
     freya_started_at = None
+
+
+def _begin_session():
+    """Caller holds the lifecycle lock."""
+    global freya_task, freya_running, freya_started_at, _session_wanted
+    freya_running = True
+    _session_wanted = True
+    freya_started_at = time.time()
+    freya_task = asyncio.create_task(supervise_freya())
 
 
 async def restart_freya():
@@ -417,23 +572,26 @@ async def restart_freya():
         if not freya_running:
             return
         await _stop_voice_task()
-        freya_running = True
-        freya_started_at = time.time()
-        freya_task = asyncio.create_task(run_freya())
+        _begin_session()
 
 
 # ══════════════════════════════════════════════
 #  REST ENDPOINTS
 # ══════════════════════════════════════════════
 @app.post("/start")
-async def start_freya():
+async def start_freya(context: str | None = None):
     global freya_task, freya_running, freya_started_at
     async with _voice_lifecycle_lock:
         if freya_task is not None and not freya_task.done():
             return JSONResponse({"status": "already running"})
-        freya_running = True
-        freya_started_at = time.time()
-        freya_task = asyncio.create_task(run_freya())
+        if context == "trading_lab":
+            # Started from the Trading Lab: begin as the trading teacher.
+            try:
+                from core.trading.lab_mode import presence
+                presence.prepare_start()
+            except Exception as exc:
+                log_error("start.trading_lab", exc, level=logging.WARNING)
+        _begin_session()
     await broadcast({"type": "session", "payload": _session_payload()})
     return JSONResponse({"status": "started"})
 
@@ -517,6 +675,22 @@ async def update_persona_endpoint(body: dict):
     if freya_running:
         await restart_freya()
     return JSONResponse({"status": "updated", "active_model": new_cfg["active_model"]})
+
+
+@app.post("/persona/dismiss")
+async def dismiss_persona_setup():
+    """The first-run customizer was closed without saving: remember that it has
+    been offered, so it doesn't reopen on every load. Settings are untouched —
+    she keeps her defaults, and the header button still opens the customizer."""
+    config_path = os.path.join("config", "freya_config.json")
+    with open(config_path, "r", encoding="utf-8") as f:
+        config = json.load(f)
+    persona = config.setdefault("persona", {})
+    if not persona.get("setup_done"):
+        persona["setup_done"] = True
+        with open(config_path, "w", encoding="utf-8") as f:
+            json.dump(config, f, indent=2)
+    return JSONResponse({"status": "dismissed"})
 
 
 def _resolved_audio_devices(config):
@@ -700,6 +874,19 @@ def _session_payload() -> dict:
 @app.get("/status")
 async def get_status():
     return JSONResponse(_session_payload())
+
+
+@app.get("/activity")
+async def get_activity():
+    """What she is doing right now, and the recent tool history."""
+    from core.activity import feed
+    return JSONResponse(feed.snapshot())
+
+
+@app.get("/health")
+async def get_health():
+    """Component health under the recovery protocol (see core/resilience.py)."""
+    return JSONResponse(health.snapshot())
 
 
 def _collect_jobs() -> list[dict]:
@@ -887,6 +1074,14 @@ async def websocket_endpoint(websocket: WebSocket):
     except Exception:
         pass
 
+    # Recovery protocol: the dashboard always knows what state she is in.
+    try:
+        await websocket.send_json({"type": "health", "payload": health.snapshot()})
+        from core.activity import feed
+        await websocket.send_json({"type": "activity", "payload": feed.snapshot()})
+    except Exception:
+        pass
+
     # Catch the client up: replay recent bus events (mission progress etc.)
     # and any actions still waiting for approval.
     try:
@@ -970,7 +1165,7 @@ async def _dispatch_ws_message(websocket: WebSocket, msg_type, data: dict):
         from core import desktop_popup
         desktop_popup.set_viewer(id(websocket), bool(data.get("watching")))
     elif msg_type == "start":
-        await start_freya()
+        await start_freya(context=data.get("context"))
     elif msg_type == "stop":
         await stop_freya()
     elif msg_type == "set_model":

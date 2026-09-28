@@ -41,6 +41,7 @@ from core.live_protocol import (ModeChange, ThinkingTaskFailed, Interaction, is_
 from core.registry import build_declarations, dispatch as registry_dispatch, ToolContext
 from core import tool_index  # registers search_tools / run_tool
 from core import activity_overlay as activity_ui
+from core.resilience import breaker, health, DEGRADED, OK
 import base64
 
 # ─────────────────────────────────────────────
@@ -899,7 +900,8 @@ class FreyaModel:
                 args = dict(fc.args) if getattr(fc, "args", None) else {}
                 try:
                     if not queued:
-                        result = await registry_dispatch(name, args, ToolContext(self.config, session=session))
+                        result = await settle(registry_dispatch(name, args, ToolContext(self.config, session=session)),
+                                              name, args)
                     else:
                         result = (f"Queued: this starts automatically as soon as the current task "
                                   f"({busy['name']}) finishes — one job at a time. Tell the user in one "
@@ -912,6 +914,48 @@ class FreyaModel:
                 finally:
                     if not queued:          # a queued call is counted down by the executor
                         self._pending_tools -= 1
+
+            tool_timeout_s = float(cfg.get("live", {}).get("tool_timeout_s", 300))
+
+            async def settle(job, tool_name, tool_args, call_id=None):
+                """Await a tool job under the recovery protocol: bounded by
+                `live.tool_timeout_s`, recorded in the circuit breaker, and any
+                failure turned into a result she can talk about. A hung tool
+                used to hold the one-job executor forever, and every call after
+                it queued behind a job that would never finish."""
+                key = _effective_tool(tool_name, tool_args)
+                try:
+                    result = await asyncio.wait_for(job, tool_timeout_s)
+                except asyncio.CancelledError:
+                    raise
+                except ModeChange:
+                    raise
+                except (asyncio.TimeoutError, TimeoutError):
+                    tripped = breaker.failure(key)
+                    print(f"  Tool TIMEOUT: {key} after {tool_timeout_s:.0f}s")
+                    activity_ui.tool_outcome(call_id, "timeout", f"stopped after {tool_timeout_s:.0f}s")
+                    if tripped:
+                        health.set("tools", DEGRADED, f"{key} is resting after repeated failures")
+                    return (f"Tool {key} took longer than {tool_timeout_s:.0f}s and was stopped. "
+                            "Tell the user plainly it timed out, then try a lighter way to reach the "
+                            "same goal (a narrower search, a different tool) instead of repeating it.")
+                except Exception as exc:
+                    from core.errors import log_error
+                    log_error(f"live.tool.{key}", exc)
+                    print(f"  Tool FAILED: {key}: {type(exc).__name__}: {exc}")
+                    activity_ui.tool_outcome(call_id, "error", f"{type(exc).__name__}: {exc}")
+                    if breaker.failure(key):
+                        health.set("tools", DEGRADED, f"{key} is resting after repeated failures")
+                    return (f"Tool {key} failed: {type(exc).__name__}: {exc}. Tell the user plainly "
+                            "what failed and why; do not retry blindly — try another route if there is one.")
+                breaker.success(key)
+                # The tool ran but answered with bad news: not the breaker's
+                # business (the tool works), but the dashboard shows it as failed.
+                if isinstance(result, str) and result.lstrip().lower().startswith(("error", "failed")):
+                    activity_ui.tool_outcome(call_id, "error", result.strip()[:160])
+                if health.get("tools").state != OK and not breaker.open_tools():
+                    health.ok("tools")
+                return result
 
             async def execute_tools():
                 # One executor preserves desktop action order while the receiver
@@ -927,13 +971,29 @@ class FreyaModel:
                         print(f"  Tool : {tool_name}({tool_args})")
                         activity_ui.tool_started(call_id, tool_name, tool_args)
                         ctx = ToolContext(self.config, session=session)
+                        effective = _effective_tool(tool_name, tool_args)
+                        if breaker.is_open(effective):
+                            # Recovery protocol, step 2: a tool that keeps failing
+                            # rests instead of costing another full timeout.
+                            resting = breaker.resting_message(effective)
+                            print(f"  Tool resting: {effective}")
+                            activity_ui.tool_outcome(call_id, "resting", "failed repeatedly; resting")
+                            if call_id in deferred_ids:
+                                deferred_ids.discard(call_id)
+                                await report_finished(tool_name, tool_args, call_id, resting, "queued")
+                            else:
+                                await session.send_tool_response(function_responses=[types.FunctionResponse(
+                                    id=call_id, name=tool_name, response={"result": resting})])
+                                await self.on_tool(tool_name, tool_args, resting)
+                            continue
                         if call_id in deferred_ids:
                             # Already answered "queued"; its turn has come. Run it
                             # to completion and report through the task-finished note.
                             deferred_ids.discard(call_id)
                             busy["name"] = tool_name
                             try:
-                                result = await registry_dispatch(tool_name, tool_args, ctx)
+                                result = await settle(registry_dispatch(tool_name, tool_args, ctx),
+                                                      tool_name, tool_args, call_id)
                             finally:
                                 busy["name"] = None
                             await report_finished(tool_name, tool_args, call_id, result, "queued")
@@ -966,14 +1026,15 @@ class FreyaModel:
                                     )]
                                 )
                                 await self.on_tool(tool_name, tool_args, "Running in background…")
+                                activity_ui.tool_mode(call_id, "background")
                                 busy["name"] = tool_name
                                 try:
-                                    result = await job
+                                    result = await settle(job, tool_name, tool_args, call_id)
                                 finally:
                                     busy["name"] = None
                                 await report_finished(tool_name, tool_args, call_id, result, "background")
                                 continue
-                            result = await job
+                            result = await settle(job, tool_name, tool_args, call_id)
                         finally:
                             if not job.done():
                                 job.cancel()
@@ -1091,6 +1152,7 @@ class FreyaModel:
                         # gone wrong. Answer the call with the real error instead.
                         from core.errors import log_error
                         log_error(f"live.tool.{getattr(fc, 'name', '?')}", exc)
+                        activity_ui.tool_outcome(getattr(fc, "id", None), "error", f"{type(exc).__name__}: {exc}")
                         print(f"  Tool FAILED: {getattr(fc, 'name', '?')}: "
                               f"{type(exc).__name__}: {exc}")
                         try:
@@ -1404,6 +1466,37 @@ class FreyaModel:
                     await audio_queue.join()  # let her finish the current word
                     raise ModeChange("complex_tasks")
 
+            mode_requests: asyncio.Queue = asyncio.Queue()
+
+            async def request_mode(mode: str, reason: str):
+                mode_requests.put_nowait((mode, reason))
+
+            runtime.set_mode_handler(request_mode)
+
+            async def apply_mode_requests():
+                # Mode changes asked for from outside the conversation (the
+                # Trading Lab opening or closing). Same path as switch_mode:
+                # wait for a natural pause, write the mode, reconnect with the
+                # transcript recap — so she changes hats without losing the thread.
+                from core import tools as mode_tools
+                while True:
+                    mode, reason = await mode_requests.get()
+                    for _ in range(80):          # up to ~20 s for a gap
+                        if not self._pending_tools and not model_speaking.is_set():
+                            break
+                        await asyncio.sleep(0.25)
+                    if self._pending_tools:
+                        continue                 # never reconnect under a running tool
+                    result = await loop.run_in_executor(None, mode_tools.switch_mode, mode)
+                    if not result.startswith("MODE_SWITCHED:"):
+                        continue
+                    print(f"  Mode -> {mode} ({reason or 'requested'})")
+                    if self.transcript:
+                        self.transcript.add("Tool", f"switch_mode: {result} ({reason})")
+                    await self.on_tool("switch_mode", {"mode": mode, "via": reason or "request"}, result)
+                    await audio_queue.join()
+                    raise ModeChange(mode)
+
             async def play_audio():
                 nonlocal pending_playback_chunks
                 while True:
@@ -1421,7 +1514,8 @@ class FreyaModel:
 
             try:
                 from core.voice_tasks import run_voice_tasks
-                workers = [send_audio(), receive_audio(), play_audio(), execute_tools()]
+                workers = [send_audio(), receive_audio(), play_audio(), execute_tools(),
+                           apply_mode_requests()]
                 if route_queue is not None:
                     workers.append(route_modes())
                 await run_voice_tasks(*workers)

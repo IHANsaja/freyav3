@@ -13,6 +13,10 @@ import Effects from "./Effects";
 import Orb, { type OrbFx } from "./Orb";
 import { useSceneMood } from "./useSceneMood";
 import type { HandGestureState } from "../../hooks/useHandGestures";
+import { useWebGLRecovery } from "../../hooks/useWebGLRecovery";
+
+const lookAtOrb = ({ camera }: { camera: { lookAt: (x: number, y: number, z: number) => void } }) =>
+  camera.lookAt(0, 0.35, 0);
 
 interface OrbSceneProps {
   state: string;
@@ -73,6 +77,7 @@ function SceneContents({ state, avatarIntent, persona, expression, fxRef, gestur
  *  movement turns the orb itself rather than the view. */
 function OrbScene(props: OrbSceneProps) {
   const [frameloop, setFrameloop] = useState<"always" | "never">("always");
+  const { canvasKey, onCreated } = useWebGLRecovery(lookAtOrb);
 
   useEffect(() => {
     const onVis = () => setFrameloop(document.hidden ? "never" : "always");
@@ -83,11 +88,12 @@ function OrbScene(props: OrbSceneProps) {
   return (
     <div className="w-full h-full relative">
       <Canvas
+        key={canvasKey}
         frameloop={frameloop}
         camera={{ position: [0, 0.55, 4.6], fov: 42 }}
         dpr={[1, 1.5]}
         gl={{ antialias: false, powerPreference: "high-performance" }}
-        onCreated={({ camera }) => camera.lookAt(0, 0.35, 0)}
+        onCreated={onCreated}
         style={{ width: "100%", height: "100%", background: "transparent" }}
       >
         <SceneContents {...props} />

@@ -1446,3 +1446,22 @@
     padding: 6px;
   }
 }
+
+/* Freyja is in Trading Teacher mode (Fehu gold, matching the mode accent). */
+.teacher-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45em;
+  margin-bottom: 8px;
+  padding: 3px 10px;
+  border: 1px solid rgba(224, 163, 58, 0.45);
+  border-radius: 999px;
+  color: #f2b45a;
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  background: rgba(224, 163, 58, 0.08);
+}
+.teacher-badge span {
+  font-family: var(--font-rune), serif;
+  font-size: 13px;
+}

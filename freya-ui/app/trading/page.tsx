@@ -105,10 +105,13 @@ export default function TradingPage() {
     toolLog,
     liveText,
     micPaused,
+    activeMode,
     startFreya,
     stopFreya,
     toggleListening,
   } = useSharedFreyaSocket();
+  // In the lab she is the trading teacher (config/teacher.py); say so on screen.
+  const teaching = activeMode === "trading_teacher";
   const voiceOn = voiceSession?.running ?? voiceState !== "idle";
   const [s, setS] = useState<Session | null>(null);
   const current = useRef<Session | null>(null);
@@ -691,7 +694,7 @@ export default function TradingPage() {
         ...options,
         drawings: drawingSummary(drawings.filter((d) => !d.hidden)),
       });
-      if (!voiceOn) startFreya();
+      if (!voiceOn) startFreya("trading_lab");
     } catch {
       setError("Could not share the active chart with Freyja. Try again.");
     }
@@ -1919,6 +1922,11 @@ export default function TradingPage() {
                   ? `${s.symbol} · ${s.interval / 60}m · ${selected ? "selected candle" : "latest candle"}`
                   : "Open a session so Freyja has a chart to discuss"}
               </div>
+              {voiceOn && teaching && (
+                <div className="teacher-badge" title="Freyja is in Trading Teacher mode while you are in the lab">
+                  <span aria-hidden>ᚠ</span> Freyja · Trading Teacher
+                </div>
+              )}
               <div className="voice-controls">
                 <span className={`voice-state ${voiceState}`}>
                   {!connected

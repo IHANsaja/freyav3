@@ -6,10 +6,29 @@ import type { EngineStatus } from "../../hooks/useEngineStatus";
 import type { HandTrackingStatus } from "../../hooks/useHandGestures";
 import type { VideoDevice } from "../../hooks/useVideoDevices";
 import Waveform from "./Waveform";
+import type { ActivityPayload, HealthPayload, HealthState } from "../../types/events";
+import ActivityIndicator from "../ActivityIndicator";
+
+const HEALTH_LABEL: Record<HealthState, string> = {
+  ok: "NOMINAL",
+  degraded: "DEGRADED",
+  recovering: "RECOVERING",
+  down: "DOWN",
+};
+const HEALTH_COLOR: Record<HealthState, string> = {
+  ok: "var(--accent-green)",
+  degraded: "#e0a33a",
+  recovering: "#e0a33a",
+  down: "var(--accent-red-dim)",
+};
 
 interface HeaderBarProps {
   connected: boolean;
   status: EngineStatus;
+  /** Recovery-protocol health from the backend; null until first report. */
+  health?: HealthPayload | null;
+  /** Live activity feed: what she is doing and which tools she has used. */
+  activity?: ActivityPayload | null;
   modeLabel: string;
   onOpenSettings: () => void;
   onOpenCustomizer: () => void;
@@ -49,6 +68,8 @@ const DIVIDER = <span aria-hidden className="w-px h-3 self-center" style={{ back
 export default function HeaderBar({
   connected,
   status,
+  health,
+  activity = null,
   modeLabel,
   onOpenSettings,
   onOpenCustomizer,
@@ -76,7 +97,7 @@ export default function HeaderBar({
       className="h-16 shrink-0 flex items-center justify-between px-5 border-b"
       style={{ borderColor: "var(--panel-border)", background: "rgba(7,5,10,0.6)", backdropFilter: "blur(10px)" }}
     >
-      <div className="flex items-center gap-8 min-w-0">
+      <div className="flex items-center gap-8 min-w-0 shrink-0">
         {/* Wordmark */}
         <div className="shrink-0">
           <h1
@@ -89,8 +110,11 @@ export default function HeaderBar({
           >
             FREYJA V3.0
           </h1>
-          <p className="text-[8px] tracking-[0.3em] uppercase" style={{ color: "var(--text-secondary)", fontFamily: "var(--font-ui)" }}>
-            Archival System
+          <p className="flex items-center gap-1.5 text-[8px] tracking-[0.3em] uppercase" style={{ color: "var(--text-secondary)", fontFamily: "var(--font-ui)" }}>
+            <span aria-hidden className="text-[10px] tracking-[0.2em] normal-case" style={{ fontFamily: "var(--font-rune)", color: "var(--accent-red)" }}>
+              ᚠᚱᛖᛃᚨ
+            </span>
+            Seiðr Engine
           </p>
         </div>
 
@@ -117,8 +141,28 @@ export default function HeaderBar({
           <div>
             MODE: <span style={{ color: "var(--accent-red)" }}>{scrambledMode}</span>
           </div>
+          {connected && health && (
+            <>
+              {DIVIDER}
+              <div
+                title={
+                  health.components
+                    .filter((c) => c.state !== "ok")
+                    .map((c) => `${c.name}: ${c.detail || c.state}`)
+                    .join("\n") || "All systems nominal"
+                }
+              >
+                HEALTH:{" "}
+                <span style={{ color: HEALTH_COLOR[health.overall] ?? "var(--accent-red)" }}>
+                  {HEALTH_LABEL[health.overall] ?? health.overall.toUpperCase()}
+                </span>
+              </div>
+            </>
+          )}
         </div>
       </div>
+
+      <ActivityIndicator activity={activity} health={health} connected={connected} running={status.isRunning} />
 
       <div className="flex items-center gap-4">
         <Waveform active={status.engine === "listening" || status.engine === "processing"} bars={5} />

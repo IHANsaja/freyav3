@@ -274,6 +274,9 @@ class RunnerTests(unittest.IsolatedAsyncioTestCase):
                     cfg['active_mode'] = 'complex_tasks'
                     raise ModeChange('complex_tasks')
                 self.connected = True
+                # A clean return only ends the session when the user stopped it;
+                # otherwise it's a server-side close and the runner reconnects.
+                server.freya_running = False
         with patch.object(server, 'FreyaModel', FakeModel), patch.object(server, 'load_config', return_value=cfg), \
              patch.object(server, 'get_api_key', return_value='test'), patch.object(server, 'load_memory', return_value=''), \
              patch.object(server, 'MicStream', MagicMock()), patch.object(server, 'SpeakerStream', MagicMock()), \
@@ -286,6 +289,27 @@ class RunnerTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(all(a['continue_task'] for a in attempts[2:]))
         self.assertEqual(len({id(a['transcript']) for a in attempts}), 1)
         self.assertIn('preserve public API', '\n'.join(attempts[-1]['transcript'].get()))
+
+class ExternalModeRequestTests(unittest.IsolatedAsyncioTestCase):
+    run_model = StreamingTests.run_model
+
+    async def test_runtime_mode_request_reconnects_in_new_mode(self):
+        """The Trading Lab asks for trading_teacher: the session hands over via ModeChange."""
+        from core import runtime
+        session = FakeSession()
+        async def scenario(obj, played, task):
+            while runtime._mode_fn is None:
+                await asyncio.sleep(.001)
+            self.assertTrue(await runtime.request_mode('trading_teacher', 'trading_lab'))
+            with self.assertRaises(ModeChange) as raised:
+                await asyncio.wait_for(task, 2)
+            self.assertEqual(str(raised.exception), 'trading_teacher')
+            switched.assert_called_once_with('trading_teacher')
+            self.assertIsNone(runtime._mode_fn)   # released with the session
+        # Patched for the whole run: the real switch_mode writes the user's config.
+        with patch('core.tools.switch_mode', return_value='MODE_SWITCHED:trading_teacher') as switched:
+            await self.run_model(session, AsyncMock(), scenario)
+
 
 class ThinkingFailureTests(unittest.IsolatedAsyncioTestCase):
     run_model = StreamingTests.run_model

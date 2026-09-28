@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 const API = "http://localhost:8000";
 
@@ -79,13 +79,20 @@ export default function PersonaCustomizer({
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
 
+  // First-run setup is offered once per page at most: the load below re-runs
+  // on every socket reconnect, which used to pop the dialog up mid-session.
+  const offered = useRef(false);
+
   const load = useCallback(() => {
     fetch(`${API}/persona`)
       .then((r) => r.json())
       .then((res: PersonaData) => {
         setData(res);
         setDraft(res);
-        if (!res.setup_done) onRequestOpen();
+        if (!res.setup_done && !offered.current) {
+          offered.current = true;
+          onRequestOpen();
+        }
       })
       .catch(() => {
         // Backend offline: the customizer simply isn't offered until it's back.
@@ -117,6 +124,18 @@ export default function PersonaCustomizer({
   const pickStyle = (id: string) =>
     // A new style resets the sliders to that style's starting point.
     setDraft({ ...draft, style: id, traits: { ...draft.styles[id].traits } });
+
+  // Closing the first-run dialog without saving still counts as "offered":
+  // record it so it never reappears on the next load. Defaults stay as they are.
+  const dismiss = () => {
+    if (data && !data.setup_done) {
+      setData({ ...data, setup_done: true });
+      fetch(`${API}/persona/dismiss`, { method: "POST" }).catch(() => {
+        // Backend offline: it may be offered once more next time, nothing worse.
+      });
+    }
+    onClose();
+  };
 
   const save = async (values: PersonaData) => {
     setSaving(true);
@@ -180,7 +199,7 @@ export default function PersonaCustomizer({
               </p>
             </div>
             <button
-              onClick={onClose}
+              onClick={dismiss}
               aria-label="Close customizer"
               className="text-on-surface-variant hover:text-parchment text-lg font-light transition-colors"
             >

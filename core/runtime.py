@@ -138,11 +138,36 @@ def set_channels(inject_fn, emit_fn):
     background.set_main_loop()
 
 
+_mode_fn = None
+
+
+def set_mode_handler(fn):
+    """Called by FreyaModel.run(): how to switch modes inside the live session."""
+    global _mode_fn
+    _mode_fn = fn
+
+
+async def request_mode(mode: str, reason: str = "") -> bool:
+    """Ask the live session to change mode the way switch_mode does — at the
+    next pause, keeping the conversation (transcript recap on reconnect).
+    False when no session is live."""
+    if _mode_fn is None:
+        return False
+    from core import background
+    try:
+        await background.on_main(_mode_fn(mode, reason))
+        return True
+    except Exception as e:
+        print(f"  [runtime] mode request failed: {e}")
+        return False
+
+
 def clear_channels():
-    global _inject_fn, _emit_fn, _transcript
+    global _inject_fn, _emit_fn, _transcript, _mode_fn
     _inject_fn = None
     _emit_fn = None
     _transcript = None
+    _mode_fn = None
     for task in tuple(_announcements):
         task.cancel()
 

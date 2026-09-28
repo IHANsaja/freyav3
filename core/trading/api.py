@@ -175,6 +175,13 @@ async def workspace(body:Workspace):
     from core.trading.guide import set_workspace
     service,_=services()
     result=checked(set_workspace,service,body)
+    # Lab in use during a voice session → Freya becomes the trading teacher.
+    # Never allowed to fail the sync the page is waiting on.
+    try:
+        from core.trading.lab_mode import presence
+        await presence.on_workspace(service,body)
+    except Exception as exc:
+        print(f'  [trading] teacher mode check failed: {exc}')
     return result
 
 @router.post('/drawings/ack/{draw_id}')

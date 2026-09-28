@@ -1,6 +1,7 @@
 "use client";
 
-import { ReactNode, useState } from "react";
+import { ReactNode, useMemo, useState } from "react";
+import { toRunes } from "../runes/futhark";
 
 interface HudCardProps {
   title?: string;
@@ -31,6 +32,7 @@ export default function HudCard({
   children,
 }: HudCardProps) {
   const [sheen, setSheen] = useState(0);
+  const carved = useMemo(() => (title ? toRunes(title) : ""), [title]);
 
   return (
     <section
@@ -77,10 +79,19 @@ export default function HudCard({
         {title && (
           <header className="flex items-center justify-between mb-3">
             <h2
-              className="text-[11px] font-semibold uppercase tracking-[0.15em]"
+              className="flex items-baseline gap-2 min-w-0 text-[11px] font-semibold uppercase tracking-[0.15em]"
               style={{ fontFamily: "var(--font-ui)", color: titleColor ?? "var(--accent-red)" }}
             >
-              {title}
+              <span className="shrink-0">{title}</span>
+              {/* The same title carved in Elder Futhark — ornament, so hidden
+                  from screen readers; brightens as the panel is hovered. */}
+              <span
+                aria-hidden
+                className="hud-card-runes truncate text-[10px] tracking-[0.25em] normal-case"
+                style={{ fontFamily: "var(--font-rune)" }}
+              >
+                {carved}
+              </span>
             </h2>
             {right}
           </header>

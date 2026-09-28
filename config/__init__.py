@@ -90,6 +90,11 @@ def load_config():
     except Exception as e:
         print(f"Error listing config directory: {e}")
         
+    # Built-in modes: present in every install unless the config defines its own.
+    from config import teacher
+    config["modes"].setdefault(teacher.MODE_ID, dict(teacher.MODE))
+    config["trading"].setdefault("teacher_mode", True)
+
     from config.models import LIVE_MODEL, TEXT_MODEL, normalize_models
     config.setdefault("active_provider", "gemini")
     config.setdefault("active_model", LIVE_MODEL)

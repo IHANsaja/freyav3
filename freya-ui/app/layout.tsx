@@ -1,5 +1,5 @@
 import type { Metadata } from "next";
-import { Sora, Share_Tech_Mono, Orbitron, Rajdhani } from "next/font/google";
+import { Sora, Share_Tech_Mono, Orbitron, Rajdhani, Noto_Sans_Runic } from "next/font/google";
 import "./globals.css";
 import { FreyaSocketProvider } from "./components/FreyaSocketProvider";
 
@@ -26,9 +26,16 @@ const rajdhani = Rajdhani({
   variable: "--font-rajdhani",
 });
 
+// Elder Futhark glyphs for the rune UI (activity phases, tool kinds, intro).
+const runic = Noto_Sans_Runic({
+  weight: "400",
+  subsets: ["runic"],
+  variable: "--font-runic",
+});
+
 export const metadata: Metadata = {
-  title: "FREYJA V3.0 — Archival System",
-  description: "Crimson command core online. Neural pathways synchronized for directive input.",
+  title: "FREYJA V3.0 — Seiðr Engine",
+  description: "Seiðr and circuitry, bound as one: Freyja, your rune-bound voice companion.",
 };
 
 export default function RootLayout({
@@ -42,7 +49,7 @@ export default function RootLayout({
       // Browser extensions inject root attributes before hydration (e.g. crxlauncher).
       // Tolerate those here; descendant hydration checks remain enabled.
       suppressHydrationWarning
-      className={`${sora.variable} ${shareTechMono.variable} ${orbitron.variable} ${rajdhani.variable} h-full antialiased`}
+      className={`${sora.variable} ${shareTechMono.variable} ${orbitron.variable} ${rajdhani.variable} ${runic.variable} h-full antialiased`}
     >
       <body className="min-h-full flex flex-col bg-surface text-parchment font-sans"><FreyaSocketProvider>{children}</FreyaSocketProvider></body>
     </html>

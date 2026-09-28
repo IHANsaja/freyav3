@@ -22,6 +22,7 @@ import { useGestureOrbBridge } from "./hooks/useGestureOrbBridge";
 import { useVideoDevices } from "./hooks/useVideoDevices";
 import CenterStage from "./components/hud/CenterStage";
 import CustomCursor from "./components/hud/CustomCursor";
+import IntroSequence from "./components/intro/IntroSequence";
 import PortraitCard from "./components/hud/PortraitCard";
 import SystemStatusCard from "./components/hud/SystemStatusCard";
 import LinkHealthCard from "./components/hud/LinkHealthCard";
@@ -64,6 +65,8 @@ export default function Home() {
     orbGestureEvent,
     suggestions,
     persona,
+    health,
+    activity,
     audioDevices,
     startFreya,
     stopFreya,
@@ -84,6 +87,9 @@ export default function Home() {
   } = useFreyaSocket();
 
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+  // The opening sequence decides for itself whether to play (once per session).
+  const [introActive, setIntroActive] = useState(true);
+  const endIntro = useCallback(() => setIntroActive(false), []);
   // Opens by itself on first run (the backend says setup isn't done), and
   // from the header's customize button any time after.
   const [isCustomizerOpen, setIsCustomizerOpen] = useState(false);
@@ -276,11 +282,19 @@ export default function Home() {
     >
       <CustomCursor />
 
+      {/* Opening: Mímir's well awakens. Isolated — if it throws, it's gone
+          and the dashboard is simply there. */}
+      {introActive && (
+        <ErrorBoundary label="intro" fallback={() => { queueMicrotask(endIntro); return null; }}>
+          <IntroSequence onDone={endIntro} />
+        </ErrorBoundary>
+      )}
+
       {/* Full-bleed WebGL stage: void nebula, dais, particle stream, the orb.
           Wrapped silent — a shader/context-loss crash here should just leave a
           blank background, never take the HUD down with it. */}
       <div className="absolute inset-0 z-0" aria-hidden>
-        <ErrorBoundary label="scene" silent>
+        <ErrorBoundary label="scene" silent autoRetry>
           <OrbScene
             state={state}
             avatarIntent={avatarIntent}
@@ -296,6 +310,8 @@ export default function Home() {
         <HeaderBar
           connected={connected}
           status={status}
+          health={health}
+          activity={activity}
           modeLabel={modeLabel}
           onOpenSettings={() => setIsSettingsOpen(true)}
           onOpenCustomizer={openCustomizer}
@@ -321,12 +337,15 @@ export default function Home() {
         <div className="hud-grid">
           {/* Left column */}
           <div className="flex flex-col gap-4 min-h-0 pointer-events-auto">
+            <ErrorBoundary label="PortraitCard" autoRetry>
             <PortraitCard
               state={state}
               avatarIntent={avatarIntent}
               engine={status.engine}
               onExpressionChange={handleExpression}
             />
+            </ErrorBoundary>
+            <ErrorBoundary label="SystemStatusCard" autoRetry>
             <SystemStatusCard
               session={session}
               status={status}
@@ -334,8 +353,13 @@ export default function Home() {
               micPaused={micPaused}
               handTracking={handTrackingStatus}
             />
+            </ErrorBoundary>
+            <ErrorBoundary label="SessionCard" autoRetry>
             <SessionCard session={session} />
+            </ErrorBoundary>
+            <ErrorBoundary label="LinkHealthCard" autoRetry>
             <LinkHealthCard connected={connected} stats={linkStats} pingMs={pingMs} errors={linkErrors} onClear={clearLinkErrors} />
+            </ErrorBoundary>
           </div>
 
           {/* Center stage */}
@@ -349,6 +373,7 @@ export default function Home() {
             onSelectMode={handleSelectMode}
             onToggleRun={handleToggleRun}
             onTogglePause={toggleListening}
+            charged={!!activity && ["working", "thinking", "speaking", "hearing"].includes(activity.phase)}
           >
             {/* Pause: desaturate the stage + watermark */}
             {status.engine === "paused" && (
@@ -366,23 +391,39 @@ export default function Home() {
             )}
             {/* Holographic projection field: news, screen captures, tool
                 calls, sub-agents, and mission steps beam out of the orb */}
+            <ErrorBoundary label="SceneStage" autoRetry>
             <SceneStage toolLog={stageLog} images={images} cards={cards} newsItems={stageNews} />
+            </ErrorBoundary>
+            <ErrorBoundary label="CenterCaption" autoRetry>
             <CenterCaption state={state} liveText={liveText} />
+            </ErrorBoundary>
           </CenterStage>
 
           {/* Right column — live work: who's running what, the conversation
               record, and mission progress. */}
           <div className="flex flex-col gap-4 min-h-0 pointer-events-auto">
+            <ErrorBoundary label="AgentsCard" autoRetry>
             <AgentsCard agents={agents} />
+            </ErrorBoundary>
+            <ErrorBoundary label="ChatCard" autoRetry>
             <ChatCard transcript={transcript} liveText={liveText} className="flex-1 min-h-[140px]" />
+            </ErrorBoundary>
+            <ErrorBoundary label="MissionStatusCard" autoRetry>
             <MissionStatusCard mission={activeMission} />
+            </ErrorBoundary>
           </div>
         </div>
 
         {/* Live overlays — human-in-the-loop + agentic feedback */}
+        <ErrorBoundary label="ApprovalPrompt" autoRetry>
         <ApprovalPrompt approvals={approvals} onRespond={respondApproval} />
+        </ErrorBoundary>
+        <ErrorBoundary label="MissionPanel" autoRetry>
         <MissionPanel mission={activeMission} onCancel={cancelMission} />
+        </ErrorBoundary>
+        <ErrorBoundary label="SuggestionChips" autoRetry>
         <SuggestionChips suggestions={suggestions} onRespond={respondSuggestion} />
+        </ErrorBoundary>
       </div>
       </ErrorBoundary>
 
@@ -400,6 +441,8 @@ export default function Home() {
         />
       </ErrorBoundary>
 
+      {/* First-run setup waits for the intro to finish rather than covering it. */}
+      {!introActive && (
       <ErrorBoundary label="customizer">
         <PersonaCustomizer
           isOpen={isCustomizerOpen}
@@ -409,6 +452,7 @@ export default function Home() {
           onSaved={reloadConfig}
         />
       </ErrorBoundary>
+      )}
     </main>
   );
 }

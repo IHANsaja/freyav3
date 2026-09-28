@@ -26,14 +26,16 @@ from typing import Awaitable, Callable
 
 # Families introduced with the mission/approval/avatar upgrade — nested payload shape.
 NEW_TYPES = {
-    "trading",
+    "trading", "health", "activity",
     "mission", "approval", "avatar", "suggestion", "context", "persona", "memory_changed",
 }
 
 # Only these families are replayed to newly connected clients. Transient audio-ish
 # events (speech, state, image) would be confusing or heavy to replay. `card` is
 # excluded for the same reason as `image`: it can carry an embedded base64 photo.
-REPLAYABLE = (NEW_TYPES - {"trading"}) | {"agent", "browser", "schedule", "ambient", "mcp"}
+# `health` and `activity` are snapshots: a reconnecting client is sent the
+# current one directly (server.py /ws), so replaying stale ones would only flicker.
+REPLAYABLE = (NEW_TYPES - {"trading", "health", "activity"}) | {"agent", "browser", "schedule", "ambient", "mcp"}
 
 
 @dataclass(frozen=True)

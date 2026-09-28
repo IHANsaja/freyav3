@@ -84,7 +84,9 @@ class _Span:
 # spoken turn can produce several show_* calls.
 
 _ATTENTION_TTL_S = 2.0
-_DASHBOARD_HINTS = ("f.r.e.y.a", "freya v3")
+# Lower-cased substrings of the dashboard's tab title ("FREYJA V3.0 — Seiðr
+# Engine"). "freya v3" alone stopped matching when the title became FREYJA.
+_DASHBOARD_HINTS = ("f.r.e.y.a", "freya v3", "freyja v3", "seiðr engine")
 _attention_cache: tuple[float, dict] = (0.0, {})
 
 

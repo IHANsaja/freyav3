@@ -33,6 +33,8 @@ BG = "#0b0f0d"
 BORDER = "#1c3a2e"
 ACCENT = "#0f9c6e"
 AMBER = "#e0a33a"
+RED = "#e05a5a"
+FLASH_S = 1.6             # how long a failed step stays on the pill
 TEXT = "#e8f2ec"
 MUTED = "#7d8c85"
 KEY = "#010101"           # transparent colour for the window's corners
@@ -219,38 +221,69 @@ def configure(config: dict | None):
 
 def tool_started(call_id, name: str, args: dict | None):
     label = describe(name, args)
+    _feed().tool_started(call_id, name, args, label)
     if label:
         _send({"op": "tool_start", "id": str(call_id or name), "label": label})
 
 
+def tool_mode(call_id, mode: str):
+    """The call moved to the background (outlived the talk-first window) or is queued."""
+    _feed().tool_mode(call_id, mode)
+
+
+def tool_outcome(call_id, status: str, detail: str = ""):
+    """How a call ended — ok / error / timeout / resting — reported before tool_finished."""
+    _feed().tool_outcome(call_id, status, detail)
+    if status != "ok":
+        _send({"op": "outcome", "id": str(call_id), "status": status})
+
+
 def tool_finished(call_id, name: str = ""):
+    _feed().tool_finished(call_id, name)
     _send({"op": "tool_end", "id": str(call_id or name)})
 
 
 def heard():
     """The user is talking (a transcription fragment just arrived)."""
+    _feed().heard()
     _send({"op": "heard"})
 
 
 def responding():
     """The model produced output — speech, text or a call — so it isn't 'thinking'."""
+    _feed().responding()
     _send({"op": "responding"})
 
 
 def set_state(value: str):
+    _feed().set_state(value)
     _send({"op": "state", "value": value})
 
 
 def waiting_for_approval(action_id: str, summary: str):
+    _feed().approval(action_id, summary)
     _send({"op": "approval", "id": action_id, "label": f"Waiting for your OK — {summary}"})
 
 
 def approval_done(action_id: str):
+    _feed().approval(action_id, None)
     _send({"op": "approval_end", "id": action_id})
 
 
+def recovering(detail: str):
+    """The live link is down and being re-established ('' when it's back)."""
+    _feed().set_recovering(detail)
+    _send({"op": "recovering", "label": detail})
+
+
 def clear():
+    _feed().clear()
     _send({"op": "clear"})
+
+
+def _feed():
+    from core.activity import feed
+    return feed
 
 
 def attach_to_bus():
@@ -266,7 +299,20 @@ def attach_to_bus():
         elif p.get("event") == "resolved":
             approval_done(p.get("id", ""))
 
-    return bus.subscribe(_listener)
+    async def _health(event):
+        # The live link being re-established is something she is "doing" too:
+        # without this the pill vanished during a reconnect and she looked hung.
+        if event.type != "health":
+            return
+        components = (event.payload or {}).get("components", [])
+        live = next((c for c in components if c.get("name") == "live"), None)
+        if live is None:
+            return
+        down = live.get("state") in ("recovering", "down")
+        recovering((live.get("detail") or "Reconnecting") if down else "")
+
+    detach = [bus.subscribe(_listener), bus.subscribe(_health)]
+    return lambda: [d() for d in detach]
 
 
 def _send(cmd: dict):
@@ -390,8 +436,12 @@ class _Overlay:
             self._error = e
             self._ready.set()
             return
-        self.tools = {}           # id -> (label, started_at), insertion-ordered
+        self.tools = {}           # id -> (label, started_at, step), insertion-ordered
         self.approvals = {}       # id -> label
+        self.failed = {}          # id -> status, for tools that ended badly
+        self.flash = None         # (text, until) — a failed step, shown briefly
+        self.steps = 0            # tools in the current streak of work
+        self.recovering = ""
         self.state = "idle"
         self.heard_at = 0.0       # last user transcription fragment
         self.thinking_since = 0.0
@@ -408,10 +458,21 @@ class _Overlay:
         op = cmd.get("op")
         now = time.monotonic()
         if op == "tool_start":
-            self.tools[cmd["id"]] = (cmd["label"], now)
+            if not self.tools and now - self.last_busy > LINGER_S * 2:
+                self.steps = 0        # a new streak of work starts counting again
+            self.steps += 1
+            self.tools[cmd["id"]] = (cmd["label"], now, self.steps)
             self.thinking_since = 0.0
+        elif op == "outcome":
+            self.failed[cmd["id"]] = cmd.get("status") or "error"
         elif op == "tool_end":
-            self.tools.pop(cmd["id"], None)
+            entry = self.tools.pop(cmd["id"], None)
+            status = self.failed.pop(cmd["id"], None)
+            if entry and status:
+                word = {"timeout": "timed out", "resting": "is resting"}.get(status, "failed")
+                self.flash = (f"{entry[0]} — {word}, trying another way", now + FLASH_S)
+        elif op == "recovering":
+            self.recovering = cmd.get("label") or ""
         elif op == "approval":
             self.approvals[cmd["id"]] = cmd["label"]
         elif op == "approval_end":
@@ -432,16 +493,24 @@ class _Overlay:
         elif op == "clear":
             self.tools.clear()
             self.approvals.clear()
+            self.failed.clear()
+            self.flash = None
             self.heard_at = self.thinking_since = 0.0
 
     def _wanted(self, now: float):
         """(text, colour, started_at) to show, or None."""
+        if self.recovering:
+            return self.recovering, AMBER, None
         if self.approvals:
             return list(self.approvals.values())[-1], AMBER, None
+        if self.flash and now < self.flash[1]:
+            return self.flash[0], RED, None
+        self.flash = None
         if self.tools:
-            label, started = list(self.tools.values())[-1]
+            label, started, step = list(self.tools.values())[-1]
             more = len(self.tools) - 1
-            return (label + (f"  (+{more} more)" if more else ""), ACCENT, started)
+            prefix = f"Step {step} · " if step > 1 else ""
+            return (prefix + label + (f"  (+{more} more)" if more else ""), ACCENT, started)
         # User finished a sentence and nothing has come back yet → thinking.
         if self.heard_at and now - self.heard_at > THINK_AFTER_S:
             if not self.thinking_since:
@@ -494,7 +563,7 @@ class _Overlay:
             while text and self.font.measure(text + "…") > MAX_TEXT_PX:
                 text = text[:-1]
             text += "…"
-        dots = "" if timer or colour == AMBER else "." * (1 + (self.phase // 6) % 3)
+        dots = "" if timer or colour in (AMBER, RED) else "." * (1 + (self.phase // 6) % 3)
         text_w = self.font.measure(text + "...")
         timer_w = self.small.measure(timer) + 12 if timer else 0
         h, pad, dot = 34, 16, 10
