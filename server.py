@@ -469,6 +469,56 @@ async def get_config_endpoint():
     })
 
 
+@app.get("/persona")
+async def get_persona_endpoint():
+    from config.persona import catalog, get_persona
+    from core.user_identity import get_preferred_name
+    config = load_config()
+    return JSONResponse({
+        **get_persona(config),
+        "name": get_preferred_name(""),
+        "voice": config["providers"]["gemini"]["active_voice"],
+        "voices": config["providers"]["gemini"]["voices"],
+        **catalog(),
+    })
+
+
+@app.post("/persona")
+async def update_persona_endpoint(body: dict):
+    """Save the customizer: tuning, the matching live model, voice and name.
+    A live session restarts so the new personality applies straight away."""
+    from config.persona import STYLES, save_preferred_name, validate
+    try:
+        persona, name = validate(body)
+    except ValueError as e:
+        raise UserFacingError(str(e))
+    config_path = os.path.join("config", "freya_config.json")
+    with open(config_path, "r", encoding="utf-8") as f:
+        config = json.load(f)
+    gemini = config["providers"]["gemini"]
+    voice = body.get("voice")
+    if voice is not None and voice not in gemini.get("voices", []):
+        raise UserFacingError(f"Unknown voice {voice!r}.")
+
+    config["persona"] = {**persona, "setup_done": True}
+    config["active_model"] = STYLES[persona["style"]]["model"]
+    if voice:
+        gemini["active_voice"] = voice
+    with open(config_path, "w", encoding="utf-8") as f:
+        json.dump(config, f, indent=2)
+    save_preferred_name(name)
+
+    new_cfg = load_config()
+    await broadcast({"type": "persona", "payload": {
+        "mode": new_cfg.get("active_mode", "default"),
+        "voice": get_mode_voice(new_cfg),
+        "theme": get_mode_theme(new_cfg),
+    }})
+    if freya_running:
+        await restart_freya()
+    return JSONResponse({"status": "updated", "active_model": new_cfg["active_model"]})
+
+
 def _resolved_audio_devices(config):
     from core.audio import resolve_device
     audio = config.get("audio", {})

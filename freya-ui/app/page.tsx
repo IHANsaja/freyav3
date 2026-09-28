@@ -6,6 +6,7 @@ import { useSharedFreyaSocket as useFreyaSocket } from "./components/FreyaSocket
 import SceneStage from "./components/SceneStage";
 import { useEngineStatus } from "./hooks/useEngineStatus";
 import SettingsModal from "./components/SettingsModal";
+import PersonaCustomizer from "./components/PersonaCustomizer";
 import ApprovalPrompt from "./components/ApprovalPrompt";
 import MissionPanel from "./components/MissionPanel";
 import SuggestionChips from "./components/SuggestionChips";
@@ -69,6 +70,7 @@ export default function Home() {
     setModel,
     setVoice,
     setAudioDevice,
+    reloadConfig,
     setMode,
     toggleListening,
     respondApproval,
@@ -82,6 +84,10 @@ export default function Home() {
   } = useFreyaSocket();
 
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+  // Opens by itself on first run (the backend says setup isn't done), and
+  // from the header's customize button any time after.
+  const [isCustomizerOpen, setIsCustomizerOpen] = useState(false);
+  const openCustomizer = useCallback(() => setIsCustomizerOpen(true), []);
   const [calloutEvent, setCalloutEvent] = useState<CalloutEvent | null>(null);
   const [expression, setExpression] = useState<ExpressionEvent | null>(null);
   const calloutSeq = useRef(0);
@@ -292,6 +298,7 @@ export default function Home() {
           status={status}
           modeLabel={modeLabel}
           onOpenSettings={() => setIsSettingsOpen(true)}
+          onOpenCustomizer={openCustomizer}
           handTrackingEnabled={handTrackingEnabled}
           handTrackingStatus={handTrackingStatus}
           onToggleHandTracking={() => {
@@ -390,6 +397,16 @@ export default function Home() {
           memoryVersion={memoryVersion}
           onModelChange={setModel}
           onVoiceChange={setVoice}
+        />
+      </ErrorBoundary>
+
+      <ErrorBoundary label="customizer">
+        <PersonaCustomizer
+          isOpen={isCustomizerOpen}
+          connected={connected}
+          onRequestOpen={openCustomizer}
+          onClose={() => setIsCustomizerOpen(false)}
+          onSaved={reloadConfig}
         />
       </ErrorBoundary>
     </main>
