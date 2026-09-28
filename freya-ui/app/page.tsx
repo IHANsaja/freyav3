@@ -22,6 +22,7 @@ import { useGestureOrbBridge } from "./hooks/useGestureOrbBridge";
 import { useVideoDevices } from "./hooks/useVideoDevices";
 import CenterStage from "./components/hud/CenterStage";
 import CustomCursor from "./components/hud/CustomCursor";
+import IntroSequence from "./components/intro/IntroSequence";
 import PortraitCard from "./components/hud/PortraitCard";
 import SystemStatusCard from "./components/hud/SystemStatusCard";
 import LinkHealthCard from "./components/hud/LinkHealthCard";
@@ -86,6 +87,9 @@ export default function Home() {
   } = useFreyaSocket();
 
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+  // The opening sequence decides for itself whether to play (once per session).
+  const [introActive, setIntroActive] = useState(true);
+  const endIntro = useCallback(() => setIntroActive(false), []);
   // Opens by itself on first run (the backend says setup isn't done), and
   // from the header's customize button any time after.
   const [isCustomizerOpen, setIsCustomizerOpen] = useState(false);
@@ -278,6 +282,14 @@ export default function Home() {
     >
       <CustomCursor />
 
+      {/* Opening: Mímir's well awakens. Isolated — if it throws, it's gone
+          and the dashboard is simply there. */}
+      {introActive && (
+        <ErrorBoundary label="intro" fallback={() => { queueMicrotask(endIntro); return null; }}>
+          <IntroSequence onDone={endIntro} />
+        </ErrorBoundary>
+      )}
+
       {/* Full-bleed WebGL stage: void nebula, dais, particle stream, the orb.
           Wrapped silent — a shader/context-loss crash here should just leave a
           blank background, never take the HUD down with it. */}
@@ -429,6 +441,8 @@ export default function Home() {
         />
       </ErrorBoundary>
 
+      {/* First-run setup waits for the intro to finish rather than covering it. */}
+      {!introActive && (
       <ErrorBoundary label="customizer">
         <PersonaCustomizer
           isOpen={isCustomizerOpen}
@@ -438,6 +452,7 @@ export default function Home() {
           onSaved={reloadConfig}
         />
       </ErrorBoundary>
+      )}
     </main>
   );
 }

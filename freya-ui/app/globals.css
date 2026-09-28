@@ -38,7 +38,7 @@
   background-color: #050507;
   color: #f2ece4;
 
-  /* ── HUD structural tokens (non-color values can't live in @theme) ──
+  /* ── HUD structural tokens (non-color values cannot live in @theme) ──
      These derive from --color-primary-container via color-mix, so a
      persona event overriding that var auto-recolors every panel. */
   --notch: 12px;
@@ -58,7 +58,7 @@
   --accent-red-dim: #0a4d3a;
   --accent-red-glow: #5cf0c6;
   /* Online/success indicator — a cyan, deliberately distinct from the jade
-     brand so CONNECTED doesn't blend into the accent green. */
+     brand so CONNECTED does not blend into the accent green. */
   --accent-green: #38d9f0;
   --text-primary: #f3efec;
   --text-secondary: #97929a;
@@ -181,7 +181,7 @@ body {
   margin-left: 4px;
 }
 
-/* Typing caret that trails Freya's streaming speech */
+/* Typing caret that trails Freya’s streaming speech */
 .type-caret {
   display: inline-block;
   width: 7px;
@@ -495,4 +495,167 @@ section:hover .hud-card-runes {
   .rune-ring-spin,
   .rune-ring[data-charge="2"] .rune-ring-glyph,
   .rune-inscription.is-charged .rune-inscription-glyph { animation: none; }
+}
+
+/* ══════════════════════════════════════════════
+   INTRO — Mimir’s well awakens (components/intro)
+   ══════════════════════════════════════════════ */
+.intro-root {
+  position: fixed;
+  inset: 0;
+  z-index: 200;
+  background: #030504;
+  color: #f2ece4;
+  cursor: pointer;
+  transition: opacity 0.8s ease, filter 0.8s ease;
+}
+.intro-root.is-leaving {
+  opacity: 0;
+  filter: brightness(1.6) blur(2px);
+  pointer-events: none;
+}
+
+.intro-captions,
+.intro-titlebox {
+  position: absolute;
+  left: 0;
+  right: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.5rem;
+  pointer-events: none;
+}
+.intro-captions { bottom: 8%; }
+.intro-titlebox { bottom: 6%; }
+
+.intro-caption {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  font-family: var(--font-ui);
+  font-size: clamp(13px, 1.6vw, 17px);
+  letter-spacing: 0.32em;
+  text-transform: uppercase;
+  color: rgba(242, 236, 228, 0.78);
+  animation: intro-caption-in 0.9s ease both;
+}
+.intro-caption-rune {
+  font-family: var(--font-rune);
+  font-size: 1.5em;
+  color: #ffb54d;
+  text-shadow: 0 0 12px #ffb54d;
+  letter-spacing: 0;
+}
+@keyframes intro-caption-in {
+  from { opacity: 0; transform: translateY(8px); letter-spacing: 0.5em; filter: blur(4px); }
+  to { opacity: 1; transform: none; filter: none; }
+}
+
+.intro-title {
+  display: flex;
+  gap: 0.18em;
+  font-family: var(--font-display);
+  font-size: clamp(40px, 7vw, 88px);
+  letter-spacing: 0.08em;
+  line-height: 1;
+}
+.intro-letter {
+  position: relative;
+  display: inline-grid;
+  place-items: center;
+}
+.intro-letter > span { grid-area: 1 / 1; }
+.intro-letter-rune {
+  font-family: var(--font-rune);
+  color: #ffb54d;
+  text-shadow: 0 0 18px #ffb54d, 0 0 40px #ff8a2a;
+  animation: intro-rune-out 1.1s ease forwards;
+  animation-delay: inherit;
+}
+.intro-letter-latin {
+  color: #eafff6;
+  text-shadow: 0 0 14px #22e0a0, 0 0 38px #22e0a0;
+  opacity: 0;
+  animation: intro-latin-in 1.1s ease forwards;
+  animation-delay: inherit;
+}
+@keyframes intro-rune-out {
+  0% { opacity: 0; transform: scale(1.4); filter: blur(6px); }
+  30% { opacity: 1; transform: scale(1); filter: none; }
+  60% { opacity: 1; }
+  100% { opacity: 0; transform: scale(0.8); filter: blur(3px); }
+}
+@keyframes intro-latin-in {
+  0%, 50% { opacity: 0; transform: translateY(6px); filter: blur(6px); }
+  100% { opacity: 1; transform: none; filter: none; }
+}
+.intro-subtitle {
+  font-family: var(--font-ui);
+  font-size: 12px;
+  letter-spacing: 0.5em;
+  text-transform: uppercase;
+  color: rgba(186, 228, 214, 0.75);
+  animation: intro-caption-in 1s ease 0.7s both;
+}
+
+.intro-skip {
+  position: absolute;
+  right: 24px;
+  bottom: 22px;
+  padding: 6px 12px;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  color: rgba(242, 236, 228, 0.55);
+  border: 1px solid rgba(242, 236, 228, 0.18);
+  border-radius: 999px;
+  background: rgba(0, 0, 0, 0.35);
+  transition: color 0.2s, border-color 0.2s;
+}
+.intro-skip:hover, .intro-skip:focus-visible { color: #fff; border-color: #22e0a0; }
+
+/* CSS rendition — used while the GPU scene loads, and when it cannot run. */
+.intro-css {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  --ring-r: min(34vh, 38vw);
+}
+.intro-css.is-loading { background: #030504; }
+.intro-css-ring { position: relative; width: 0; height: 0; }
+.intro-css-ring span {
+  position: absolute;
+  left: 0;
+  top: 0;
+  translate: -50% -50%;
+  font-family: var(--font-rune);
+  font-size: clamp(18px, 3.2vh, 30px);
+  color: #2c3a34;
+  animation: intro-css-rune 0.5s ease forwards;
+}
+@keyframes intro-css-rune {
+  from { color: #2c3a34; text-shadow: none; }
+  30% { color: #fff; text-shadow: 0 0 18px #fff, 0 0 30px #ffb54d; }
+  to { color: #ffb54d; text-shadow: 0 0 10px #ffb54d, 0 0 22px #ff8a2a; }
+}
+.intro-css-core {
+  position: absolute;
+  width: 16vh;
+  height: 16vh;
+  border-radius: 50%;
+  background: radial-gradient(circle, #eafff6 0%, #22e0a0 35%, transparent 70%);
+  opacity: 0;
+  transform: scale(0.2);
+  animation: intro-css-core 1.2s ease forwards;
+}
+@keyframes intro-css-core {
+  60% { opacity: 1; transform: scale(1.25); }
+  to { opacity: 0.85; transform: scale(1); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .intro-css-ring span { animation-duration: 0.01s; }
+  .intro-css-core, .intro-letter-rune, .intro-letter-latin, .intro-caption, .intro-subtitle { animation-duration: 0.01s; }
 }
