@@ -124,27 +124,87 @@ if ($missing.Count -gt 0) {
 # -- 2. Get the source -----------------------------------------------------
 Write-Step "Locating Freya"
 
+# Runs git against one checkout. safe.directory stops git refusing a folder
+# another account owns (an install made from an admin shell), and a local
+# Continue keeps git's stderr from becoming a terminating error in PS 5.1.
+# Check $LASTEXITCODE afterwards.
+function Invoke-Git ($repo) {
+    $ErrorActionPreference = "Continue"
+    & git -c "safe.directory=$($repo -replace '\\', '/')" -C $repo @args 2>&1 | ForEach-Object { "$_" }
+}
+
+function Test-InWindowsDir ($path) {
+    return $path.TrimEnd('\').StartsWith($env:windir, [StringComparison]::OrdinalIgnoreCase)
+}
+
+# Fast-forwards an existing install to the latest commit on GitHub and says
+# plainly when that did not happen - it used to print "Pulled latest" either way.
+function Update-Checkout ($repo) {
+    if (Get-NetTCPConnection -LocalPort 8000 -State Listen -ErrorAction SilentlyContinue) {
+        Write-Warn2 "Freya looks like it is running. Close her windows first if the update fails."
+    }
+    $before = Invoke-Git $repo rev-parse --short HEAD
+    # npm install rewrites package-lock.json; that churn must not block a pull.
+    Invoke-Git $repo checkout -- freya-ui/package-lock.json | Out-Null
+    $out = Invoke-Git $repo pull --ff-only
+    if ($LASTEXITCODE -ne 0) {
+        Write-Fail "Could not update from GitHub - still on $($before):"
+        $out | ForEach-Object { Write-Host "         $_" -ForegroundColor Red }
+        Write-Warn2 "Usually a local edit to one of Freya's own files. See them with:"
+        Write-Warn2 "  git -C `"$repo`" status"
+        return
+    }
+    $after = Invoke-Git $repo rev-parse --short HEAD
+    if ($before -eq $after) {
+        Write-Ok "Already on the latest version ($after)"
+    } else {
+        Write-Ok "Updated $before -> $after"
+    }
+}
+
+# Admin PowerShell opens in C:\Windows\System32, so running the one-liner there
+# used to clone Freya into the Windows folder, which git then refused to update.
+$legacyRoot = Join-Path $env:windir "System32\freyav3"
+
+# Brings the personal files (keys, settings, memories, custom skills) of an old
+# System32 install into a fresh clone. Only files git does not track are copied,
+# minus what gets rebuilt anyway; the old folder is left for the user to delete.
+function Copy-LegacyData ($from, $to) {
+    $rebuilt = '^(venv|freya-ui/node_modules|freya-ui/\.next|freya-ui/next-env\.d\.ts|start-freya\.ps1|update-freya\.ps1)(/|$)|(^|/)__pycache__/'
+    $copied = 0
+    foreach ($rel in (Invoke-Git $from ls-files --others --directory)) {
+        if ($LASTEXITCODE -ne 0 -or $rel -match $rebuilt) { continue }
+        $src = Join-Path $from $rel.TrimEnd('/')
+        $dst = Join-Path $to $rel.TrimEnd('/')
+        if (Test-Path $dst) { continue }
+        New-Item -ItemType Directory -Force (Split-Path -Parent $dst) | Out-Null
+        Copy-Item $src $dst -Recurse
+        $copied++
+    }
+    Write-Ok "Brought over $copied item(s) from the old install: .env, settings, memories"
+    Write-Warn2 "The old copy is still in $from - delete it from an admin shell once Freya works."
+}
+
 # Running from inside a clone? Use it rather than nesting another copy.
 $inClone = (Test-Path ".\server.py") -and (Test-Path ".\core") -and (Test-Path ".\requirements.txt")
 
 if ($inClone) {
     $root = (Get-Location).Path
     Write-Ok "Using existing checkout: $root"
+    Update-Checkout $root
 } else {
     if (-not $InstallPath) {
-        $InstallPath = Join-Path (Get-Location).Path "freyav3"
+        $base = (Get-Location).Path
+        if (Test-InWindowsDir $base) {
+            $base = $HOME
+            Write-Warn2 "Not installing inside the Windows folder - using $base instead"
+        }
+        $InstallPath = Join-Path $base "freyav3"
     }
     if (Test-Path $InstallPath) {
         if (Test-Path (Join-Path $InstallPath "server.py")) {
             Write-Ok "Found existing install at $InstallPath - updating"
-            Push-Location $InstallPath
-            try {
-                git pull --ff-only 2>&1 | Out-Null
-                Write-Ok "Pulled latest"
-            } catch {
-                Write-Warn2 "Could not fast-forward (local changes?) - continuing with what is on disk"
-            }
-            Pop-Location
+            Update-Checkout (Resolve-Path $InstallPath).Path
         } else {
             Write-Fail "$InstallPath exists but does not look like Freya. Move it or pass -InstallPath."
             return
@@ -157,8 +217,18 @@ if ($inClone) {
             return
         }
         Write-Ok "Cloned to $InstallPath"
+        $newRoot = (Resolve-Path $InstallPath).Path
+        if ((Test-Path (Join-Path $legacyRoot "server.py")) -and $newRoot -ne $legacyRoot) {
+            Write-Ok "Found an older install in $legacyRoot - moving your data over"
+            Copy-LegacyData $legacyRoot $newRoot
+        }
     }
     $root = (Resolve-Path $InstallPath).Path
+}
+
+if (Test-InWindowsDir $root) {
+    Write-Warn2 "Freya is inside the Windows folder ($root), where updates break."
+    Write-Warn2 "Run the installer from a normal folder (e.g. cd ~) to move her out."
 }
 
 Set-Location $root
@@ -361,6 +431,18 @@ Start-Process "http://localhost:3000"
 $startBody | Out-File -FilePath $startScript -Encoding utf8
 Write-Ok "Created start-freya.ps1"
 
+# Always runs the newest installer from GitHub against this folder, so update
+# logic fixed upstream reaches old installs too.
+$updateScript = Join-Path $root "update-freya.ps1"
+$updateBody = @'
+# Updates Freya to the latest version on GitHub: code, Python packages and dashboard.
+# Your .env, settings and memories are kept. Restart Freya afterwards.
+Set-Location (Split-Path -Parent $MyInvocation.MyCommand.Path)
+Invoke-Expression (Invoke-RestMethod "https://raw.githubusercontent.com/IHANsaja/freyav3/main/install.ps1")
+'@
+$updateBody | Out-File -FilePath $updateScript -Encoding utf8
+Write-Ok "Created update-freya.ps1"
+
 # -- Done ------------------------------------------------------------------
 Write-Host ""
 Write-Host "--------------------------------------------------------" -ForegroundColor DarkCyan
@@ -384,4 +466,5 @@ if ((Get-Content $envPath -Raw) -match "(?m)^\s*TYPESAFE_API_KEY=\S") {
 }
 Write-Host ""
 Write-Host " Headless CLI instead:  .\venv\Scripts\python.exe main.py" -ForegroundColor DarkGray
+Write-Host " Update later:          .\update-freya.ps1" -ForegroundColor DarkGray
 Write-Host ""
