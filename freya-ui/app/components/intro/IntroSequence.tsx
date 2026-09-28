@@ -7,8 +7,8 @@ import { useReducedMotion } from "../../hooks/useReducedMotion";
 /**
  * The opening: Mímir's well awakens (see runeAwakening.ts for the scene).
  *
- * Plays once per browser session (add ?intro=1 to the URL to see it again);
- * any key, click or the Skip button ends it. It is built to never stand
+ * Plays every time the dashboard is opened (?intro=0 skips it for a quick
+ * reload); any key, click or the Skip button ends it. It is built to never stand
  * between the user and the dashboard:
  *   • the TSL scene loads client-side only, behind a dynamic import;
  *   • no WebGPU and no WebGL 2 → a CSS-only version of the same beats;
@@ -17,7 +17,6 @@ import { useReducedMotion } from "../../hooks/useReducedMotion";
  *   • reduced motion → a short still version.
  */
 
-const SEEN_KEY = "freyja-intro-seen";
 const HARD_LIMIT_MS = 12_000;
 
 // Mirrors runeAwakening.TIMELINE — kept here so the captions don't need the
@@ -36,8 +35,7 @@ const NAME: [string, string][] = [["F", "ᚠ"], ["R", "ᚱ"], ["E", "ᛖ"], ["Y"
 
 function shouldPlay(): boolean {
   try {
-    if (new URLSearchParams(window.location.search).has("intro")) return true;
-    return window.sessionStorage.getItem(SEEN_KEY) !== "1";
+    return new URLSearchParams(window.location.search).get("intro") !== "0";
   } catch {
     return true;
   }
@@ -53,14 +51,6 @@ function startOffset(): number {
   }
 }
 
-function markSeen() {
-  try {
-    window.sessionStorage.setItem(SEEN_KEY, "1");
-  } catch {
-    // Private mode / blocked storage: it just plays again next load.
-  }
-}
-
 export default function IntroSequence({ onDone }: { onDone: () => void }) {
   const hostRef = useRef<HTMLDivElement>(null);
   const sceneRef = useRef<RuneAwakening | null>(null);
@@ -73,7 +63,6 @@ export default function IntroSequence({ onDone }: { onDone: () => void }) {
   const finish = useCallback(() => {
     if (doneRef.current) return;
     doneRef.current = true;
-    markSeen();
     setLeaving(true);
     setTimeout(onDone, 450);               // let the fade play
   }, [onDone]);
