@@ -300,13 +300,15 @@ class ExternalModeRequestTests(unittest.IsolatedAsyncioTestCase):
         async def scenario(obj, played, task):
             while runtime._mode_fn is None:
                 await asyncio.sleep(.001)
-            with patch('core.tools.switch_mode', return_value='MODE_SWITCHED:trading_teacher'):
-                self.assertTrue(await runtime.request_mode('trading_teacher', 'trading_lab'))
-                with self.assertRaises(ModeChange) as raised:
-                    await asyncio.wait_for(task, 2)
+            self.assertTrue(await runtime.request_mode('trading_teacher', 'trading_lab'))
+            with self.assertRaises(ModeChange) as raised:
+                await asyncio.wait_for(task, 2)
             self.assertEqual(str(raised.exception), 'trading_teacher')
+            switched.assert_called_once_with('trading_teacher')
             self.assertIsNone(runtime._mode_fn)   # released with the session
-        await self.run_model(session, AsyncMock(), scenario)
+        # Patched for the whole run: the real switch_mode writes the user's config.
+        with patch('core.tools.switch_mode', return_value='MODE_SWITCHED:trading_teacher') as switched:
+            await self.run_model(session, AsyncMock(), scenario)
 
 
 class ThinkingFailureTests(unittest.IsolatedAsyncioTestCase):

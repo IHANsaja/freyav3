@@ -1478,7 +1478,7 @@ class FreyaModel:
                 # Trading Lab opening or closing). Same path as switch_mode:
                 # wait for a natural pause, write the mode, reconnect with the
                 # transcript recap — so she changes hats without losing the thread.
-                from core.tools import switch_mode
+                from core import tools as mode_tools
                 while True:
                     mode, reason = await mode_requests.get()
                     for _ in range(80):          # up to ~20 s for a gap
@@ -1487,7 +1487,7 @@ class FreyaModel:
                         await asyncio.sleep(0.25)
                     if self._pending_tools:
                         continue                 # never reconnect under a running tool
-                    result = await loop.run_in_executor(None, switch_mode, mode)
+                    result = await loop.run_in_executor(None, mode_tools.switch_mode, mode)
                     if not result.startswith("MODE_SWITCHED:"):
                         continue
                     print(f"  Mode -> {mode} ({reason or 'requested'})")
