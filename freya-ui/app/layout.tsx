@@ -34,8 +34,8 @@ const runic = Noto_Sans_Runic({
 });
 
 export const metadata: Metadata = {
-  title: "FREYJA V3.0 — Archival System",
-  description: "Crimson command core online. Neural pathways synchronized for directive input.",
+  title: "FREYJA V3.0 — Seiðr Engine",
+  description: "Seiðr and circuitry, bound as one: Freyja, your rune-bound voice companion.",
 };
 
 export default function RootLayout({

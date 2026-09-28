@@ -114,7 +114,7 @@ export default function HeaderBar({
             <span aria-hidden className="text-[10px] tracking-[0.2em] normal-case" style={{ fontFamily: "var(--font-rune)", color: "var(--accent-red)" }}>
               ᚠᚱᛖᛃᚨ
             </span>
-            Archival System
+            Seiðr Engine
           </p>
         </div>
 
