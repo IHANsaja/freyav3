@@ -24,8 +24,8 @@ model_id = get_mode_model(config)          # ← was get_active_model(config)
 voice = get_active_voice(config)
 base_personality = get_personality(config)
 
-input_idx = config["audio"]["input_device_index"]
-output_idx = config["audio"]["output_device_index"]
+input_idx = config.get("audio", {}).get("input_device_index")
+output_idx = config.get("audio", {}).get("output_device_index")
 
 async def main():
     global config, api_key, model_id, voice, base_personality
@@ -37,8 +37,10 @@ async def main():
     personality = build_system_prompt(get_mode_personality(config, base_personality), memory)  # ← was just base_personality
     transcript = TranscriptCollector()
 
-    mic = MicStream(device_index=input_idx)
-    speaker = SpeakerStream(device_index=output_idx)
+    mic = MicStream(device_index=input_idx,
+                    device_name=config.get("audio", {}).get("input_device_name"))
+    speaker = SpeakerStream(device_index=output_idx,
+                            device_name=config.get("audio", {}).get("output_device_name"))
 
     mic.start()
     speaker.start()
