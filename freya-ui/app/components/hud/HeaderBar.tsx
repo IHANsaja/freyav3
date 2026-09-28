@@ -6,10 +6,26 @@ import type { EngineStatus } from "../../hooks/useEngineStatus";
 import type { HandTrackingStatus } from "../../hooks/useHandGestures";
 import type { VideoDevice } from "../../hooks/useVideoDevices";
 import Waveform from "./Waveform";
+import type { HealthPayload, HealthState } from "../../types/events";
+
+const HEALTH_LABEL: Record<HealthState, string> = {
+  ok: "NOMINAL",
+  degraded: "DEGRADED",
+  recovering: "RECOVERING",
+  down: "DOWN",
+};
+const HEALTH_COLOR: Record<HealthState, string> = {
+  ok: "var(--accent-green)",
+  degraded: "#e0a33a",
+  recovering: "#e0a33a",
+  down: "var(--accent-red-dim)",
+};
 
 interface HeaderBarProps {
   connected: boolean;
   status: EngineStatus;
+  /** Recovery-protocol health from the backend; null until first report. */
+  health?: HealthPayload | null;
   modeLabel: string;
   onOpenSettings: () => void;
   onOpenCustomizer: () => void;
@@ -49,6 +65,7 @@ const DIVIDER = <span aria-hidden className="w-px h-3 self-center" style={{ back
 export default function HeaderBar({
   connected,
   status,
+  health,
   modeLabel,
   onOpenSettings,
   onOpenCustomizer,
@@ -117,6 +134,24 @@ export default function HeaderBar({
           <div>
             MODE: <span style={{ color: "var(--accent-red)" }}>{scrambledMode}</span>
           </div>
+          {connected && health && (
+            <>
+              {DIVIDER}
+              <div
+                title={
+                  health.components
+                    .filter((c) => c.state !== "ok")
+                    .map((c) => `${c.name}: ${c.detail || c.state}`)
+                    .join("\n") || "All systems nominal"
+                }
+              >
+                HEALTH:{" "}
+                <span style={{ color: HEALTH_COLOR[health.overall] ?? "var(--accent-red)" }}>
+                  {HEALTH_LABEL[health.overall] ?? health.overall.toUpperCase()}
+                </span>
+              </div>
+            </>
+          )}
         </div>
       </div>
 

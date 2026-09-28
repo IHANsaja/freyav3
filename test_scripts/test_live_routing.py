@@ -274,6 +274,9 @@ class RunnerTests(unittest.IsolatedAsyncioTestCase):
                     cfg['active_mode'] = 'complex_tasks'
                     raise ModeChange('complex_tasks')
                 self.connected = True
+                # A clean return only ends the session when the user stopped it;
+                # otherwise it's a server-side close and the runner reconnects.
+                server.freya_running = False
         with patch.object(server, 'FreyaModel', FakeModel), patch.object(server, 'load_config', return_value=cfg), \
              patch.object(server, 'get_api_key', return_value='test'), patch.object(server, 'load_memory', return_value=''), \
              patch.object(server, 'MicStream', MagicMock()), patch.object(server, 'SpeakerStream', MagicMock()), \

@@ -114,3 +114,21 @@ export interface PersonaPayload {
         avatarIdle?: string; // standing | seated | attentive
     };
 }
+
+// ── Recovery protocol health (core/resilience.py) ──
+export type HealthState = "ok" | "degraded" | "recovering" | "down";
+
+export interface HealthComponent {
+    name: string;          // live | mic | speaker | memory | tools
+    state: HealthState;
+    detail: string;
+    since: number;         // unix seconds
+    failures: number;
+}
+
+export interface HealthPayload {
+    overall: HealthState;
+    components: HealthComponent[];
+    resting_tools: string[];
+    ts: number;
+}

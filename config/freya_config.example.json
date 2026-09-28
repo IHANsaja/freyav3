@@ -269,7 +269,8 @@
     "defaults_version": 1,
     "fallback_model": "gemini-3.1-flash-live-preview",
     "auto_complex_mode": true,
-    "thinking_level": "high"
+    "thinking_level": "high",
+    "tool_timeout_s": 300
   },
   "tool_index": {
     "enabled": true

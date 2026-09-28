@@ -122,6 +122,20 @@ This is the heart of real-time interaction using the asynchronous `google-genai`
 - **Session Continuity**: The server emits a fresh session-resumption handle throughout a session; a GoAway raises `SessionRotation` so the client leaves voluntarily and reconnects with that handle. If a handle is missing or rejected, `_send_recap()` replays the transcript tail instead.
 - **Model fallback** (`core/live_protocol.py:LiveRoute`): quota/unavailable errors move to the next model in the route (3.8 Extended Thinking → 3.8 Live → 3.1 Flash Live). A server-side `1011 Internal error` is retried once on the same model and falls back on the second in a row — it used to burn all five reconnect attempts on a model that was down.
 
+### Recovery Protocol (`core/resilience.py`)
+One rule for every layer: **a failure is contained, degraded around, retried, and reported — never terminal while the user wants her running.**
+
+| Step | What happens | Where |
+| :--- | :--- | :--- |
+| 1. Contain | `guard()` / `aguard()` run a step, log the traceback, return a fallback. Cancellation is never swallowed. | session setup + cleanup, config reloads |
+| 2. Degrade | Saved audio device fails → Windows default. Memory/prompt build fails → prompt without memory → last good prompt → base personality. A tool failing 3× in a row rests for 90 s (`ToolBreaker`); calls meanwhile are answered at once with "use another route". | `server._open_audio`, `server._build_personality`, `model.settle` |
+| 3. Retry forever | Live reconnects use capped, jittered backoff (2 s → 60 s) with **no attempt limit**; a session that ran > 60 s resets the streak. A clean server-side close is treated as a disconnect. A refused key waits for a new key and reconnects by itself. `supervise_freya()` restarts a session that crashed outside its own loop (e.g. no audio device yet). | `server.run_freya`, `server.supervise_freya` |
+| 4. Report | `health` holds per-component state (`live`, `mic`, `speaker`, `memory`, `tools`: ok / degraded / recovering / down), published as a `health` event, sent to every new dashboard, and served at `GET /health`. The header shows it. | `core/resilience.health` |
+
+Every tool call is bounded by `live.tool_timeout_s` (default 300 s): a hung tool used to hold the one-job executor forever.
+
+On the dashboard: each card sits in its own self-healing `ErrorBoundary autoRetry` (backoff 2 s → 60 s), both canvases rebuild after a lost WebGL context (`useWebGLRecovery`), a frame that fails to apply is skipped rather than thrown, and messages sent while the socket is reconnecting are queued and delivered on reconnect.
+
 ### Tool Scheduling: talk first, one job at a time (`core/model.py:execute_tools`)
 A single executor runs tools in order, so desktop actions never overlap. On top of that:
 
