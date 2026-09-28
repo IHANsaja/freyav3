@@ -18,6 +18,32 @@ class ThinkingTaskFailed(Exception):
     """
 
 
+# What Gemini says when the key itself is refused. Retrying cannot fix any of
+# these, so the runner stops at once instead of burning five reconnects:
+#   1007 "API key not valid"                  - typo, placeholder, deleted key
+#   1008 "invalid authentication credentials" - an AQ.-style key Google rejects
+#   1008 "unregistered callers"               - an empty key
+_AUTH_MARKERS = (
+    "api key not valid",
+    "api_key_invalid",
+    "invalid authentication credentials",
+    "unregistered callers",
+    "api key expired",
+)
+
+AUTH_HELP = (
+    "Google rejected GEMINI_API_KEY. Create a new key at "
+    "https://aistudio.google.com/apikey, paste the whole key into .env "
+    "(GEMINI_API_KEY=...), then restart Freya."
+)
+
+
+def is_auth_failure(exc) -> bool:
+    """True when the Live API refused the API key rather than the connection."""
+    text = str(exc).lower()
+    return any(marker in text for marker in _AUTH_MARKERS)
+
+
 def is_thinking(model):
     return model.removeprefix('models/') == THINKING_LIVE_MODEL
 

@@ -61,7 +61,7 @@ from core.audio import MicStream, SpeakerStream
 from core.events import bus
 from core.memory import load_memory, build_system_prompt, update_memory, TranscriptCollector
 from core.model import FreyaModel, is_rotation
-from core.live_protocol import LiveRoute, ModeChange, ThinkingTaskFailed
+from core.live_protocol import LiveRoute, ModeChange, ThinkingTaskFailed, is_auth_failure, AUTH_HELP
 
 
 @asynccontextmanager
@@ -310,6 +310,13 @@ async def run_freya():
                 # Keep the server-side conversation state across the reconnect.
                 resume_handle = freya.resume_handle
 
+                if is_auth_failure(e):
+                    # A refused key fails identically on every retry: stop now
+                    # and say what to fix, instead of five vague reconnects.
+                    print(f"Freya session error: {AUTH_HELP} ({e})")
+                    await broadcast({"type": "transcript", "speaker": "Freya",
+                                     "text": f"[SESSION ERROR] {AUTH_HELP}"})
+                    break
                 if freya.connected and not isinstance(e, ModeChange):
                     continue_task = False
                 fallback = None if isinstance(e, ModeChange) else route.fallback(
