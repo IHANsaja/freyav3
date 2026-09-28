@@ -12,6 +12,7 @@ interface HeaderBarProps {
   status: EngineStatus;
   modeLabel: string;
   onOpenSettings: () => void;
+  onOpenCustomizer: () => void;
   handTrackingEnabled: boolean;
   handTrackingStatus: HandTrackingStatus;
   onToggleHandTracking: () => void;
@@ -50,6 +51,7 @@ export default function HeaderBar({
   status,
   modeLabel,
   onOpenSettings,
+  onOpenCustomizer,
   handTrackingEnabled,
   handTrackingStatus,
   onToggleHandTracking,
@@ -153,6 +155,21 @@ export default function HeaderBar({
               strokeLinecap="round"
               strokeLinejoin="round"
             />
+          </svg>
+        </button>
+        <button
+          onClick={onOpenCustomizer}
+          aria-label="Customize Freyja's personality"
+          title="Customize Freyja's personality"
+          className="w-9 h-9 flex items-center justify-center border transition-colors duration-300 hover:border-[var(--panel-border-hover)]"
+          style={{ borderColor: "var(--panel-border)", borderRadius: "6px", color: "var(--text-secondary)" }}
+        >
+          {/* Sliders: tune her personality */}
+          <svg viewBox="0 0 24 24" className="w-4 h-4" fill="none" stroke="currentColor" strokeWidth="1.25" aria-hidden>
+            <path d="M4 6h9 M17 6h3 M4 12h3 M11 12h9 M4 18h11 M19 18h1" strokeLinecap="round" />
+            <circle cx="15" cy="6" r="2" />
+            <circle cx="9" cy="12" r="2" />
+            <circle cx="17" cy="18" r="2" />
           </svg>
         </button>
         <button

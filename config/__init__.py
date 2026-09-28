@@ -170,17 +170,28 @@ def get_mode_voice(config):
 
 def get_mode_theme(config):
     """Mode UI theme: accent color, glow level, optional shader params, idle pose."""
-    mode = config.get("modes", {}).get(get_active_mode(config), {})
+    mode_id = get_active_mode(config)
+    mode = config.get("modes", {}).get(mode_id, {})
     theme = mode.get("theme") or {}
+    accent = theme.get("accent", "#d32f2f")
+    # The customizer's colour belongs to Freya's everyday look; the other
+    # modes keep their own colours so a mode switch stays visible.
+    persona = config.get("persona") or {}
+    if mode_id == "default" and persona.get("setup_done") and persona.get("accent"):
+        accent = persona["accent"]
     return {
-        "accent": theme.get("accent", "#d32f2f"),
+        "accent": accent,
         "glow": float(theme.get("glow", 1.0)),
         "coreParams": theme.get("coreParams"),
         "avatarIdle": mode.get("avatar_idle", "standing"),
     }
 
 def get_personality(config):
-    return config["freya"]["personality"]
+    """Base personality, plus the tuning the user chose in the customizer."""
+    from config.persona import prompt_block
+    tuning = prompt_block(config)
+    base = config["freya"]["personality"]
+    return f"{base}\n\n{tuning}" if tuning else base
 
 def get_app_path(config, app_name):
     return config["apps"].get(app_name, "")

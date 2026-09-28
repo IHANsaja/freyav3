@@ -728,6 +728,8 @@ export function useFreyaSocketConnection() {
         setModel,
         setVoice,
         setAudioDevice,
+        // Re-read /config after a change made outside this hook (the persona customizer).
+        reloadConfig: loadBackendConfig,
         setMode,
         toggleListening,
         respondApproval,
