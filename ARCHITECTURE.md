@@ -408,6 +408,20 @@ The pill's big sibling on the dashboard. `activity_overlay`'s public calls forwa
 
 The header shows the phase as an Elder Futhark rune (ᚲ Kenaz, the torch, for search; ᚠ Fehu for trading; ᚺ Hagalaz for a dropped link…), the sentence, a timer, and a failure mark; clicking opens the log. The desktop pill gained a step counter ("Step 3 · Opening report.pdf"), a red flash when a step fails or times out, and an amber "Reconnecting" line fed from `health`.
 
+### Trading Teacher (`config/teacher.py` + `core/trading/lab_mode.py`)
+Inside the Trading Lab she is a different person: a Socratic, risk-first investment and trading mentor (paper trading only; never real-money advice) instead of the companion who does things for him. It is a built-in mode — `load_config()` adds `trading_teacher` to any config that doesn't define its own — so it also appears as a mode tab (ᚠ Fehu, gold).
+
+`LabPresence` switches automatically. Every Trading Lab workspace sync (every 20 s, and on focus/visibility changes) calls `on_workspace`:
+
+| Situation | Action |
+| :--- | :--- |
+| Lab in use, voice session live, `trading.teacher_mode` on | `runtime.request_mode("trading_teacher")`; remember the mode to return to; once the new session is live, inject the lab briefing so her first line is about his chart |
+| He picks another mode himself while in the lab | Respected until the lab closes (a switch still landing within 30 s is not mistaken for this) |
+| Current mode is `complex_tasks` / `night_guardian` | Left alone |
+| Lab closed for 25 s | Back to the remembered mode — only if the lab put her in teacher mode |
+
+`runtime.request_mode` goes through the live session's own path (`FreyaModel.apply_mode_requests` → `switch_mode` → `ModeChange`), waiting for a pause and never reconnecting under a running tool, so the transcript recap carries the conversation across the change.
+
 ### System One / Jev (`core/systemone.py`) — optional
 Jev (TypeSafe) answers typed yes/no, pick-one and score questions in ~70–500 ms. It is
 early-access, so **the key is the switch**: `TYPESAFE_API_KEY` present → used; absent or blank →

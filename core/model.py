@@ -1466,6 +1466,37 @@ class FreyaModel:
                     await audio_queue.join()  # let her finish the current word
                     raise ModeChange("complex_tasks")
 
+            mode_requests: asyncio.Queue = asyncio.Queue()
+
+            async def request_mode(mode: str, reason: str):
+                mode_requests.put_nowait((mode, reason))
+
+            runtime.set_mode_handler(request_mode)
+
+            async def apply_mode_requests():
+                # Mode changes asked for from outside the conversation (the
+                # Trading Lab opening or closing). Same path as switch_mode:
+                # wait for a natural pause, write the mode, reconnect with the
+                # transcript recap — so she changes hats without losing the thread.
+                from core.tools import switch_mode
+                while True:
+                    mode, reason = await mode_requests.get()
+                    for _ in range(80):          # up to ~20 s for a gap
+                        if not self._pending_tools and not model_speaking.is_set():
+                            break
+                        await asyncio.sleep(0.25)
+                    if self._pending_tools:
+                        continue                 # never reconnect under a running tool
+                    result = await loop.run_in_executor(None, switch_mode, mode)
+                    if not result.startswith("MODE_SWITCHED:"):
+                        continue
+                    print(f"  Mode -> {mode} ({reason or 'requested'})")
+                    if self.transcript:
+                        self.transcript.add("Tool", f"switch_mode: {result} ({reason})")
+                    await self.on_tool("switch_mode", {"mode": mode, "via": reason or "request"}, result)
+                    await audio_queue.join()
+                    raise ModeChange(mode)
+
             async def play_audio():
                 nonlocal pending_playback_chunks
                 while True:
@@ -1483,7 +1514,8 @@ class FreyaModel:
 
             try:
                 from core.voice_tasks import run_voice_tasks
-                workers = [send_audio(), receive_audio(), play_audio(), execute_tools()]
+                workers = [send_audio(), receive_audio(), play_audio(), execute_tools(),
+                           apply_mode_requests()]
                 if route_queue is not None:
                     workers.append(route_modes())
                 await run_voice_tasks(*workers)

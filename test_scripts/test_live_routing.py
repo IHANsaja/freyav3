@@ -290,6 +290,25 @@ class RunnerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len({id(a['transcript']) for a in attempts}), 1)
         self.assertIn('preserve public API', '\n'.join(attempts[-1]['transcript'].get()))
 
+class ExternalModeRequestTests(unittest.IsolatedAsyncioTestCase):
+    run_model = StreamingTests.run_model
+
+    async def test_runtime_mode_request_reconnects_in_new_mode(self):
+        """The Trading Lab asks for trading_teacher: the session hands over via ModeChange."""
+        from core import runtime
+        session = FakeSession()
+        async def scenario(obj, played, task):
+            while runtime._mode_fn is None:
+                await asyncio.sleep(.001)
+            with patch('core.tools.switch_mode', return_value='MODE_SWITCHED:trading_teacher'):
+                self.assertTrue(await runtime.request_mode('trading_teacher', 'trading_lab'))
+                with self.assertRaises(ModeChange) as raised:
+                    await asyncio.wait_for(task, 2)
+            self.assertEqual(str(raised.exception), 'trading_teacher')
+            self.assertIsNone(runtime._mode_fn)   # released with the session
+        await self.run_model(session, AsyncMock(), scenario)
+
+
 class ThinkingFailureTests(unittest.IsolatedAsyncioTestCase):
     run_model = StreamingTests.run_model
 
