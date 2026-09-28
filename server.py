@@ -219,11 +219,13 @@ async def run_freya():
     personality = build_system_prompt(get_mode_personality(config, base_personality), memory)
     transcript = TranscriptCollector()
 
-    input_idx = config["audio"]["input_device_index"]
-    output_idx = config["audio"]["output_device_index"]
+    input_idx = config.get("audio", {}).get("input_device_index")
+    output_idx = config.get("audio", {}).get("output_device_index")
 
-    mic = MicStream(device_index=input_idx)
-    speaker = SpeakerStream(device_index=output_idx)
+    mic = MicStream(device_index=input_idx,
+                    device_name=config.get("audio", {}).get("input_device_name"))
+    speaker = SpeakerStream(device_index=output_idx,
+                            device_name=config.get("audio", {}).get("output_device_name"))
     mic.start()
     speaker.start()
     global _active_speaker
@@ -454,8 +456,8 @@ async def get_config_endpoint():
         "active_voice": config["providers"]["gemini"]["active_voice"],
         "models": config["providers"]["gemini"]["models"],
         "voices": config["providers"]["gemini"]["voices"],
-        "input_device_index": config.get("audio", {}).get("input_device_index"),
-        "output_device_index": config.get("audio", {}).get("output_device_index"),
+        # Where the saved devices sit now; None = the Windows default.
+        **_resolved_audio_devices(config),
         "modes": {
             mode_id: {
                 "label": mode.get("label", mode_id),
@@ -465,6 +467,17 @@ async def get_config_endpoint():
         },
         "active_mode": config.get("active_mode", "default"),
     })
+
+
+def _resolved_audio_devices(config):
+    from core.audio import resolve_device
+    audio = config.get("audio", {})
+    try:
+        return {f"{side}_device_index": resolve_device(audio.get(f"{side}_device_index"), side,
+                                                       audio.get(f"{side}_device_name"), quiet=True)
+                for side in ("input", "output")}
+    except Exception:
+        return {f"{side}_device_index": audio.get(f"{side}_device_index") for side in ("input", "output")}
 
 
 @app.get("/audio/devices")
@@ -487,22 +500,29 @@ async def update_config_endpoint(body: dict):
             raise UserFacingError(f"Unknown model {body['model']!r}. Choose one of: {', '.join(model_ids)}.")
     if "voice" in body and body["voice"] not in gemini.get("voices", []):
         raise UserFacingError(f"Unknown voice {body['voice']!r}.")
+    device_names = {}
     for key, side in (("input_device_index", "input"), ("output_device_index", "output")):
         if key in body:
             from core.audio import list_audio_devices
             value = body[key]
-            valid = {d["index"] for d in list_audio_devices().get(side, [])}
-            if isinstance(value, bool) or not isinstance(value, int) or value not in valid:
+            if value is None:
+                device_names[side] = None  # follow the Windows default device
+                continue
+            names = {d["index"]: d["name"] for d in list_audio_devices().get(side, [])}
+            if isinstance(value, bool) or not isinstance(value, int) or value not in names:
                 raise UserFacingError(f"{key} must be one of the available {side} devices.")
+            # Indexes shift when Windows reorders devices; the name is what
+            # identifies the choice when the stream is opened later.
+            device_names[side] = names[value]
 
     if "model" in body:
         config["active_model"] = body["model"]
     if "voice" in body:
         gemini["active_voice"] = body["voice"]
-    if "input_device_index" in body:
-        config.setdefault("audio", {})["input_device_index"] = body["input_device_index"]
-    if "output_device_index" in body:
-        config.setdefault("audio", {})["output_device_index"] = body["output_device_index"]
+    for side in device_names:
+        audio = config.setdefault("audio", {})
+        audio[f"{side}_device_index"] = body[f"{side}_device_index"]
+        audio[f"{side}_device_name"] = device_names[side]
     with open(config_path, "w", encoding="utf-8") as f:
         json.dump(config, f, indent=2)
     return JSONResponse({"status": "updated"})

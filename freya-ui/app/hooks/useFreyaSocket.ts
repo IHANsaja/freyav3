@@ -66,6 +66,8 @@ export interface FreyaMode {
 export interface AudioDevice {
     index: number;
     name: string;
+    /** The device Windows is currently using. */
+    default?: boolean;
 }
 
 /** A background worker Freya has running: a sub-agent (researcher / coder /
@@ -638,7 +640,8 @@ export function useFreyaSocketConnection() {
         setConfig((prev) => prev ? { ...prev, active_voice: voice } : prev);
     }, [send]);
 
-    const setAudioDevice = useCallback((inputDeviceIndex?: number, outputDeviceIndex?: number) => {
+    // null = follow the Windows default device; undefined = leave unchanged.
+    const setAudioDevice = useCallback((inputDeviceIndex?: number | null, outputDeviceIndex?: number | null) => {
         send({
             type: "set_audio_device",
             ...(inputDeviceIndex !== undefined ? { input_device_index: inputDeviceIndex } : {}),

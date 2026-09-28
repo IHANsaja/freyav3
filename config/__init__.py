@@ -27,12 +27,33 @@ def ensure_config():
     print("  Created config/freya_config.json from the example template.")
 
 
+def migrate_audio_defaults(config):
+    """One-time upgrade: follow the Windows default mic and speaker.
+
+    The template used to ship device indexes 0 and 3 - picked on one machine and
+    meaningless on any other - so a fresh install started on whatever happened
+    to sit at those positions. Installs still carrying exactly those values get
+    None (the system default); any other saved choice was made by the user and
+    is kept.
+    """
+    audio = config.setdefault("audio", {})
+    if audio.get("defaults_version", 0) >= 1:
+        return False
+    if (audio.get("input_device_index"), audio.get("output_device_index")) == (0, 3):
+        audio["input_device_index"] = None
+        audio["output_device_index"] = None
+    audio.setdefault("input_device_index", None)
+    audio.setdefault("output_device_index", None)
+    audio["defaults_version"] = 1
+    return True
+
+
 def load_config():
     ensure_config()
     with open(CONFIG_PATH, "r", encoding="utf-8") as f:
         config = json.load(f)
     from config.models import migrate_live_defaults
-    if migrate_live_defaults(config):
+    if migrate_live_defaults(config) | migrate_audio_defaults(config):
         # Save the migration marker so selecting the fallback later is respected.
         with open(CONFIG_PATH, "w", encoding="utf-8") as f:
             json.dump(config, f, indent=2)

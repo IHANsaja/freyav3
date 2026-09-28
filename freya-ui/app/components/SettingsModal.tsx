@@ -15,7 +15,32 @@ interface SettingsModalProps {
   memoryVersion: number;
   onModelChange: (model: string) => void;
   onVoiceChange: (voice: string) => void;
-  onAudioDeviceChange: (inputDeviceIndex?: number, outputDeviceIndex?: number) => void;
+  onAudioDeviceChange: (inputDeviceIndex?: number | null, outputDeviceIndex?: number | null) => void;
+}
+
+// <select> value for "follow whatever Windows uses" (stored as null).
+const SYSTEM_DEFAULT = "default";
+
+// A saved device that has since been unplugged is shown as the system default,
+// which is also what the backend falls back to when it opens the stream.
+function deviceValue(index: number | null, devices: AudioDevice[]) {
+  return index !== null && devices.some((d) => d.index === index) ? String(index) : SYSTEM_DEFAULT;
+}
+
+function DeviceOptions({ devices }: { devices: AudioDevice[] }) {
+  const current = devices.find((d) => d.default);
+  return (
+    <>
+      <option value={SYSTEM_DEFAULT} className="bg-surface-container-lowest text-on-surface">
+        SYSTEM DEFAULT{current ? ` (${current.name})` : ""}
+      </option>
+      {devices.map((d) => (
+        <option key={d.index} value={d.index} className="bg-surface-container-lowest text-on-surface">
+          {d.name}
+        </option>
+      ))}
+    </>
+  );
 }
 
 export default function SettingsModal({
@@ -33,8 +58,9 @@ export default function SettingsModal({
 
   const [localModel, setLocalModel] = useState("");
   const [localVoice, setLocalVoice] = useState("");
-  const [localInputDevice, setLocalInputDevice] = useState<number | "">("");
-  const [localOutputDevice, setLocalOutputDevice] = useState<number | "">("");
+  // null = follow the Windows default device.
+  const [localInputDevice, setLocalInputDevice] = useState<number | null>(null);
+  const [localOutputDevice, setLocalOutputDevice] = useState<number | null>(null);
   const [saving, setSaving] = useState(false);
 
   // Reset the drafts from config whenever it changes or the modal opens, so
@@ -46,8 +72,8 @@ export default function SettingsModal({
     setSyncedFrom({ config, isOpen });
     setLocalModel(config?.active_model ?? "");
     setLocalVoice(config?.active_voice ?? "");
-    setLocalInputDevice(config?.input_device_index ?? "");
-    setLocalOutputDevice(config?.output_device_index ?? "");
+    setLocalInputDevice(config?.input_device_index ?? null);
+    setLocalOutputDevice(config?.output_device_index ?? null);
   }
 
   if (!isOpen) return null;
@@ -62,10 +88,8 @@ export default function SettingsModal({
         onVoiceChange(localVoice);
       }
       if (!isRunning) {
-        const input =
-          localInputDevice !== "" && localInputDevice !== config?.input_device_index ? localInputDevice : undefined;
-        const output =
-          localOutputDevice !== "" && localOutputDevice !== config?.output_device_index ? localOutputDevice : undefined;
+        const input = localInputDevice !== (config?.input_device_index ?? null) ? localInputDevice : undefined;
+        const output = localOutputDevice !== (config?.output_device_index ?? null) ? localOutputDevice : undefined;
         if (input !== undefined || output !== undefined) onAudioDeviceChange(input, output);
       }
       onClose();
@@ -174,20 +198,20 @@ export default function SettingsModal({
             </div>
             <div className="relative">
               <select
-                value={localInputDevice}
-                onChange={(e) => setLocalInputDevice(e.target.value === "" ? "" : Number(e.target.value))}
+                aria-label="Audio input device"
+                value={deviceValue(localInputDevice, audioDevices.input)}
+                onChange={(e) => setLocalInputDevice(e.target.value === SYSTEM_DEFAULT ? null : Number(e.target.value))}
                 disabled={isRunning || audioDevices.input.length === 0}
                 className="w-full bg-surface-container-lowest border border-outline-variant/40 text-on-surface text-xs
                            px-4 py-3 focus:outline-none focus:border-primary-container disabled:opacity-40
                            appearance-none font-mono tracking-wider uppercase cursor-pointer"
                 style={{ borderRadius: "0px" }}
               >
-                {audioDevices.input.length === 0 && <option value="">NO INPUT DEVICES FOUND</option>}
-                {audioDevices.input.map((d) => (
-                  <option key={d.index} value={d.index} className="bg-surface-container-lowest text-on-surface">
-                    [{d.index}] {d.name}
-                  </option>
-                ))}
+                {audioDevices.input.length === 0 ? (
+                  <option value={SYSTEM_DEFAULT}>NO INPUT DEVICES FOUND</option>
+                ) : (
+                  <DeviceOptions devices={audioDevices.input} />
+                )}
               </select>
               <div className="pointer-events-none absolute inset-y-0 right-0 flex items-center px-4 text-primary">
                 <span className="text-[10px]">▼</span>
@@ -207,20 +231,19 @@ export default function SettingsModal({
             <div className="relative">
               <select
                 aria-label="Audio output device"
-                value={localOutputDevice}
-                onChange={(e) => setLocalOutputDevice(e.target.value === "" ? "" : Number(e.target.value))}
+                value={deviceValue(localOutputDevice, audioDevices.output)}
+                onChange={(e) => setLocalOutputDevice(e.target.value === SYSTEM_DEFAULT ? null : Number(e.target.value))}
                 disabled={isRunning || audioDevices.output.length === 0}
                 className="w-full bg-surface-container-lowest border border-outline-variant/40 text-on-surface text-xs
                            px-4 py-3 focus:outline-none focus:border-primary-container disabled:opacity-40
                            appearance-none font-mono tracking-wider uppercase cursor-pointer"
                 style={{ borderRadius: "0px" }}
               >
-                {audioDevices.output.length === 0 && <option value="">NO OUTPUT DEVICES FOUND</option>}
-                {audioDevices.output.map((d) => (
-                  <option key={d.index} value={d.index} className="bg-surface-container-lowest text-on-surface">
-                    [{d.index}] {d.name}
-                  </option>
-                ))}
+                {audioDevices.output.length === 0 ? (
+                  <option value={SYSTEM_DEFAULT}>NO OUTPUT DEVICES FOUND</option>
+                ) : (
+                  <DeviceOptions devices={audioDevices.output} />
+                )}
               </select>
               <div className="pointer-events-none absolute inset-y-0 right-0 flex items-center px-4 text-primary">
                 <span className="text-[10px]">▼</span>
