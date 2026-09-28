@@ -38,7 +38,11 @@ Open **PowerShell** and run:
 irm https://raw.githubusercontent.com/IHANsaja/freyav3/main/install.ps1 | iex
 ```
 
-The installer checks prerequisites, clones the repo, builds the Python venv and the dashboard, installs Chromium for browser automation, prompts for your Gemini API key (plus an optional Jev key, see below), and writes a `start-freya.ps1` launcher. Re-running the same command later updates an existing install.
+The installer checks prerequisites, clones the repo, builds the Python venv and the dashboard, installs Chromium for browser automation, prompts for your Gemini API key (plus an optional Jev key, see below), and writes `start-freya.ps1` and `update-freya.ps1` launchers.
+
+**Updating:** run `.\update-freya.ps1` in the Freya folder. It pulls the latest code, refreshes the Python packages and the dashboard, and keeps your `.env`, settings and memories. Re-running the one-line command from the folder that contains `freyav3` does the same.
+
+Run the one-liner from a normal folder such as your home directory. An admin PowerShell starts in `C:\Windows\System32`; the installer no longer installs there (git refuses to update that folder) and uses your home folder instead, copying the keys, settings and memories of an older `System32` install into the new one.
 
 **Then:**
 
