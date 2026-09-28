@@ -1,0 +1,63 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="Freyja">
+  <!--
+    Freyja's mark.
+    · Ring — Brísingamen, the necklace of the Brísings, her most famous treasure;
+      beaded like the necklace, and echoing the dashboard's rune ring.
+    · Gem — the necklace's jewel, hanging at the bottom of the ring.
+    · Rune — ᚠ Fehu, first rune of the Elder Futhark and of Freyr's ætt (her
+      family's). Its branches are drawn as feathers: her falcon-feather cloak.
+    · Spark — the jade AI core, where the feathers meet the stave.
+    Jade (#22e0a0) is the dashboard accent; gold (#ffb54d) is the intro's rune fire.
+  -->
+  <defs>
+    <radialGradient id="bg" cx="50%" cy="46%" r="62%">
+      <stop offset="0" stop-color="#0d2a21"/>
+      <stop offset="0.65" stop-color="#07120e"/>
+      <stop offset="1" stop-color="#030605"/>
+    </radialGradient>
+    <linearGradient id="gold" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#ffd58a"/>
+      <stop offset="0.5" stop-color="#ffb54d"/>
+      <stop offset="1" stop-color="#c9822a"/>
+    </linearGradient>
+    <!-- userSpaceOnUse: a bounding-box gradient paints nothing on the
+         zero-width vertical stave. -->
+    <linearGradient id="jade" gradientUnits="userSpaceOnUse" x1="24" y1="48" x2="42" y2="13">
+      <stop offset="0" stop-color="#0f9c6e"/>
+      <stop offset="0.55" stop-color="#22e0a0"/>
+      <stop offset="1" stop-color="#b8ffe6"/>
+    </linearGradient>
+    <filter id="glow" x="-40%" y="-40%" width="180%" height="180%">
+      <feGaussianBlur stdDeviation="1.4" result="b"/>
+      <feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+  </defs>
+
+  <!-- Tile -->
+  <rect x="1" y="1" width="62" height="62" rx="14" fill="url(#bg)"/>
+  <rect x="1.5" y="1.5" width="61" height="61" rx="13.5" fill="none" stroke="#22e0a0" stroke-opacity="0.18"/>
+
+  <!-- Brísingamen: a beaded gold ring -->
+  <circle cx="32" cy="31" r="23" fill="none" stroke="url(#gold)" stroke-opacity="0.35" stroke-width="1"/>
+  <circle cx="32" cy="31" r="23" fill="none" stroke="url(#gold)" stroke-width="2.6"
+          stroke-linecap="round" stroke-dasharray="0.1 5.9" filter="url(#glow)"/>
+
+  <!-- ᚠ Fehu, with feathered branches -->
+  <g filter="url(#glow)" fill="none" stroke="url(#jade)" stroke-linecap="round" stroke-linejoin="round">
+    <!-- stave -->
+    <path d="M25 47 V15" stroke-width="4.2"/>
+    <!-- upper feather -->
+    <path d="M25 26 C31 23 36 19 41 14" stroke-width="3.6"/>
+    <path d="M30.5 22.6 l1.2 -4.4 M34.8 19.4 l1.4 -3.9" stroke-width="1.5" stroke-opacity="0.8"/>
+    <!-- lower feather -->
+    <path d="M25 36 C31 33 36.5 29 42 23.5" stroke-width="3.6"/>
+    <path d="M30.6 32.6 l1.3 -4.3 M35.2 29.3 l1.5 -3.8" stroke-width="1.5" stroke-opacity="0.8"/>
+  </g>
+
+  <!-- The spark: the AI core where the feathers meet the stave -->
+  <circle cx="25" cy="31" r="2.3" fill="#eafff6" filter="url(#glow)"/>
+
+  <!-- Brísingamen's jewel -->
+  <path d="M32 50.5 L36 55 L32 60 L28 55 Z" fill="url(#gold)" filter="url(#glow)"/>
+  <path d="M32 50.5 L34 55 L32 60" fill="#fff" fill-opacity="0.35"/>
+</svg>
