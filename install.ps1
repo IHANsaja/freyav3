@@ -170,7 +170,7 @@ $legacyRoot = Join-Path $env:windir "System32\freyav3"
 # System32 install into a fresh clone. Only files git does not track are copied,
 # minus what gets rebuilt anyway; the old folder is left for the user to delete.
 function Copy-LegacyData ($from, $to) {
-    $rebuilt = '^(venv|freya-ui/node_modules|freya-ui/\.next|start-freya\.ps1|update-freya\.ps1)(/|$)|(^|/)__pycache__/'
+    $rebuilt = '^(venv|freya-ui/node_modules|freya-ui/\.next|freya-ui/next-env\.d\.ts|start-freya\.ps1|update-freya\.ps1)(/|$)|(^|/)__pycache__/'
     $copied = 0
     foreach ($rel in (Invoke-Git $from ls-files --others --directory)) {
         if ($LASTEXITCODE -ne 0 -or $rel -match $rebuilt) { continue }
