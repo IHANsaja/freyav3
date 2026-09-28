@@ -1,6 +1,7 @@
 "use client";
 
 import { MouseEvent, useRef, useState } from "react";
+import { modeRune } from "../runes/futhark";
 
 interface ModeTabsProps {
   modes: Record<string, { label: string }>;
@@ -64,6 +65,9 @@ export default function ModeTabs({ modes, activeMode, connected, onSelect }: Mod
               if (!active) (e.currentTarget as HTMLButtonElement).style.borderColor = "var(--panel-border)";
             }}
           >
+            <span aria-hidden className="mr-1.5 text-[12px] leading-none align-[-1px]" style={{ fontFamily: "var(--font-rune)" }}>
+              {modeRune(id)}
+            </span>
             {m.label}
             {ripples
               .filter((r) => r.key === id)

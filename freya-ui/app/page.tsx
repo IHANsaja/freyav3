@@ -361,6 +361,7 @@ export default function Home() {
             onSelectMode={handleSelectMode}
             onToggleRun={handleToggleRun}
             onTogglePause={toggleListening}
+            charged={!!activity && ["working", "thinking", "speaking", "hearing"].includes(activity.phase)}
           >
             {/* Pause: desaturate the stage + watermark */}
             {status.engine === "paused" && (

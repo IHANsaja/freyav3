@@ -110,7 +110,10 @@ export default function HeaderBar({
           >
             FREYJA V3.0
           </h1>
-          <p className="text-[8px] tracking-[0.3em] uppercase" style={{ color: "var(--text-secondary)", fontFamily: "var(--font-ui)" }}>
+          <p className="flex items-center gap-1.5 text-[8px] tracking-[0.3em] uppercase" style={{ color: "var(--text-secondary)", fontFamily: "var(--font-ui)" }}>
+            <span aria-hidden className="text-[10px] tracking-[0.2em] normal-case" style={{ fontFamily: "var(--font-rune)", color: "var(--accent-red)" }}>
+              ᚠᚱᛖᛃᚨ
+            </span>
             Archival System
           </p>
         </div>
