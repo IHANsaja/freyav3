@@ -3,8 +3,9 @@
     One-command installer for Freya v3 - the local Gemini Live voice assistant.
 
 .DESCRIPTION
-    Verifies prerequisites, fetches the repository, builds the Python virtual
-    environment and the Next.js dashboard, and scaffolds configuration.
+    Installs any missing prerequisites (Python, Node.js, git) with winget,
+    fetches the repository, builds the Python virtual environment and the
+    Next.js dashboard, and scaffolds configuration.
 
     Run it straight from the web:
 
@@ -67,59 +68,91 @@ if ($env:OS -ne "Windows_NT") {
 # -- 1. Prerequisites ------------------------------------------------------
 Write-Step "Checking prerequisites"
 
-$missing = @()
-
-# Python 3.10+
-$pythonExe = $null
-foreach ($candidate in @("python", "python3", "py")) {
-    if (Test-Command $candidate) {
+# Returns the command or full path of a Python 3.10+, or $null. The Microsoft
+# Store "python" alias only prints an install hint, so it never matches.
+function Find-Python {
+    $candidates = @("python", "python3", "py")
+    # A fresh install may not be on this session's PATH yet; look where the
+    # python.org / winget installer puts it, newest first.
+    $candidates += Get-ChildItem "$env:LOCALAPPDATA\Programs\Python\Python3*\python.exe", "$env:ProgramFiles\Python3*\python.exe" -ErrorAction SilentlyContinue |
+        Sort-Object { [int]($_.Directory.Name -replace "\D", "") } -Descending |
+        ForEach-Object { $_.FullName }
+    foreach ($candidate in $candidates) {
+        if (-not (Test-Command $candidate)) { continue }
         try {
             $v = & $candidate --version 2>&1
-            if ($v -match "Python (\d+)\.(\d+)") {
-                $maj = [int]$Matches[1]
-                $min = [int]$Matches[2]
-                if ($maj -eq 3 -and $min -ge 10) {
-                    $pythonExe = $candidate
-                    Write-Ok "Python $maj.$min ($candidate)"
-                    break
-                }
+            if ("$v" -match "Python 3\.(\d+)" -and [int]$Matches[1] -ge 10) {
+                return $candidate
             }
         } catch { }
     }
-}
-if (-not $pythonExe) {
-    $missing += "Python 3.10+  ->  https://www.python.org/downloads/"
+    return $null
 }
 
-# Node 18+
-if (Test-Command "node") {
-    $nodeV = (& node --version) -replace "v", ""
-    $nodeMajor = [int]($nodeV -split "\.")[0]
-    if ($nodeMajor -ge 18) {
-        Write-Ok "Node.js $nodeV"
+# Node.js major version, or 0 when it is missing.
+function Get-NodeMajor {
+    if (-not (Test-Command "node")) { return 0 }
+    try { return [int](((& node --version) -replace "v", "") -split "\.")[0] } catch { return 0 }
+}
+
+# Checks all three and returns what is still missing, as winget package ids
+# mapped to a readable name.
+function Get-MissingPrereqs {
+    $need = [ordered]@{}
+    if (-not (Find-Python)) { $need["Python.Python.3.12"] = "Python 3.12" }
+    if (-not $SkipFrontend -and (Get-NodeMajor) -lt 18) { $need["OpenJS.NodeJS.LTS"] = "Node.js LTS" }
+    if (-not (Test-Command "git")) { $need["Git.Git"] = "git" }
+    return $need
+}
+
+# Installers add themselves to the machine/user PATH, not to this session's.
+function Update-SessionPath {
+    $env:Path = [Environment]::GetEnvironmentVariable("Path", "Machine") + ";" +
+                [Environment]::GetEnvironmentVariable("Path", "User")
+}
+
+$missing = Get-MissingPrereqs
+if ($missing.Count -gt 0) {
+    if (Test-Command "winget") {
+        Write-Host "    Installing what is missing: $($missing.Values -join ', ')" -ForegroundColor White
+        Write-Host "    Windows may ask for permission once per program - click Yes." -ForegroundColor DarkGray
+        foreach ($id in @($missing.Keys)) {
+            Write-Host "    Installing $($missing[$id])..."
+            # Keep a failed install from stopping the script: the re-check
+            # below reports whatever is still missing.
+            $ErrorActionPreference = "Continue"
+            winget install --id $id --exact --silent --source winget `
+                --accept-package-agreements --accept-source-agreements | Out-Host
+            $ErrorActionPreference = "Stop"
+        }
+        Update-SessionPath
+        $missing = Get-MissingPrereqs
     } else {
-        $missing += "Node.js 18+ (found $nodeV)  ->  https://nodejs.org/"
+        Write-Warn2 "winget (App Installer) is not available, so prerequisites cannot be installed automatically."
     }
-} elseif (-not $SkipFrontend) {
-    $missing += "Node.js 18+  ->  https://nodejs.org/  (or re-run with -SkipFrontend)"
-}
-
-# git
-if (Test-Command "git") {
-    Write-Ok "git"
-} else {
-    $missing += "git  ->  https://git-scm.com/download/win"
 }
 
 if ($missing.Count -gt 0) {
+    $links = @{
+        "Python.Python.3.12" = "https://www.python.org/downloads/  (tick 'Add python.exe to PATH')"
+        "OpenJS.NodeJS.LTS"  = "https://nodejs.org/  (or re-run with -SkipFrontend)"
+        "Git.Git"            = "https://git-scm.com/download/win"
+    }
     Write-Host ""
-    Write-Fail "Missing prerequisites:"
-    $missing | ForEach-Object { Write-Host "         - $_" -ForegroundColor Red }
+    Write-Fail "Still missing:"
+    foreach ($id in $missing.Keys) {
+        Write-Host "         - $($missing[$id])  ->  $($links[$id])" -ForegroundColor Red
+    }
     Write-Host ""
-    Write-Host "    Install them, then re-run this script." -ForegroundColor Yellow
+    Write-Host "    Install them, then open a NEW PowerShell window and re-run this command." -ForegroundColor Yellow
     Write-Host ""
     return
 }
+
+$pythonExe = Find-Python
+Write-Ok "Python ($(& $pythonExe --version 2>&1))"
+if (-not $SkipFrontend) { Write-Ok "Node.js $(& node --version)" }
+Write-Ok "git"
 
 # -- 2. Get the source -----------------------------------------------------
 Write-Step "Locating Freya"
