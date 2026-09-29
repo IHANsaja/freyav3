@@ -38,7 +38,7 @@ Open **PowerShell** and run:
 irm https://raw.githubusercontent.com/IHANsaja/freyav3/main/install.ps1 | iex
 ```
 
-The installer checks prerequisites, clones the repo, builds the Python venv and the dashboard, installs Chromium for browser automation, prompts for your Gemini API key (plus an optional Jev key, see below), and writes `start-freya.ps1` and `update-freya.ps1` launchers.
+The installer installs any missing prerequisites (Python 3.12, Node.js LTS and git, through winget - Windows may ask you to approve each one), clones the repo, builds the Python venv and the dashboard, installs Chromium for browser automation, prompts for your Gemini API key (plus an optional Jev key, see below), and writes `start-freya.ps1` and `update-freya.ps1` launchers.
 
 **Updating:** run `.\update-freya.ps1` in the Freya folder. It pulls the latest code, refreshes the Python packages and the dashboard, and keeps your `.env`, settings and memories. Re-running the one-line command from the folder that contains `freyav3` does the same.
 
