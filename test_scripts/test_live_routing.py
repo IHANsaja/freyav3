@@ -122,8 +122,10 @@ def message(**kw):
 
 
 class StreamingTests(unittest.IsolatedAsyncioTestCase):
-    async def run_model(self, session, dispatch, scenario, model=THINKING_LIVE_MODEL, play_s=0):
+    async def run_model(self, session, dispatch, scenario, model=THINKING_LIVE_MODEL, play_s=0, setup=None):
         obj = FreyaModel('test', model, 'Zephyr', 'Test', {'active_mode': 'complex_tasks'})
+        if setup:
+            setup(obj)
         obj.get_config = lambda: types.LiveConnectConfig(response_modalities=['AUDIO'])
         obj.on_state = AsyncMock()
         played = []
@@ -250,9 +252,13 @@ class StreamingTests(unittest.IsolatedAsyncioTestCase):
         kw = obj.session.send_client_content.call_args.kwargs
         self.assertTrue(kw['turn_complete'])
         self.assertIn('without changing the API', kw['turns'].parts[0].text)
+        self.assertIn('still unanswered', kw['turns'].parts[0].text)   # she must act, not just remember
         obj.continue_task = False
         await obj._send_recap()
-        self.assertFalse(obj.session.send_client_content.call_args.kwargs['turn_complete'])
+        kw = obj.session.send_client_content.call_args.kwargs
+        self.assertFalse(kw['turn_complete'])
+        self.assertNotIn('still unanswered', kw['turns'].parts[0].text)
+
 
 
     async def test_barge_in_tells_her_she_was_interrupted_and_next_reply_plays(self):
@@ -276,6 +282,41 @@ class StreamingTests(unittest.IsolatedAsyncioTestCase):
             await session.frames.put(audio(b'reply-pcm', 'Sure', turn_complete=True))
             while played[-1] != b'reply-pcm': await asyncio.sleep(.001)
         await self.run_model(session, AsyncMock(), scenario, model=LIVE_MODEL, play_s=0.03)
+
+
+
+class HandoffTests(unittest.IsolatedAsyncioTestCase):
+    run_model = StreamingTests.run_model
+
+    async def test_silent_handoff_is_nudged(self):
+        """After a mode switch she must pick the task up; if she stays silent, nudge her."""
+        session = FakeSession()
+        def texts():
+            return [c.kwargs['turns'].parts[0].text for c in session.send_client_content.await_args_list]
+        async def scenario(obj, played, task):
+            while not any('mode switch recap' in t for t in texts()): await asyncio.sleep(.01)
+            self.assertIn('plan the launch', texts()[0])
+        def handoff(obj):
+            obj.config['live'] = {'stall_nudge_s': 0.05}
+            obj.transcript = NS(get=lambda: ['User: plan the launch'], add=lambda *x: None)
+            obj.continue_task = True
+        await self.run_model(session, AsyncMock(), scenario, model=LIVE_MODEL, setup=handoff)
+
+    async def test_stall_watcher_dies_with_its_socket(self):
+        """A pending watcher must not nudge a socket that has already closed."""
+        session = FakeSession()
+        async def scenario(obj, played, task):
+            await session.frames.put(message(tool_call=types.LiveServerToolCall(
+                function_calls=[types.FunctionCall(id='t', name='lookup', args={})])))
+            while not session.responses: await asyncio.sleep(.01)
+            await session.frames.put(RuntimeError('socket closed'))
+            with self.assertRaises(RuntimeError): await task
+        def slow_nudge(obj):
+            obj.config['live'] = {'stall_nudge_s': 0.2}
+        await self.run_model(session, AsyncMock(return_value='ok'), scenario, model=LIVE_MODEL, setup=slow_nudge)
+        await asyncio.sleep(0.4)     # past when the old watcher would have fired
+        self.assertFalse(any('stopped' in c.kwargs['turns'].parts[0].text
+                             for c in session.send_client_content.await_args_list))
 
 
 class RunnerTests(unittest.IsolatedAsyncioTestCase):

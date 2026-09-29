@@ -616,11 +616,20 @@ class FreyaModel:
         =False means this only loads context; it does not make her start talking.
         """
         if self.resume_handle or not self.transcript:
-            return
+            return False
         lines = self.transcript.get()
         if not lines:
-            return
+            return False
         tail = lines[-40:]
+        ask = ""
+        if self.continue_task:
+            # "Carry on" alone let the thinking model treat the recap as memory
+            # and wait for the user, who was waiting for her: nothing happened.
+            last = next((l for l in reversed(tail) if l.startswith("User:")), "")
+            ask = ("\n\n[This mode switch was made to handle the user's latest request"
+                   + (f' ({last[5:].strip()[:300]!r})' if last else "")
+                   + ". It is still unanswered. Start on it now: tell the user in one short "
+                   "sentence that you're on it, then do the work.]")
         try:
             await self.session.send_client_content(
                 turns=types.Content(
@@ -631,14 +640,16 @@ class FreyaModel:
                         "Treat it as your own memory of the last few minutes and simply carry "
                         "on from where you left off. Do NOT announce the reconnection, do NOT "
                         "ask him to repeat himself or re-share his screen, and do NOT greet him "
-                        "again — just continue naturally.]\n\n" + "\n".join(tail)
+                        "again — just continue naturally.]\n\n" + "\n".join(tail) + ask
                     ))],
                 ),
                 turn_complete=self.continue_task,
             )
             print(f"  Context restored from transcript ({len(tail)} lines).")
+            return True
         except Exception as e:
             print(f"  Recap failed: {e}")
+            return False
 
     async def run(self, mic_stream, speaker_stream):
         print(f"\nConnecting to {self.model_id}...")
@@ -742,10 +753,11 @@ class FreyaModel:
                 start_pause_hotkey(self.config)
             except Exception:
                 pass
+            recap_asked = False
             if self.resume_handle:
                 print("  Resuming previous conversation state.")
             else:
-                await self._send_recap()
+                recap_asked = await self._send_recap() and self.continue_task
             print("Freya is live! Start talking. (Ctrl+C to stop)\n")
 
             freya_cfg = (self.config or {}).get("freya", {})
@@ -861,7 +873,7 @@ class FreyaModel:
                         audio=types.Blob(data=data, mime_type="audio/pcm;rate=16000")
                     )
 
-            async def watch_for_stall(sent_at: float):
+            async def watch_for_stall(sent_at: float, after: str = "a tool result"):
                 # Gemini Live sometimes ends its turn silently after a lookup-
                 # only step (search_tools → schema) instead of making the next
                 # call: she then sat mute mid-task until the user spoke again.
@@ -875,11 +887,11 @@ class FreyaModel:
                 if turn["nudged"]:
                     return      # the empty-turn check already nudged this silence
                 turn["nudged"] = True
-                print(f"  [live] model went quiet {wait:.0f}s after a tool result; nudging it on.")
+                print(f"  [live] model went quiet {wait:.0f}s after {after}; nudging it on.")
                 try:
                     await session.send_client_content(
                         turns=types.Content(role="user", parts=[types.Part(text=(
-                            "[SYSTEM NOTE: you received the tool result above and then stopped. "
+                            f"[SYSTEM NOTE: you received {after} above and then stopped. "
                             "Carry on with the user's request now: make the next tool call you "
                             "need, or tell the user the outcome. Do not mention this note.]"))]),
                         turn_complete=True,
@@ -1678,8 +1690,17 @@ class FreyaModel:
                            apply_mode_requests()]
                 if route_queue is not None:
                     workers.append(route_modes())
+                if recap_asked:
+                    # A mode handoff asked her to pick the task up; make sure she does.
+                    _bg_reports.add(w := asyncio.create_task(
+                        watch_for_stall(time.monotonic(), "the mode switch recap")))
+                    w.add_done_callback(_bg_reports.discard)
                 await run_voice_tasks(*workers)
             finally:
+                # Stall watchers, interruption notes and late tool reports belong
+                # to this socket; left running they fire into the closed one.
+                for bg in list(_bg_reports):
+                    bg.cancel()
                 # Release the proactive channels and background loops bound to
                 # this session so the next reconnect starts clean.
                 self.session = None
