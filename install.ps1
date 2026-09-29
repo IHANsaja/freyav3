@@ -16,8 +16,9 @@
         .\install.ps1
 
 .PARAMETER InstallPath
-    Where to clone Freya. Defaults to .\freyav3 in the current directory.
-    Ignored when the script is run from inside an existing clone.
+    Where to put Freya. Defaults to the install the shell is already inside,
+    else %USERPROFILE%\freyav3 - the same place whichever folder the
+    command is run from.
 
 .PARAMETER SkipBrowser
     Skip the Playwright Chromium download (~150 MB). The browser_task tool
@@ -25,6 +26,9 @@
 
 .PARAMETER SkipFrontend
     Skip npm install for the dashboard. Use for a headless/CLI-only setup.
+
+.PARAMETER NoStart
+    Install or update only; do not start Freya at the end.
 
 .NOTES
     Windows only - Freya drives the Windows accessibility API, WASAPI audio and
@@ -38,7 +42,8 @@
 param(
     [string]$InstallPath = "",
     [switch]$SkipBrowser,
-    [switch]$SkipFrontend
+    [switch]$SkipFrontend,
+    [switch]$NoStart
 )
 
 $ErrorActionPreference = "Stop"
@@ -199,11 +204,11 @@ function Update-Checkout ($repo) {
 # used to clone Freya into the Windows folder, which git then refused to update.
 $legacyRoot = Join-Path $env:windir "System32\freyav3"
 
-# Brings the personal files (keys, settings, memories, custom skills) of an old
-# System32 install into a fresh clone. Only files git does not track are copied,
-# minus what gets rebuilt anyway; the old folder is left for the user to delete.
-function Copy-LegacyData ($from, $to) {
-    $rebuilt = '^(venv|freya-ui/node_modules|freya-ui/\.next|freya-ui/next-env\.d\.ts|start-freya\.ps1|update-freya\.ps1)(/|$)|(^|/)__pycache__/'
+# Copies the personal files (keys, settings, memories, custom skills) of one
+# checkout into another. Only files git does not track are copied, minus what
+# gets rebuilt anyway, and nothing already present in $to is overwritten.
+function Copy-PersonalData ($from, $to) {
+    $rebuilt = '^(venv|freya-ui/node_modules|freya-ui/\.next|freya-ui/next-env\.d\.ts|(start|update)-freya\.(ps1|cmd))(/|$)|(^|/)__pycache__/'
     $copied = 0
     foreach ($rel in (Invoke-Git $from ls-files --others --directory)) {
         if ($LASTEXITCODE -ne 0 -or $rel -match $rebuilt) { continue }
@@ -214,57 +219,91 @@ function Copy-LegacyData ($from, $to) {
         Copy-Item $src $dst -Recurse
         $copied++
     }
-    Write-Ok "Brought over $copied item(s) from the old install: .env, settings, memories"
-    Write-Warn2 "The old copy is still in $from - delete it from an admin shell once Freya works."
+    return $copied
 }
 
-# Running from inside a clone? Use it rather than nesting another copy.
-$inClone = (Test-Path ".\server.py") -and (Test-Path ".\core") -and (Test-Path ".\requirements.txt")
+function Test-Checkout ($dir) {
+    return (Test-Path (Join-Path $dir "server.py")) -and (Test-Path (Join-Path $dir "core")) -and
+           (Test-Path (Join-Path $dir "requirements.txt"))
+}
 
-if ($inClone) {
-    $root = (Get-Location).Path
-    Write-Ok "Using existing checkout: $root"
-    Update-Checkout $root
+# The outermost checkout containing $dir, or $null. Outermost, because an
+# interrupted run could leave the shell inside a copy nested in another one.
+function Find-CheckoutRoot ($dir) {
+    $found = $null
+    while ($dir) {
+        if (Test-Checkout $dir) { $found = $dir }
+        $dir = Split-Path -Parent $dir
+    }
+    return $found
+}
+
+# Clones with a few retries: a dropped connection mid-download ("curl 56",
+# "early EOF") otherwise ends the whole install.
+function Invoke-Clone ($path) {
+    for ($try = 1; $try -le 3; $try++) {
+        Write-Host "    Downloading Freya (about 60 MB)..."
+        $ErrorActionPreference = "Continue"
+        git -c http.version=HTTP/1.1 clone --depth 1 $RepoUrl $path | Out-Host
+        $ErrorActionPreference = "Stop"
+        if ($LASTEXITCODE -eq 0) { return $true }
+        if (Test-Path $path) { Remove-Item $path -Recurse -Force }
+        if ($try -lt 3) {
+            Write-Warn2 "The download was interrupted - trying again ($($try + 1)/3)..."
+            Start-Sleep -Seconds (5 * $try)
+        }
+    }
+    return $false
+}
+
+# One place, whichever folder the command is run from: the checkout the shell
+# is already in (outermost), else %USERPROFILE%\freyav3. Never the Windows folder.
+$here = Find-CheckoutRoot (Get-Location).Path
+if ($InstallPath) {
+    $root = [IO.Path]::GetFullPath($InstallPath)
+} elseif ($here -and -not (Test-InWindowsDir $here)) {
+    $root = $here
 } else {
-    if (-not $InstallPath) {
-        $base = (Get-Location).Path
-        if (Test-InWindowsDir $base) {
-            $base = $HOME
-            Write-Warn2 "Not installing inside the Windows folder - using $base instead"
-        }
-        $InstallPath = Join-Path $base "freyav3"
+    $root = Join-Path $HOME "freyav3"
+}
+
+if (Test-Checkout $root) {
+    Write-Ok "Found Freya in $root - updating"
+    Update-Checkout $root
+} elseif ((Test-Path $root) -and (Get-ChildItem $root -Force | Select-Object -First 1)) {
+    Write-Fail "$root exists but does not look like Freya. Move it or pass -InstallPath."
+    return
+} else {
+    if (-not (Invoke-Clone $root)) {
+        Write-Fail "Could not download Freya - check the internet connection and run the command again."
+        return
     }
-    if (Test-Path $InstallPath) {
-        if (Test-Path (Join-Path $InstallPath "server.py")) {
-            Write-Ok "Found existing install at $InstallPath - updating"
-            Update-Checkout (Resolve-Path $InstallPath).Path
-        } else {
-            Write-Fail "$InstallPath exists but does not look like Freya. Move it or pass -InstallPath."
-            return
-        }
-    } else {
-        Write-Host "    Cloning $RepoUrl"
-        git clone --depth 1 $RepoUrl $InstallPath
-        if ($LASTEXITCODE -ne 0) {
-            Write-Fail "git clone failed."
-            return
-        }
-        Write-Ok "Cloned to $InstallPath"
-        $newRoot = (Resolve-Path $InstallPath).Path
-        if ((Test-Path (Join-Path $legacyRoot "server.py")) -and $newRoot -ne $legacyRoot) {
-            Write-Ok "Found an older install in $legacyRoot - moving your data over"
-            Copy-LegacyData $legacyRoot $newRoot
-        }
+    Write-Ok "Downloaded to $root"
+    if ((Test-Path (Join-Path $legacyRoot "server.py")) -and $root -ne $legacyRoot) {
+        $n = Copy-PersonalData $legacyRoot $root
+        Write-Ok "Brought over $n item(s) from the old install in $legacyRoot"
+        Write-Warn2 "The old copy is still there - delete it from an admin shell once Freya works."
     }
-    $root = (Resolve-Path $InstallPath).Path
+}
+
+# Out of any folder about to be removed, and where the rest of the steps run.
+Set-Location $root
+
+# A copy that an interrupted run cloned inside this one (e.g. freya-ui\freyav3).
+# Keep anything personal from it, then remove it: it would otherwise be picked
+# up by the dashboard build and by the next run.
+foreach ($rel in (Invoke-Git $root ls-files --others --directory)) {
+    $nested = Join-Path $root $rel.TrimEnd('/')
+    if ($rel -match '(^|/)(node_modules|venv|\.next)/' -or -not (Test-Path $nested -PathType Container)) { continue }
+    if (-not (Test-Checkout $nested)) { continue }
+    $n = Copy-PersonalData $nested $root
+    Remove-Item $nested -Recurse -Force
+    Write-Ok "Removed a duplicate copy at $nested (kept $n personal item(s))"
 }
 
 if (Test-InWindowsDir $root) {
     Write-Warn2 "Freya is inside the Windows folder ($root), where updates break."
-    Write-Warn2 "Run the installer from a normal folder (e.g. cd ~) to move her out."
 }
-
-Set-Location $root
 
 # -- 3. Python environment -------------------------------------------------
 Write-Step "Building the Python environment"
@@ -305,15 +344,22 @@ if (-not $SkipBrowser) {
 # -- 4. Dashboard ----------------------------------------------------------
 if (-not $SkipFrontend) {
     Write-Step "Building the dashboard"
-    Push-Location (Join-Path $root "freya-ui")
     Write-Host "    Running npm install..."
-    npm install --no-audit --no-fund --loglevel=error
-    if ($LASTEXITCODE -eq 0) {
-        Write-Ok "Dashboard dependencies installed"
-    } else {
-        Write-Warn2 "npm install reported problems - check the output above"
+    # npm.cmd, not npm: PowerShell would pick npm.ps1, which Windows' default
+    # execution policy refuses to run ("running scripts is disabled").
+    # try/finally: this script runs in the caller's shell (irm | iex), so an
+    # error here used to leave the user sitting in freya-ui.
+    Push-Location (Join-Path $root "freya-ui")
+    try {
+        & npm.cmd install --no-audit --no-fund --loglevel=error
+        if ($LASTEXITCODE -eq 0) {
+            Write-Ok "Dashboard dependencies installed"
+        } else {
+            Write-Warn2 "npm install reported problems - check the output above"
+        }
+    } finally {
+        Pop-Location
     }
-    Pop-Location
 }
 
 # -- 5. Configuration ------------------------------------------------------
@@ -366,19 +412,32 @@ function Read-GeminiKey {
 $envPath = Join-Path $root ".env"
 if (Test-Path $envPath) {
     Write-Ok ".env already exists - leaving it untouched"
-    # Re-running the installer is how most people try to fix a bad key, so
-    # check the saved one and offer to replace it if Google refuses it.
+    # Re-running the installer is how people add a skipped key or fix a bad
+    # one, so ask again when the saved key is missing, the placeholder, or
+    # refused by Google.
     $envText = Get-Content $envPath -Raw
+    $savedKey = ""
     if ($envText -match "(?m)^\s*GEMINI_API_KEY\s*=\s*(.*?)\s*$") {
         $savedKey = $Matches[1].Trim().Trim('"', "'").Trim()
-        if ($savedKey -and $savedKey -ne $placeholderKey -and (Test-GeminiKey $savedKey) -eq "rejected") {
-            Write-Fail "Google rejects the GEMINI_API_KEY saved in .env."
-            $newKey = Read-GeminiKey
-            if ($newKey) {
+    }
+    $askAgain = $false
+    if (-not $savedKey -or $savedKey -eq $placeholderKey) {
+        Write-Warn2 "No Gemini API key saved yet."
+        $askAgain = $true
+    } elseif ((Test-GeminiKey $savedKey) -eq "rejected") {
+        Write-Fail "Google rejects the GEMINI_API_KEY saved in .env."
+        $askAgain = $true
+    }
+    if ($askAgain) {
+        $newKey = Read-GeminiKey
+        if ($newKey) {
+            if ($envText -match "(?m)^\s*GEMINI_API_KEY\s*=") {
                 $envText = [regex]::Replace($envText, "(?m)^\s*GEMINI_API_KEY\s*=.*$", "GEMINI_API_KEY=$newKey")
-                $envText | Out-File -FilePath $envPath -Encoding utf8 -NoNewline
-                Write-Ok "Updated GEMINI_API_KEY in .env"
+            } else {
+                $envText = "GEMINI_API_KEY=$newKey`r`n" + $envText
             }
+            $envText | Out-File -FilePath $envPath -Encoding utf8 -NoNewline
+            Write-Ok "Saved GEMINI_API_KEY in .env"
         }
     }
 } else {
@@ -448,8 +507,8 @@ $startScript = Join-Path $root "start-freya.ps1"
 $startBody = @'
 # Starts both halves of Freya: the FastAPI backend and the Next.js dashboard.
 $root = Split-Path -Parent $MyInvocation.MyCommand.Path
-Start-Process powershell -ArgumentList "-NoExit","-Command","cd '$root'; .\venv\Scripts\python.exe server.py"
-Start-Process powershell -ArgumentList "-NoExit","-Command","cd '$root\freya-ui'; npm run dev"
+Start-Process powershell -ArgumentList "-NoExit","-ExecutionPolicy","Bypass","-Command","cd '$root'; .\venv\Scripts\python.exe server.py"
+Start-Process powershell -ArgumentList "-NoExit","-ExecutionPolicy","Bypass","-Command","cd '$root\freya-ui'; npm.cmd run dev"
 # The dashboard's first compile can take 15+ seconds; open it once it answers
 # instead of after a fixed delay that often landed on an error page.
 Write-Host "Waiting for the dashboard to come up..."
@@ -476,6 +535,16 @@ Invoke-Expression (Invoke-RestMethod "https://raw.githubusercontent.com/IHANsaja
 $updateBody | Out-File -FilePath $updateScript -Encoding utf8
 Write-Ok "Created update-freya.ps1"
 
+# Windows' default execution policy refuses to run .ps1 files, so each script
+# gets a .cmd twin that runs it with the policy bypassed for that one process
+# only - nothing on the system changes. Double-click them, or run them from
+# any shell. ASCII + CRLF so cmd.exe reads them on every codepage.
+foreach ($name in "start-freya", "update-freya") {
+    $cmdBody = "@echo off`r`npowershell -NoProfile -ExecutionPolicy Bypass -File `"%~dp0$name.ps1`"`r`n"
+    [IO.File]::WriteAllText((Join-Path $root "$name.cmd"), $cmdBody, [Text.Encoding]::ASCII)
+}
+Write-Ok "Created start-freya.cmd and update-freya.cmd"
+
 # -- Done ------------------------------------------------------------------
 Write-Host ""
 Write-Host "--------------------------------------------------------" -ForegroundColor DarkCyan
@@ -485,12 +554,27 @@ Write-Host ""
 Write-Host " Location:  $root" -ForegroundColor Gray
 Write-Host ""
 
-if ((Get-Content $envPath -Raw) -match "PASTE_YOUR_GEMINI_API_KEY_HERE") {
-    Write-Host " 1. Add your API key to .env  (GEMINI_API_KEY=...)" -ForegroundColor Yellow
-    Write-Host " 2. Start everything:  .\start-freya.ps1" -ForegroundColor White
+# Starting without a working key would only end in "invalid credentials".
+$needsKey = $true
+if ((Get-Content $envPath -Raw) -match "(?m)^\s*GEMINI_API_KEY\s*=\s*(.*?)\s*$") {
+    $finalKey = $Matches[1].Trim().Trim('"', "'").Trim()
+    $needsKey = (-not $finalKey) -or $finalKey -eq $placeholderKey -or (Test-GeminiKey $finalKey) -eq "rejected"
+}
+$alreadyRunning = [bool](Get-NetTCPConnection -LocalPort 8000 -State Listen -ErrorAction SilentlyContinue)
+if ($needsKey) {
+    Write-Host " Freya needs a working Gemini API key before she can start." -ForegroundColor Yellow
+    Write-Host " Get one at https://aistudio.google.com/apikey and run the same command" -ForegroundColor Yellow
+    Write-Host " again - it will ask for the key and then start her." -ForegroundColor Yellow
+} elseif ($alreadyRunning) {
+    Write-Host " Freya is already running - close her windows and double-click" -ForegroundColor Yellow
+    Write-Host " start-freya.cmd to use this version." -ForegroundColor Yellow
+} elseif ($NoStart) {
+    Write-Host " Start everything:  .\start-freya.cmd  (or double-click it)" -ForegroundColor White
 } else {
-    Write-Host " Start everything:  .\start-freya.ps1" -ForegroundColor White
-    Write-Host " Then open:         http://localhost:3000" -ForegroundColor Gray
+    # The one command ends with Freya running: backend, dashboard, browser.
+    Write-Host " Starting Freya - the dashboard opens in your browser when it is ready." -ForegroundColor Green
+    Write-Host " Next time, double-click start-freya.cmd in the folder above." -ForegroundColor Gray
+    Start-Process powershell -ArgumentList "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "`"$startScript`"" -WindowStyle Minimized
 }
 if ((Get-Content $envPath -Raw) -match "(?m)^\s*TYPESAFE_API_KEY=\S") {
     Write-Host " Jev: on (TYPESAFE_API_KEY set)" -ForegroundColor DarkGray
@@ -499,5 +583,5 @@ if ((Get-Content $envPath -Raw) -match "(?m)^\s*TYPESAFE_API_KEY=\S") {
 }
 Write-Host ""
 Write-Host " Headless CLI instead:  .\venv\Scripts\python.exe main.py" -ForegroundColor DarkGray
-Write-Host " Update later:          .\update-freya.ps1" -ForegroundColor DarkGray
+Write-Host " Update later:          .\update-freya.cmd" -ForegroundColor DarkGray
 Write-Host ""

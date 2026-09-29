@@ -38,17 +38,11 @@ Open **PowerShell** and run:
 irm https://raw.githubusercontent.com/IHANsaja/freyav3/main/install.ps1 | iex
 ```
 
-The installer installs any missing prerequisites (Python 3.12, Node.js LTS and git, through winget - Windows may ask you to approve each one), clones the repo, builds the Python venv and the dashboard, installs Chromium for browser automation, prompts for your Gemini API key (plus an optional Jev key, see below), and writes `start-freya.ps1` and `update-freya.ps1` launchers.
+The installer installs any missing prerequisites (Python 3.12, Node.js LTS and git, through winget - Windows may ask you to approve each one), clones the repo, builds the Python venv and the dashboard, installs Chromium for browser automation, prompts for your Gemini API key (plus an optional Jev key, see below), and writes `start-freya.cmd` and `update-freya.cmd` launchers (double-click them, or run them from any terminal; they work even though Windows blocks `.ps1` scripts by default).
 
-**Updating:** run `.\update-freya.ps1` in the Freya folder. It pulls the latest code, refreshes the Python packages and the dashboard, and keeps your `.env`, settings and memories. Re-running the one-line command from the folder that contains `freyav3` does the same.
+That one command is all it takes, from any folder: Freya always lives in `%USERPROFILE%\freyav3`, and when the install finishes she starts and the dashboard opens in your browser. Run the same command again any time to update, to add a key you skipped, or to repair a half-finished install - your `.env`, settings and memories are kept.
 
-Run the one-liner from a normal folder such as your home directory. An admin PowerShell starts in `C:\Windows\System32`; the installer no longer installs there (git refuses to update that folder) and uses your home folder instead, copying the keys, settings and memories of an older `System32` install into the new one.
-
-**Then:**
-
-```powershell
-.\start-freya.ps1
-```
+**Next time**, double-click `start-freya.cmd` in `%USERPROFILE%\freyav3` (or run `.\start-freya.cmd`). `update-freya.cmd` next to it updates.
 
 Both servers start, and `http://localhost:3000` opens as soon as the dashboard is ready. The backend listens on this machine only (`127.0.0.1:8000`).
 
@@ -241,7 +235,7 @@ freyav3/
 ## 🚀 Running
 
 ```powershell
-.\start-freya.ps1            # both halves + opens the dashboard
+.\start-freya.cmd            # both halves + opens the dashboard
 ```
 
 Or manually:
