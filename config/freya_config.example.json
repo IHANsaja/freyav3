@@ -17,6 +17,14 @@
     "silence_duration_ms": 800,
     "barge_in_rms_threshold": 1200
   },
+  "turn_taking": {
+    "smart_barge_in": true,
+    "interruption_note": true,
+    "min_rms": 500,
+    "echo_margin": 2.5,
+    "min_speech_ms": 200,
+    "confirm_s": 1.5
+  },
   "active_provider": "gemini",
   "active_model": "gemini-3.8-live",
   "providers": {

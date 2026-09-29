@@ -247,6 +247,29 @@ class StreamingTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(obj.session.send_client_content.call_args.kwargs['turn_complete'])
 
 
+    async def test_barge_in_tells_her_she_was_interrupted_and_next_reply_plays(self):
+        session = FakeSession()
+        def audio(data, words=None, **kw):
+            return message(server_content=types.LiveServerContent(
+                model_turn=types.Content(parts=[types.Part(inline_data=types.Blob(data=data))]),
+                output_transcription=types.Transcription(text=words) if words else None, **kw))
+        def notes():
+            return [c for c in session.send_client_content.await_args_list
+                    if 'interrupted you' in c.kwargs['turns'].parts[0].text]
+        async def scenario(obj, played, task):
+            await session.frames.put(audio(b'first-pcm', 'Let me walk you through it'))
+            while not played: await asyncio.sleep(.001)
+            await session.frames.put(message(server_content=types.LiveServerContent(interrupted=True)))
+            while obj.on_state.call_args != unittest.mock.call('interrupted'): await asyncio.sleep(.001)
+            while not notes(): await asyncio.sleep(.001)
+            note = notes()[0]
+            self.assertFalse(note.kwargs['turn_complete'])   # context only; the user still has the floor
+            self.assertIn('walk you through it', note.kwargs['turns'].parts[0].text)
+            await session.frames.put(audio(b'reply-pcm', 'Sure', turn_complete=True))
+            while played[-1] != b'reply-pcm': await asyncio.sleep(.001)
+        await self.run_model(session, AsyncMock(), scenario, model=LIVE_MODEL)
+
+
 class RunnerTests(unittest.IsolatedAsyncioTestCase):
     async def test_server_handoff_and_fallback_keep_transcript_clear_cross_model_tokens(self):
         import importlib
