@@ -3,6 +3,7 @@ import asyncio
 import copy
 import json
 import tempfile
+import time
 import unittest
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -121,11 +122,18 @@ def message(**kw):
 
 
 class StreamingTests(unittest.IsolatedAsyncioTestCase):
-    async def run_model(self, session, dispatch, scenario, model=THINKING_LIVE_MODEL):
+    async def run_model(self, session, dispatch, scenario, model=THINKING_LIVE_MODEL, play_s=0):
         obj = FreyaModel('test', model, 'Zephyr', 'Test', {'active_mode': 'complex_tasks'})
         obj.get_config = lambda: types.LiveConnectConfig(response_modalities=['AUDIO'])
         obj.on_state = AsyncMock()
         played = []
+        def write(data):
+            # A real speaker blocks while the chunk plays; play_s > 0 mimics that
+            # so "how much did the user hear" is measurable (Windows' clock
+            # ticks every ~15 ms, so an instant write reads as 0% heard).
+            if play_s:
+                time.sleep(play_s)
+            played.append(data)
         @asynccontextmanager
         async def connect(**kw):
             yield session
@@ -141,7 +149,7 @@ class StreamingTests(unittest.IsolatedAsyncioTestCase):
         ]:
             stub = ModuleType('core.'+mod); setattr(stub, attr, value); stubs['core.'+mod] = stub
         with patch.dict('sys.modules', stubs), patch('core.model.registry_dispatch', dispatch):
-            task = asyncio.create_task(obj.run(NS(read=lambda:None), NS(write=played.append)))
+            task = asyncio.create_task(obj.run(NS(read=lambda:None), NS(write=write)))
             try:
                 await asyncio.wait_for(scenario(obj, played, task), 3)
             finally:
@@ -267,7 +275,7 @@ class StreamingTests(unittest.IsolatedAsyncioTestCase):
             self.assertIn('walk you through it', note.kwargs['turns'].parts[0].text)
             await session.frames.put(audio(b'reply-pcm', 'Sure', turn_complete=True))
             while played[-1] != b'reply-pcm': await asyncio.sleep(.001)
-        await self.run_model(session, AsyncMock(), scenario, model=LIVE_MODEL)
+        await self.run_model(session, AsyncMock(), scenario, model=LIVE_MODEL, play_s=0.03)
 
 
 class RunnerTests(unittest.IsolatedAsyncioTestCase):
