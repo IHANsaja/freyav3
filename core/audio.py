@@ -146,12 +146,52 @@ class SpeakerStream:
     _SLICE = 12000  # bytes = 6000 samples, 250 ms at 24 kHz
 
     interrupted = False
+    # cut() is a pause for barge-in: unlike interrupt() (shutdown), resume()
+    # brings the stream back.
+    _cut = False
 
     def write(self, data):
+        """Play `data`. Returns the part left unplayed when cut or stopped
+        (from the start of the slice that was playing), else b""."""
         for i in range(0, len(data), self._SLICE):
-            if self.interrupted or not self.stream:
-                return
-            self.stream.write(data[i:i + self._SLICE])
+            if self.interrupted or self._cut or not self.stream:
+                return data[i:]
+            try:
+                self.stream.write(data[i:i + self._SLICE])
+            except (IOError, OSError):
+                # Aborted from another thread mid-write.
+                if self._cut or self.interrupted:
+                    return data[i:]
+                raise
+            if self._cut:
+                return data[i:]
+        return b""
+
+    @property
+    def is_cut(self):
+        return self._cut
+
+    def cut(self):
+        """Barge-in: go silent now, but keep the stream so resume() can
+        continue."""
+        self._cut = True
+        try:
+            if self.stream and self.stream.is_active():
+                self.stream.abort_stream()
+        except Exception:
+            pass
+
+    def resume(self):
+        if not self._cut:
+            return
+        self._cut = False
+        if self.interrupted or not self.stream:
+            return
+        try:
+            if not self.stream.is_active():
+                self.stream.start_stream()
+        except Exception:
+            pass
 
     def interrupt(self):
         """Silence now: drop the rest of the current chunk and any audio

@@ -36,6 +36,7 @@ def _effective_tool(name: str, args: dict) -> str:
 # 'run_tool{"name": "list_dir"...'. Only names that are actual tools count.
 _SPOKEN_ANY_CALL = re.compile(r"""(?:\bname\s*["']?\s*[:=]\s*["']?|\b)([a-z]+(?:_[a-z]+)+)\s*["']?\s*[({}]""")
 from core.task_policy import TOOLS_FIRST, WORK_RHYTHM
+from core.turn_taking import TURN_TAKING, DoubleTalkDetector, TurnTaker, interruption_note, trim_to_fraction
 from core.live_protocol import (ModeChange, ThinkingTaskFailed, Interaction, is_thinking,
                                 is_thinking_failure, setup_options, tool_behavior, routing_instruction)
 from core.registry import build_declarations, dispatch as registry_dispatch, ToolContext
@@ -456,7 +457,7 @@ class FreyaModel:
                 )
             ),
             system_instruction=types.Content(
-                parts=[types.Part(text=self.personality + "\n\n" + routing_instruction(self.config, self.model_id) + "\n\n" + WORK_RHYTHM + TOOLS_FIRST + "\n" +
+                parts=[types.Part(text=self.personality + "\n\n" + routing_instruction(self.config, self.model_id) + "\n\n" + WORK_RHYTHM + TOOLS_FIRST + "\n" + TURN_TAKING + "\n" +
                     "TRADING LAB: Call get_trading_lab_context with no session_id first before answering questions about the active chart or paper account. It resolves the focused workspace automatically; do not ask the user for a session before trying it. Use its structured facts (chart_legend, recent_candles, market_summary, live_price, indicators, orders) instead of screenshots; never capture_screen for the Trading Lab. For questions about colored lines, use chart_legend and answer the original question directly. Explaining indicator mechanics does not require a thesis. Do not replace the answer with an acknowledgment or offer to explain. "
                     "TRADING TEACHER: In the Trading Lab you are the user's patient, warm trading teacher. Assume they know NOTHING about trading unless get_trading_learner_profile says otherwise; call it at the start of any trading conversation. "
                     "Speak in plain everyday words. Avoid jargon; if a term is unavoidable (candle, EMA, RSI, support, stop loss...), explain it simply with an everyday analogy the first time, and only use terms the profile says they already understand. "
@@ -753,6 +754,28 @@ class FreyaModel:
             rms_threshold = int(vad_cfg.get("barge_in_rms_threshold", 1200))
             from core.echo_gate import EchoGate
             echo_gate = EchoGate(enabled=freya_cfg.get("speaker_echo_protection", True))
+            # Turn-taking (core/turn_taking.py). On speakers the echo gate mutes
+            # the mic while she talks, so she could never be interrupted; the
+            # double-talk detector opens it when the user is clearly talking
+            # over her. Headphones (gate off) keep the plain RMS barge-in.
+            tt_cfg = (self.config or {}).get("turn_taking", {})
+            detector = None
+            if barge_in and echo_gate.enabled and tt_cfg.get("smart_barge_in", True):
+                # Kept across reconnects so her learned echo level survives.
+                if getattr(self, "_double_talk", None) is None:
+                    self._double_talk = DoubleTalkDetector(
+                        min_rms=int(tt_cfg.get("min_rms", 500)),
+                        margin=float(tt_cfg.get("echo_margin", 2.5)),
+                        min_ms=int(tt_cfg.get("min_speech_ms", 200)),
+                    )
+                detector = self._double_talk
+                detector.reset_run()
+            turns = TurnTaker(detector, confirm_s=float(tt_cfg.get("confirm_s", 1.5)))
+            interruption_notes = tt_cfg.get("interruption_note", True)
+            # Cleared while playback is held for a possible barge-in.
+            playable = asyncio.Event()
+            playable.set()
+            from collections import deque
 
             def _rms(chunk: bytes) -> int:
                 """Energy of a 16-bit PCM chunk — used to gate barge-in."""
@@ -766,8 +789,20 @@ class FreyaModel:
                         return 0
                     return int((sum(s * s for s in samples) / len(samples)) ** 0.5)
 
+            async def begin_hold():
+                turns.hold()
+                playable.clear()
+                cut = getattr(speaker_stream, "cut", None)
+                if cut:
+                    cut()
+                print("  \u270b Heard you over her voice; pausing her.")
+                await self._set_state("listening")
+
             async def send_audio():
                 last_paused = False
+                # The last ~0.4 s of mic audio, so a barge-in sends the start of
+                # the user's words that arrived while the mic was still gated.
+                preroll = deque(maxlen=6)
                 while True:
                     # Reject a chunk captured across the playback/listening boundary too.
                     echo_at_capture = echo_gate.blocks(model_speaking.is_set())
@@ -790,7 +825,32 @@ class FreyaModel:
                                 print(f"  [mic] audio_stream_end failed: {exc}")
                         await runtime.emit("mic", {"paused": paused})
                     if paused:
+                        preroll.clear()
                         continue
+                    if turns.hold_expired():
+                        # Nothing confirmed it: that was her own voice. Carry on.
+                        turns.release()
+                        print("  \u270b False alarm; she carries on.")
+                        playable.set()
+                        await self._set_state("speaking")
+                    if turns.user_has_floor:
+                        await session.send_realtime_input(
+                            audio=types.Blob(data=data, mime_type="audio/pcm;rate=16000")
+                        )
+                        continue
+                    if detector is not None and data:
+                        preroll.append(data)
+                        fired = detector.frame(_rms(data), time.monotonic())
+                        if fired and model_speaking.is_set():
+                            await begin_hold()
+                            for chunk in preroll:
+                                await session.send_realtime_input(
+                                    audio=types.Blob(data=chunk, mime_type="audio/pcm;rate=16000")
+                                )
+                            preroll.clear()
+                            continue
+                        if fired:
+                            detector.reset_run()
                     if echo_at_capture or echo_gate.blocks(model_speaking.is_set()):
                         continue
                     if model_speaking.is_set():
@@ -1237,10 +1297,15 @@ class FreyaModel:
                         if route_queue is not None:
                             route_queue.put_nowait(full)
 
-                async def flush_freya(cut: bool = False):
+                async def flush_freya(cut: bool = False, heard: float = None):
                     nonlocal freya_buffer, thinking_failed
                     full, spoken_calls = _extract_spoken_calls(freya_buffer.strip())
                     freya_buffer = ""
+                    turns.segment_start = turns.received
+                    if heard is not None:
+                        # Keep only what was actually played before the cut.
+                        full = trim_to_fraction(full, heard)
+                    said = full
                     if spoken_calls:
                         # She read a body-language call out loud instead of
                         # making it. Show it the proper way (the avatar
@@ -1299,6 +1364,75 @@ class FreyaModel:
                         if self.transcript:
                             self.transcript.add("Freya", full)
                         await self.on_transcript("Freya", full)
+                    return said
+
+                async def tell_interrupted(heard: str, cut_short: bool, marker: float):
+                    """Tell her she was cut off and where, then make sure the
+                    user's interruption actually gets an answer."""
+                    try:
+                        await session.send_client_content(
+                            turns=types.Content(role="user", parts=[types.Part(
+                                text=interruption_note(heard, cut_short))]),
+                            turn_complete=False,
+                        )
+                    except Exception as exc:
+                        print(f"  [turns] interruption note failed: {exc}")
+                        return
+                    started = time.monotonic()
+                    while time.monotonic() - started < 30:
+                        await asyncio.sleep(0.5)
+                        if activity["model"] > marker:
+                            return              # she answered
+                        if time.monotonic() - activity["user"] < 2.0:
+                            continue            # the user is still talking
+                        if self._pending_tools or runtime.is_paused() or model_speaking.is_set():
+                            continue
+                        said = user_buffer.strip() or turn["user_text"]
+                        if not said:
+                            return
+                        print("  [turns] no reply to the interruption; prompting her.")
+                        try:
+                            await session.send_client_content(
+                                turns=types.Content(role="user", parts=[types.Part(text=(
+                                    f'[SYSTEM NOTE: the user interrupted you and said: "{said[:500]}". '
+                                    "Respond to it now. Do not mention this note.]"))]),
+                                turn_complete=True,
+                            )
+                        except Exception as exc:
+                            print(f"  [turns] interruption follow-up failed: {exc}")
+                        return
+
+                async def take_floor(source: str):
+                    """The user cut in (confirmed by Gemini or by their words):
+                    silence her, keep only what was heard, and tell her."""
+                    nonlocal pending_playback_chunks
+                    fraction = turns.heard_fraction()
+                    running = source != "server" and not self._interaction.utterance_complete
+                    if not turns.confirm(generation_running=running):
+                        return
+                    cut = getattr(speaker_stream, "cut", None)
+                    if cut:
+                        cut()
+                    # Drop all queued (unplayed) audio so she stops instantly
+                    while not audio_queue.empty():
+                        try:
+                            audio_queue.get_nowait()
+                            audio_queue.task_done()
+                        except asyncio.QueueEmpty:
+                            break
+                    # Keep what she managed to say, marked as cut off
+                    heard = await flush_freya(cut=True, heard=fraction) or ""
+                    turns.played = turns.received  # the dropped audio will never play
+                    turns.segment_start = turns.received
+                    pending_playback_chunks = 0
+                    model_speaking.clear()
+                    playable.set()
+                    await self._set_state("interrupted")
+                    print(f"  \u270b Interrupted ({source}) after {fraction:.0%} of her line.")
+                    if interruption_notes:
+                        _bg_reports.add(t := asyncio.create_task(
+                            tell_interrupted(heard, fraction < 0.98, activity["model"])))
+                        t.add_done_callback(_bg_reports.discard)
 
                 while True:
                     async for response in session.receive():
@@ -1345,18 +1479,16 @@ class FreyaModel:
 
                         # ── BARGE-IN: user interrupted Freya mid-sentence ──
                         if getattr(sc, 'interrupted', False):
-                            # Drop all queued (unplayed) audio so she stops instantly
-                            while not audio_queue.empty():
-                                try:
-                                    audio_queue.get_nowait()
-                                    audio_queue.task_done()
-                                except asyncio.QueueEmpty:
-                                    break
-                            # Keep what she managed to say, marked as cut off
-                            await flush_freya(cut=True)
-                            pending_playback_chunks = 0
-                            model_speaking.clear()
-                            await self._set_state("interrupted")
+                            if turns.state == TurnTaker.CONFIRMED:
+                                turns.stale = False  # the old generation has stopped
+                            else:
+                                await take_floor("server")
+                            continue
+
+                        # The rest of a reply the user already cut off: never play it.
+                        if turns.stale and getattr(sc, 'turn_complete', False):
+                            turns.stale = False
+                            turn.update(output=False, user_text="", after_tool=False)
                             continue
 
                         # Accumulate input transcription fragments silently
@@ -1367,10 +1499,12 @@ class FreyaModel:
                                 activity_ui.heard()
                                 activity["user"] = time.monotonic()
                                 user_buffer += " " + text
+                                if turns.state == TurnTaker.HOLD:
+                                    await take_floor("words")
 
                         # Buffer Freya's words — don't emit yet
                         out = getattr(sc, 'output_transcription', None)
-                        if out:
+                        if out and not turns.stale:
                             text = _clean_speech(getattr(out, 'text', str(out)) or "")
                             if text:
                                 activity["model"] = time.monotonic()
@@ -1391,7 +1525,8 @@ class FreyaModel:
                                     await runtime.emit("speech", {"text": caption})
 
                         if sc.model_turn is not None:
-                            activity["model"] = time.monotonic()
+                            if not turns.stale:
+                                activity["model"] = time.monotonic()
                             for part in sc.model_turn.parts:
                                 part_call = getattr(part, "function_call", None)
                                 if part_call is not None:
@@ -1399,6 +1534,10 @@ class FreyaModel:
                                     await flush_freya()
                                     queue_call(part_call)
                                 if part.inline_data is not None:
+                                    if turns.stale:
+                                        continue
+                                    if turns.state == TurnTaker.CONFIRMED:
+                                        turns.reply_started()  # her answer to the interruption
                                     turn["output"] = True
                                     activity_ui.responding()
                                     turn["nudged"] = False
@@ -1406,7 +1545,8 @@ class FreyaModel:
                                         model_speaking.set()
                                         await self._set_state("speaking")
                                     pending_playback_chunks += 1
-                                    await audio_queue.put(part.inline_data.data)
+                                    turns.received += len(part.inline_data.data)
+                                    await audio_queue.put((turns.epoch, part.inline_data.data))
 
                         if getattr(sc, 'turn_complete', False):
                             await flush_user()
@@ -1500,13 +1640,33 @@ class FreyaModel:
             async def play_audio():
                 nonlocal pending_playback_chunks
                 while True:
-                    data = await audio_queue.get()
-                    echo_gate.begin_playback()
+                    epoch, data = await audio_queue.get()
                     try:
-                        await loop.run_in_executor(audio_pool, speaker_stream.write, data)
+                        while data:
+                            await playable.wait()        # held during a possible barge-in
+                            if epoch != turns.epoch:
+                                break                    # cut off: never play it
+                            resume = getattr(speaker_stream, "resume", None)
+                            if resume:
+                                resume()
+                            if detector is not None and isinstance(data, (bytes, bytearray)):
+                                detector.playback(_rms(data), len(data) / 48000, time.monotonic())
+                            echo_gate.begin_playback()
+                            turns.chunk_started(len(data))
+                            rest = b""
+                            try:
+                                rest = await loop.run_in_executor(audio_pool, speaker_stream.write, data)
+                            finally:
+                                echo_gate.end_playback()
+                                rest = rest if isinstance(rest, (bytes, bytearray)) else b""
+                                turns.chunk_finished(len(data) - len(rest), epoch == turns.epoch)
+                            # Held mid-chunk: finish it if she resumes.
+                            data = rest if (rest and epoch == turns.epoch
+                                            and turns.state == TurnTaker.HOLD) else b""
                     finally:
-                        echo_gate.end_playback()
-                    audio_queue.task_done()
+                        audio_queue.task_done()
+                    if epoch != turns.epoch:
+                        continue
                     pending_playback_chunks = max(0, pending_playback_chunks - 1)
                     if pending_playback_chunks == 0 and self._interaction.utterance_complete:
                         model_speaking.clear()
