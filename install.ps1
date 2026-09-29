@@ -203,7 +203,7 @@ $legacyRoot = Join-Path $env:windir "System32\freyav3"
 # System32 install into a fresh clone. Only files git does not track are copied,
 # minus what gets rebuilt anyway; the old folder is left for the user to delete.
 function Copy-LegacyData ($from, $to) {
-    $rebuilt = '^(venv|freya-ui/node_modules|freya-ui/\.next|freya-ui/next-env\.d\.ts|start-freya\.ps1|update-freya\.ps1)(/|$)|(^|/)__pycache__/'
+    $rebuilt = '^(venv|freya-ui/node_modules|freya-ui/\.next|freya-ui/next-env\.d\.ts|(start|update)-freya\.(ps1|cmd))(/|$)|(^|/)__pycache__/'
     $copied = 0
     foreach ($rel in (Invoke-Git $from ls-files --others --directory)) {
         if ($LASTEXITCODE -ne 0 -or $rel -match $rebuilt) { continue }
@@ -218,11 +218,22 @@ function Copy-LegacyData ($from, $to) {
     Write-Warn2 "The old copy is still in $from - delete it from an admin shell once Freya works."
 }
 
-# Running from inside a clone? Use it rather than nesting another copy.
-$inClone = (Test-Path ".\server.py") -and (Test-Path ".\core") -and (Test-Path ".\requirements.txt")
+# Running from inside a clone - or any folder in one, such as freya-ui where
+# an interrupted run can leave the shell? Use it rather than nesting a copy.
+function Find-CheckoutRoot ($dir) {
+    while ($dir) {
+        if ((Test-Path (Join-Path $dir "server.py")) -and (Test-Path (Join-Path $dir "core")) -and
+            (Test-Path (Join-Path $dir "requirements.txt"))) {
+            return $dir
+        }
+        $dir = Split-Path -Parent $dir
+    }
+    return $null
+}
+$checkoutRoot = Find-CheckoutRoot (Get-Location).Path
 
-if ($inClone) {
-    $root = (Get-Location).Path
+if ($checkoutRoot) {
+    $root = $checkoutRoot
     Write-Ok "Using existing checkout: $root"
     Update-Checkout $root
 } else {
@@ -305,15 +316,22 @@ if (-not $SkipBrowser) {
 # -- 4. Dashboard ----------------------------------------------------------
 if (-not $SkipFrontend) {
     Write-Step "Building the dashboard"
-    Push-Location (Join-Path $root "freya-ui")
     Write-Host "    Running npm install..."
-    npm install --no-audit --no-fund --loglevel=error
-    if ($LASTEXITCODE -eq 0) {
-        Write-Ok "Dashboard dependencies installed"
-    } else {
-        Write-Warn2 "npm install reported problems - check the output above"
+    # npm.cmd, not npm: PowerShell would pick npm.ps1, which Windows' default
+    # execution policy refuses to run ("running scripts is disabled").
+    # try/finally: this script runs in the caller's shell (irm | iex), so an
+    # error here used to leave the user sitting in freya-ui.
+    Push-Location (Join-Path $root "freya-ui")
+    try {
+        & npm.cmd install --no-audit --no-fund --loglevel=error
+        if ($LASTEXITCODE -eq 0) {
+            Write-Ok "Dashboard dependencies installed"
+        } else {
+            Write-Warn2 "npm install reported problems - check the output above"
+        }
+    } finally {
+        Pop-Location
     }
-    Pop-Location
 }
 
 # -- 5. Configuration ------------------------------------------------------
@@ -448,8 +466,8 @@ $startScript = Join-Path $root "start-freya.ps1"
 $startBody = @'
 # Starts both halves of Freya: the FastAPI backend and the Next.js dashboard.
 $root = Split-Path -Parent $MyInvocation.MyCommand.Path
-Start-Process powershell -ArgumentList "-NoExit","-Command","cd '$root'; .\venv\Scripts\python.exe server.py"
-Start-Process powershell -ArgumentList "-NoExit","-Command","cd '$root\freya-ui'; npm run dev"
+Start-Process powershell -ArgumentList "-NoExit","-ExecutionPolicy","Bypass","-Command","cd '$root'; .\venv\Scripts\python.exe server.py"
+Start-Process powershell -ArgumentList "-NoExit","-ExecutionPolicy","Bypass","-Command","cd '$root\freya-ui'; npm.cmd run dev"
 # The dashboard's first compile can take 15+ seconds; open it once it answers
 # instead of after a fixed delay that often landed on an error page.
 Write-Host "Waiting for the dashboard to come up..."
@@ -476,6 +494,16 @@ Invoke-Expression (Invoke-RestMethod "https://raw.githubusercontent.com/IHANsaja
 $updateBody | Out-File -FilePath $updateScript -Encoding utf8
 Write-Ok "Created update-freya.ps1"
 
+# Windows' default execution policy refuses to run .ps1 files, so each script
+# gets a .cmd twin that runs it with the policy bypassed for that one process
+# only - nothing on the system changes. Double-click them, or run them from
+# any shell. ASCII + CRLF so cmd.exe reads them on every codepage.
+foreach ($name in "start-freya", "update-freya") {
+    $cmdBody = "@echo off`r`npowershell -NoProfile -ExecutionPolicy Bypass -File `"%~dp0$name.ps1`"`r`n"
+    [IO.File]::WriteAllText((Join-Path $root "$name.cmd"), $cmdBody, [Text.Encoding]::ASCII)
+}
+Write-Ok "Created start-freya.cmd and update-freya.cmd"
+
 # -- Done ------------------------------------------------------------------
 Write-Host ""
 Write-Host "--------------------------------------------------------" -ForegroundColor DarkCyan
@@ -487,9 +515,9 @@ Write-Host ""
 
 if ((Get-Content $envPath -Raw) -match "PASTE_YOUR_GEMINI_API_KEY_HERE") {
     Write-Host " 1. Add your API key to .env  (GEMINI_API_KEY=...)" -ForegroundColor Yellow
-    Write-Host " 2. Start everything:  .\start-freya.ps1" -ForegroundColor White
+    Write-Host " 2. Start everything:  .\start-freya.cmd  (or double-click it)" -ForegroundColor White
 } else {
-    Write-Host " Start everything:  .\start-freya.ps1" -ForegroundColor White
+    Write-Host " Start everything:  .\start-freya.cmd  (or double-click it)" -ForegroundColor White
     Write-Host " Then open:         http://localhost:3000" -ForegroundColor Gray
 }
 if ((Get-Content $envPath -Raw) -match "(?m)^\s*TYPESAFE_API_KEY=\S") {
@@ -499,5 +527,5 @@ if ((Get-Content $envPath -Raw) -match "(?m)^\s*TYPESAFE_API_KEY=\S") {
 }
 Write-Host ""
 Write-Host " Headless CLI instead:  .\venv\Scripts\python.exe main.py" -ForegroundColor DarkGray
-Write-Host " Update later:          .\update-freya.ps1" -ForegroundColor DarkGray
+Write-Host " Update later:          .\update-freya.cmd" -ForegroundColor DarkGray
 Write-Host ""
