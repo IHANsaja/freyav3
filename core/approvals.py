@@ -49,6 +49,10 @@ class PendingAction:
     future: Optional[asyncio.Future] = None               # mission path
     timeout_task: Optional[asyncio.Task] = field(default=None, repr=False)
     risk: Optional[int] = None  # 1-5 from Jev; advisory only, never auto-approves
+    # Only a dashboard click may approve it. Set while a call is being handled:
+    # the caller's voice comes out of the speakers, and Freya's mic could take
+    # their "yes" as the user's.
+    ui_only: bool = False
 
     def to_payload(self) -> dict:
         payload = {
@@ -58,6 +62,7 @@ class PendingAction:
             "argsPreview": _args_preview(self.args),
             "source": self.source,
             "expiresAt": self.expires_at,
+            "uiOnly": self.ui_only,
         }
         if self.risk is not None:
             payload["risk"] = self.risk
@@ -110,9 +115,11 @@ class ApprovalManager:
 
     def request_deferred(self, summary: str, tool_name: str, args: dict,
                          thunk: Callable[[], Awaitable[str]],
-                         timeout: float = 120.0, source: str = "live") -> str:
+                         timeout: float = 120.0, source: str = "live",
+                         ui_only: bool = False) -> str:
         """LIVE path: park the action and return its id immediately."""
-        action = self._add(summary, tool_name, args, source, timeout, thunk=thunk)
+        action = self._add(summary, tool_name, args, source, timeout, thunk=thunk,
+                           ui_only=ui_only)
         return action.id
 
     async def wait(self, summary: str, tool_name: str, args: dict,
@@ -150,7 +157,8 @@ class ApprovalManager:
                 "approved": False, "via": "cancelled"})
             raise
 
-    def _add(self, summary, tool_name, args, source, timeout, thunk=None, future=None) -> PendingAction:
+    def _add(self, summary, tool_name, args, source, timeout, thunk=None, future=None,
+             ui_only=False) -> PendingAction:
         action = PendingAction(
             id=f"a-{uuid.uuid4().hex[:8]}",
             summary=summary,
@@ -160,6 +168,7 @@ class ApprovalManager:
             expires_at=time.time() + timeout,
             thunk=thunk,
             future=future,
+            ui_only=ui_only,
         )
         self._pending[action.id] = action
         action.timeout_task = asyncio.get_running_loop().create_task(
@@ -260,6 +269,9 @@ async def approve_action(args, ctx):
     action = _pick(args.get("action_id"))
     if action is None:
         return "There is no pending action to approve."
+    if action.ui_only:
+        return ("Not approved: this action can only be approved by clicking Approve on the "
+                "dashboard, not by voice. Tell the user it is waiting for his click.")
     result = await approvals.resolve(action.id, True, via="voice")
     return result if result is not None else f"Approved — the mission is continuing with '{action.summary}'."
 
