@@ -34,6 +34,8 @@ DEFAULT_CORE = [
     "open_app", "close_app", "capture_screen", "get_active_window",
     "set_volume", "media_control", "pause_listening", "switch_mode",
     "start_mission", "dispatch_agent",
+    # A ringing call can't wait for a tool search.
+    "answer_call", "speak_in_my_voice",
 ]
 SEARCH_TOOLS = "search_tools"
 RUN_TOOL = "run_tool"

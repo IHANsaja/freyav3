@@ -109,6 +109,11 @@ async def lifespan(app: FastAPI):
     unsubscribe()
     detach_popups()
     detach_activity()
+    try:
+        from core.voice_clone import passthrough
+        passthrough.stop()
+    except Exception:
+        pass
 
 
 app = FastAPI(lifespan=lifespan)
@@ -691,6 +696,92 @@ async def dismiss_persona_setup():
         with open(config_path, "w", encoding="utf-8") as f:
             json.dump(config, f, indent=2)
     return JSONResponse({"status": "dismissed"})
+
+
+# ── My Voice: speaking in the user's cloned voice (core/voice_clone) ──
+@app.get("/voice/status")
+async def voice_status_endpoint():
+    from core.voice_clone import setup
+    config = load_config()
+    status = await asyncio.to_thread(setup.status, config)
+    from core.voice_clone.policy import recent_log
+    status["log"] = recent_log(10)
+    return JSONResponse(status)
+
+
+@app.post("/voice/enroll/challenge")
+async def voice_challenge_endpoint():
+    from core.voice_clone import setup
+    return JSONResponse(setup.challenge())
+
+
+@app.post("/voice/enroll")
+async def voice_enroll_endpoint(request: Request, nonce: str = ""):
+    """Body: the recording as audio/wav; ?nonce= from /voice/enroll/challenge."""
+    from core.voice_clone import VoiceError, setup
+    wav = await request.body()
+    if len(wav) > 20 * 1024 * 1024:
+        raise UserFacingError("That recording is too large.")
+    try:
+        result = await asyncio.to_thread(setup.enroll, wav, nonce, load_config())
+    except VoiceError as e:
+        raise UserFacingError(str(e))
+    await broadcast({"type": "voice_status", "payload": {"enrolled": True}})
+    return JSONResponse({"status": "enrolled", **result})
+
+
+@app.delete("/voice/profile")
+async def voice_forget_endpoint():
+    from core.voice_clone import setup
+    note = await asyncio.to_thread(setup.forget, load_config())
+    await broadcast({"type": "voice_status", "payload": {"enrolled": False}})
+    return JSONResponse({"status": "deleted", "message": note})
+
+
+@app.post("/voice/test")
+async def voice_test_endpoint(body: dict):
+    """Say a line in the cloned voice on the user's speakers only - never into a call."""
+    from core.voice_clone import VoiceError, engine
+    from core.voice_clone.tools import _play
+    text = str(body.get("text") or "Hi, this is how I sound when Freya speaks for me.")[:300]
+    config = load_config()
+    try:
+        chunks = await engine.prepare(text, config, body.get("language"))
+        seconds, notes = await _play(chunks, None)
+    except VoiceError as e:
+        raise UserFacingError(str(e))
+    return JSONResponse({"status": "played", "seconds": round(seconds, 1),
+                         "cloned": all(n["cloned"] for n in notes)})
+
+
+@app.post("/voice/settings")
+async def voice_settings_endpoint(body: dict):
+    """cable_output_index, confirm mode, passthrough on/off."""
+    from core.voice_clone import VoiceError, passthrough, setup
+    updates = {}
+    if "cable_output_index" in body:
+        from core.audio import list_audio_devices
+        value = body["cable_output_index"]
+        names = {d["index"]: d["name"] for d in list_audio_devices()["output"]}
+        if value is not None and (isinstance(value, bool) or value not in names):
+            raise UserFacingError("Choose one of the available output devices for calls.")
+        updates["cable_output_index"] = value
+        updates["cable_output_name"] = names.get(value, "CABLE Input") if value is not None else "CABLE Input"
+    if "confirm" in body:
+        if body["confirm"] not in ("every_line", "first_per_call", "off_after_answer"):
+            raise UserFacingError("confirm must be every_line, first_per_call or off_after_answer.")
+        updates["confirm"] = body["confirm"]
+    if updates:
+        await asyncio.to_thread(setup.save, updates)
+    if "passthrough" in body:
+        try:
+            if body["passthrough"]:
+                await asyncio.to_thread(passthrough.start, load_config())
+            else:
+                await asyncio.to_thread(passthrough.stop)
+        except VoiceError as e:
+            raise UserFacingError(str(e))
+    return JSONResponse({"status": "updated"})
 
 
 def _resolved_audio_devices(config):
