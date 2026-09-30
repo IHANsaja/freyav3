@@ -82,6 +82,16 @@ export interface AgentJob {
     step?: string | null;    // the tool it is executing right now
     startedAt?: number | null; // unix seconds
     result?: string | null;
+    usage?: AgentUsage | null; // Gemini requests/tokens this job has spent
+}
+
+/** Local counts from core/quota.py for one background job. */
+export interface AgentUsage {
+    requests?: number;
+    input_tokens?: number;
+    cached_tokens?: number;
+    output_tokens?: number;
+    thought_tokens?: number;
 }
 
 /** Real session telemetry (GET /status + the `session` broadcast). Replaces the
@@ -608,6 +618,7 @@ export function useFreyaSocketConnection() {
                                 step: rest.step ?? (idx >= 0 ? prev[idx].step : null),
                                 startedAt: idx >= 0 ? prev[idx].startedAt : Date.now() / 1000,
                                 result: rest.result ?? (idx >= 0 ? prev[idx].result : null),
+                                usage: rest.usage ?? (idx >= 0 ? prev[idx].usage : null),
                             };
                             if (idx < 0) return [incoming, ...prev].slice(0, 12);
                             const next = [...prev];

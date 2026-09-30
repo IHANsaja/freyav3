@@ -28,6 +28,7 @@ from config import get_agent_api_key
 from core import runtime
 from core.registry import register, tool, dispatch as registry_dispatch, ToolContext, OBJ, P, STR
 from core.execution import ExecutionError, Exhausted, bounded
+from core.context_trim import TRIM_MARK, compact_results
 from core.quota import describe_failure, estimate_tokens, generate, usage
 from core.task_policy import TOOLS_FIRST
 
@@ -124,33 +125,12 @@ AGENT_BUDGET = {
 _WRAP_UP = ("[BUDGET] You are out of steps or token budget for this task. Do not call any more "
             "tools. Answer now with what you have found or done, and say plainly what is still "
             "unfinished.")
-_TRIM_MARK = " ...[older tool result trimmed to stay within the token budget]"
+_TRIM_MARK = TRIM_MARK
+_compact = compact_results
 
 
 def _budget(config: dict) -> dict:
     return {**AGENT_BUDGET, **((config or {}).get("agent_budget") or {})}
-
-
-def _compact(contents: list, keep_recent: int, head_chars: int) -> int:
-    """Cut the text of every tool result except the newest `keep_recent` turns.
-    Returns the number of characters removed."""
-    result_turns = [c for c in contents
-                    if any(getattr(p, "function_response", None) for p in (c.parts or []))]
-    removed = 0
-    for content in result_turns[:max(0, len(result_turns) - keep_recent)]:
-        parts = []
-        for part in content.parts:
-            fr = getattr(part, "function_response", None)
-            text = str(((fr.response or {}) if fr else {}).get("result", ""))
-            if fr is None or text.endswith(_TRIM_MARK) or len(text) <= head_chars:
-                parts.append(part)
-                continue
-            removed += len(text) - head_chars
-            parts.append(types.Part(function_response=types.FunctionResponse(
-                id=getattr(fr, "id", None), name=fr.name,
-                response={"result": text[:head_chars] + _TRIM_MARK})))
-        content.parts = parts
-    return removed
 
 
 def _spec(agent_type: str, config: dict) -> dict:
@@ -398,7 +378,7 @@ def _run_agent(job_id: str, agent_type: str, task: str, config: dict, ctx: ToolC
                 job["step"] = name
             _emit_threadsafe(main_loop, runtime.emit(
                 "agent", {"id": job_id, "agent": agent_type, "task": task,
-                          "step": name, "status": "working"}))
+                          "step": name, "status": "working", "usage": usage(job_id)}))
 
         return await react_loop(spec["system"], task, spec.get("tools", []),
                                 spec["model"], config, ctx, on_tool=on_tool,

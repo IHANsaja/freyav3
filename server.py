@@ -900,6 +900,7 @@ def _collect_jobs() -> list[dict]:
     jobs: list[dict] = []
     try:
         from core.agents import _jobs as agent_jobs
+        from core.quota import usage
         for job_id, j in agent_jobs.items():
             jobs.append({
                 "id": job_id,
@@ -909,6 +910,8 @@ def _collect_jobs() -> list[dict]:
                 "step": j.get("step"),
                 "startedAt": j.get("started"),
                 "result": (str(j["result"])[:400] if j.get("result") else None),
+                # Final numbers once done; live counters while it works.
+                "usage": j.get("usage") or usage(job_id),
             })
     except Exception as exc:
         log_error("endpoint.agents.sub", exc, level=logging.WARNING)

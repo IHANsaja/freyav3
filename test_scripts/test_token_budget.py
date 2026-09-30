@@ -10,7 +10,7 @@ from unittest.mock import AsyncMock, patch
 
 from google.genai import types
 
-from core import agents, quota
+from core import agents, context_trim, quota
 from core.registry import ToolContext
 
 
@@ -158,6 +158,36 @@ class CompactTests(unittest.TestCase):
         self.assertEqual(contents[4].parts[0].function_response.response["result"], "B" * 3000)
         self.assertIs(contents[1], model_turn)                         # model turns as received
         self.assertEqual(agents._compact(contents, 2, 300), 0)         # idempotent
+
+
+class BrowserTrimTests(unittest.TestCase):
+    def page_turn(self, url, result):
+        return types.Content(role="user", parts=[
+            types.Part(function_response=types.FunctionResponse(name="read_page", response={"result": result})),
+            types.Part(text=context_trim.PAGE_TAG + f"URL: {url}\nTITLE: t\n\nTHINGS YOU CAN INTERACT WITH:\n" + "x" * 5000)])
+
+    def test_only_newest_page_snapshot_stays_whole(self):
+        model_turn = types.Content(role="model", parts=[call("read_page")])
+        history = [types.Content(role="user", parts=[types.Part(text="TASK")])]
+        for i in range(4):
+            history += [model_turn, self.page_turn(f"https://e.com/{i}", "F" * 3000)]
+        context_trim.drop_stale_pages(history)
+        context_trim.compact_results(history, keep_recent=3, head_chars=800)
+        views = [p.text for c in history for p in c.parts if getattr(p, "text", None) and c.role == "user"][1:]
+        self.assertTrue(views[-1].startswith(context_trim.PAGE_TAG))
+        self.assertTrue(all(v.startswith(context_trim.STALE_PAGE) for v in views[:-1]))
+        self.assertIn("URL: https://e.com/0", views[0])                     # where it was stays known
+        results = [p.function_response.response["result"] for c in history for p in c.parts
+                   if getattr(p, "function_response", None)]
+        self.assertTrue(results[0].endswith(context_trim.TRIM_MARK))
+        self.assertEqual(results[1:], ["F" * 3000] * 3)                      # newest 3 findings whole
+        self.assertTrue(all(c is model_turn for c in history[1::2]))         # model turns untouched
+
+    def test_error_results_are_trimmed_too(self):
+        turn = types.Content(role="user", parts=[types.Part(function_response=types.FunctionResponse(
+            name="x", response={"error": "E" * 2000}))])
+        context_trim.compact_results([turn, result_turn("new")], keep_recent=1, head_chars=100)
+        self.assertTrue(turn.parts[0].function_response.response["error"].endswith(context_trim.TRIM_MARK))
 
 
 class ReactLoopTests(Isolated):

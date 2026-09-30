@@ -30,6 +30,7 @@ from google.genai import types
 from config import get_agent_api_key
 from core.browser.driver import get_browser
 from core.browser.perception import PageView
+from core.context_trim import PAGE_TAG, compact_results, drop_stale_pages
 from core.task_policy import TOOLS_FIRST
 
 SYSTEM = """You are Freya's browser. You are looking at a real Chromium window on the user's \
@@ -143,6 +144,10 @@ class BrowserAgent:
         self.max_visual_requests = max(0, min(5, int(self.bcfg.get("max_visual_requests", 2))))
         self.history: list[types.Content] = []
         self.visited: list[str] = []
+        # Picking the next click needs little reasoning; thinking tokens are
+        # billed as output. browser.thinking_level overrides agent_budget's.
+        from core.agents import _budget
+        self.thinking_level = self.bcfg.get("thinking_level", _budget(self.config).get("thinking_level"))
 
     async def run(self) -> str:
         browser = await get_browser(self.config)
@@ -205,6 +210,7 @@ class BrowserAgent:
                 response={"error":"Not executed: choose one browser action per turn."})) for extra in calls[1:])
             observation = responses + observation
             self.history.append(types.Content(role="user", parts=observation))
+            self._shrink()
             self._trim()
 
         # Out of steps — but it has been reading pages this whole time. Ask for
@@ -250,7 +256,10 @@ class BrowserAgent:
         if view.url and view.url not in self.visited:
             self.visited.append(view.url)
 
-        parts = [types.Part(text=f"RESULT: {result}\n\n{view.render()}")]
+        # The action's outcome already goes back in its function response; the
+        # observation is just the page now. It used to repeat the result here,
+        # sending every read_page (up to 9,000 characters) twice per request.
+        parts = [types.Part(text=PAGE_TAG + view.render())]
 
         if visual_reason is not None:
             if not self.use_vision or self.visual_requests >= self.max_visual_requests:
@@ -273,11 +282,37 @@ class BrowserAgent:
             if content.role == "user":
                 content.parts = [part for part in (content.parts or []) if part.inline_data is None] or [types.Part(text="Previous visual image omitted; use recorded findings.")]
 
+    def _shrink(self):
+        """Keep each request small: every step re-sends the whole history, and
+        Gemini's per-minute token limit counts all of it. Only the newest page
+        snapshot stays in full (older ones describe a page that has changed and
+        element numbers that no longer exist), and tool results older than the
+        last few are cut to a head - read_page findings included, which is why
+        the newest ones are kept whole. Model turns are never modified."""
+        from core.agents import _budget
+        budget = _budget(self.config)
+        drop_stale_pages(self.history)
+        compact_results(self.history, int(budget["keep_recent_results"]),
+                        int(budget["trimmed_result_chars"]))
+
     # ── model plumbing ─────────────────────────────────────────────────────
     async def _generate(self, cfg):
         from core.quota import generate
-        return await generate(self.client, quota_config=self.config,
-            model=self.model, contents=self.history, config=cfg)
+        if self.thinking_level and cfg.thinking_config is None:
+            cfg = cfg.model_copy(update={"thinking_config": types.ThinkingConfig(
+                thinking_level=self.thinking_level)})
+        try:
+            return await generate(self.client, quota_config=self.config,
+                model=self.model, contents=self.history, config=cfg)
+        except Exception as exc:
+            # A model without thinking levels rejects the setting: drop it for
+            # the rest of the task rather than failing it.
+            if not self.thinking_level or "thinking" not in str(exc).lower():
+                raise
+            self.thinking_level = None
+            return await generate(self.client, quota_config=self.config,
+                model=self.model, contents=self.history,
+                config=cfg.model_copy(update={"thinking_config": None}))
 
     def _trim(self, keep: int = 8):
         """Drop the middle of the history, keeping the task and recent steps.
