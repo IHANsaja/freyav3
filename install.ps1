@@ -197,6 +197,18 @@ function Update-Checkout ($repo) {
         Write-Ok "Already on the latest version ($after)"
     } else {
         Write-Ok "Updated $before -> $after"
+        # The dashboard's dev build cache can outlive an update and keep serving
+        # the old compiled CSS: after the runes update, the ring's styles were
+        # missing and it drew as a black disc over the orb. Rebuild it fresh.
+        $nextCache = Join-Path $repo "freya-ui\.next"
+        if (Test-Path $nextCache) {
+            try {
+                Remove-Item $nextCache -Recurse -Force -ErrorAction Stop
+                Write-Ok "Cleared the dashboard's build cache"
+            } catch {
+                Write-Warn2 "Couldn't clear freya-ui\.next (is the dashboard still running?) - close it and delete that folder if the dashboard looks wrong"
+            }
+        }
     }
 }
 
