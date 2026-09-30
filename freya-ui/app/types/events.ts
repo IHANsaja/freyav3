@@ -11,6 +11,9 @@ export interface PendingApproval {
     source: string; // "live" | "mission:<id>" | "suggestion"
     expiresAt: number; // unix seconds
     risk?: number; // 1-5, Jev's advisory assessment; absent when unscored
+    // Only a click here approves it (a spoken "yes" is refused) - set during
+    // a call Freya is handling, where the caller's voice reaches her mic.
+    uiOnly?: boolean;
 }
 
 export type ApprovalPayload =

@@ -54,6 +54,9 @@ function ApprovalCard({
 }) {
     const fraction = useCountdown(action.expiresAt);
     const fromMission = action.source.startsWith("mission");
+    // Lines spoken in the user's cloned voice: the summary carries the exact words.
+    const inYourVoice = action.tool === "answer_call" || action.tool === "speak_in_my_voice";
+    const standIn = action.summary.includes("NOT your voice");
 
     return (
         <div
@@ -79,6 +82,12 @@ function ApprovalCard({
                 {action.risk !== undefined && <RiskBadge risk={action.risk} />}
             </div>
 
+            {inYourVoice && (
+                <p className="text-[10px] font-mono font-bold tracking-widest uppercase mb-1.5 text-amber-200">
+                    {standIn ? "Stand-in voice - not yours" : "Spoken in your cloned voice"}
+                </p>
+            )}
+
             <p className="text-sm text-parchment leading-relaxed mb-1">
                 Freyja wants to <span className="font-semibold">{action.summary}</span>
             </p>
@@ -102,7 +111,9 @@ function ApprovalCard({
                     Deny
                 </button>
                 <span className="text-[10px] font-mono text-outline ml-auto">
-                    say “yes” or “no” works too
+                    {action.uiOnly
+                        ? "click only - a caller could be heard saying yes"
+                        : "say “yes” or “no” works too"}
                 </span>
             </div>
 
