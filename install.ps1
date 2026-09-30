@@ -572,28 +572,59 @@ if ((Get-Content $envPath -Raw) -match "(?m)^\s*GEMINI_API_KEY\s*=\s*(.*?)\s*$")
     $finalKey = $Matches[1].Trim().Trim('"', "'").Trim()
     $needsKey = (-not $finalKey) -or $finalKey -eq $placeholderKey -or (Test-GeminiKey $finalKey) -eq "rejected"
 }
-$alreadyRunning = [bool](Get-NetTCPConnection -LocalPort 8000 -State Listen -ErrorAction SilentlyContinue)
+# Who holds Freya's backend port: nobody, this install, or some other program.
+# Anything on the port used to count as "Freya is already running", even a
+# different copy or an unrelated app, and then nothing was started.
+function Get-PortOwner ($port) {
+    $conn = Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue | Select-Object -First 1
+    if (-not $conn) { return @{ state = "free" } }
+    $proc = Get-CimInstance Win32_Process -Filter "ProcessId=$($conn.OwningProcess)" -ErrorAction SilentlyContinue
+    # A venv's python.exe hands off to the base interpreter, so the listener's
+    # own command line may not show the install path - its parent's does.
+    $parent = if ($proc) { Get-CimInstance Win32_Process -Filter "ProcessId=$($proc.ParentProcessId)" -ErrorAction SilentlyContinue }
+    $text = (@($proc, $parent) | Where-Object { $_ } | ForEach-Object { "$($_.CommandLine) $($_.ExecutablePath)" }) -join " "
+    if ($text -and $text.IndexOf($root, [StringComparison]::OrdinalIgnoreCase) -ge 0) { return @{ state = "ours" } }
+    # Started some other way (or from another folder): if it answers like
+    # Freya's backend, it is another copy of her rather than a stranger.
+    try {
+        $status = Invoke-RestMethod "http://127.0.0.1:$port/status" -TimeoutSec 3
+        if ($null -ne $status.running) { return @{ state = "other-freya"; pid = $conn.OwningProcess } }
+    } catch { }
+    $name = if ($proc) { $proc.Name } else { "another program" }
+    return @{ state = "other"; name = $name; pid = $conn.OwningProcess }
+}
+
+$port = Get-PortOwner 8000
 if ($needsKey) {
     Write-Host " Freya needs a working Gemini API key before she can start." -ForegroundColor Yellow
     Write-Host " Get one at https://aistudio.google.com/apikey and run the same command" -ForegroundColor Yellow
     Write-Host " again - it will ask for the key and then start her." -ForegroundColor Yellow
-} elseif ($alreadyRunning) {
-    Write-Host " Freya is already running - close her windows and double-click" -ForegroundColor Yellow
-    Write-Host " start-freya.cmd to use this version." -ForegroundColor Yellow
-} elseif ($NoStart) {
-    Write-Host " Start everything:  .\start-freya.cmd  (or double-click it)" -ForegroundColor White
-} else {
+} elseif ($port.state -eq "ours") {
+    Write-Host " Freya is already running. Close her windows, then start her again" -ForegroundColor Yellow
+    Write-Host " (command below) to use this version." -ForegroundColor Yellow
+} elseif ($port.state -eq "other-freya") {
+    Write-Host " Another copy of Freya is running on port 8000 (process $($port.pid))." -ForegroundColor Yellow
+    Write-Host " Close its windows, then start this one with the command below." -ForegroundColor Yellow
+} elseif ($port.state -eq "other") {
+    Write-Host " Freya can't start yet: port 8000 is in use by $($port.name) (process $($port.pid))." -ForegroundColor Yellow
+    Write-Host " Close that program (or another copy of Freya), then start her with the command below." -ForegroundColor Yellow
+} elseif (-not $NoStart) {
     # The one command ends with Freya running: backend, dashboard, browser.
     Write-Host " Starting Freya - the dashboard opens in your browser when it is ready." -ForegroundColor Green
-    Write-Host " Next time, double-click start-freya.cmd in the folder above." -ForegroundColor Gray
     Start-Process powershell -ArgumentList "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "`"$startScript`"" -WindowStyle Minimized
 }
+
+# Always say how to open her: a full path works from any folder or window.
+Write-Host ""
+Write-Host " To open Freya any time, run:" -ForegroundColor White
+Write-Host "     & `"$root\start-freya.cmd`"" -ForegroundColor Cyan
+Write-Host "   or double-click start-freya.cmd in $root" -ForegroundColor Gray
 if ((Get-Content $envPath -Raw) -match "(?m)^\s*TYPESAFE_API_KEY=\S") {
     Write-Host " Jev: on (TYPESAFE_API_KEY set)" -ForegroundColor DarkGray
 } else {
     Write-Host " Jev: off - Gemini only (add TYPESAFE_API_KEY to .env if you have early access)" -ForegroundColor DarkGray
 }
 Write-Host ""
-Write-Host " Headless CLI instead:  .\venv\Scripts\python.exe main.py" -ForegroundColor DarkGray
-Write-Host " Update later:          .\update-freya.cmd" -ForegroundColor DarkGray
+Write-Host " Update later:          & `"$root\update-freya.cmd`"" -ForegroundColor DarkGray
+Write-Host " Headless CLI instead:  cd `"$root`"; .\venv\Scripts\python.exe main.py" -ForegroundColor DarkGray
 Write-Host ""
