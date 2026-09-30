@@ -15,7 +15,10 @@ from core.trading.providers import explain
 
 class QuotaTests(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
-        quota._next.clear(); quota._usage.clear()
+        quota.reset()
+        state = tempfile.TemporaryDirectory(); self.addCleanup(state.cleanup)
+        patcher = patch.object(quota, '_STATE_PATH', str(Path(state.name) / 'quota_state.json'))
+        patcher.start(); self.addCleanup(patcher.stop)
         self.cfg={'_quota_mission':'test','quota':{'default_rpm':1e9,'max_requests_per_mission':2}}
     def client(self, **kwargs):
         return NS(aio=NS(models=NS(generate_content=AsyncMock(**kwargs))))

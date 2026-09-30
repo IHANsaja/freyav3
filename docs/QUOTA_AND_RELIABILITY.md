@@ -14,11 +14,77 @@ label for those keys; Freya deliberately groups all keys by default.
   "project": "default-project",
   "default_rpm": 10,
   "rpm_by_model": {},
+  "default_tpm": 200000,
+  "tpm_by_model": {},
+  "default_rpd": 0,
+  "rpd_by_model": {},
   "max_requests_per_mission": 60,
   "max_retries": 2,
   "max_retry_wait_s": 60
 }
 ```
+
+Copy the RPM, TPM and RPD of each text model you use from AI Studio into the
+`*_by_model` maps. `default_rpd: 0` means "no local daily cap"; set `rpd_by_model`
+to stop just short of your daily limit and move to the fallback model instead of
+spending the last requests on refusals.
+
+### What Google's limits count
+
+From the [rate limits](https://ai.google.dev/gemini-api/docs/rate-limits) and
+[token](https://ai.google.dev/gemini-api/docs/tokens) documentation:
+
+- Limits apply **per project**, not per API key, and differ per model.
+- **TPM counts input tokens**, and the system instruction and every tool
+  declaration are input on every request.
+- **RPD resets at midnight Pacific time**; RPM and TPM use a rolling minute.
+- A token is about 4 characters.
+- Free-tier numbers are not published as fixed values; AI Studio shows yours.
+
+### Pacing (all background Gemini text calls)
+
+Every call from sub-agents, missions, the browser agent, Trading Lab, ambient
+watch, context suggestions, day summaries and memory extraction goes through
+`core/quota.py`, which now paces three limits per (project, model):
+
+| Limit | How it is kept |
+| :--- | :--- |
+| Requests / minute | One request every 60/RPM seconds (as before). |
+| Input tokens / minute | Each request reserves its estimated input size in a rolling 60 s window before it is sent, and waits if it would not fit. The reservation is replaced by the exact `prompt_token_count` from the response. |
+| Requests / day | Counted per Pacific day in `memory/quota_state.json` (gitignored), so restarts keep the count. After a daily 429, or once `rpd_by_model` is reached, the model is skipped straight to its fallback until the reset instead of spending a request per call to be refused. |
+
+Per-minute 429s are still handled reactively as well; the estimate is local and
+other programs can use the same project.
+
+## Sub-agent token budget
+
+Each step of a sub-agent (or mission step) re-sends the system prompt, all tool
+declarations and the whole history. Configure under `agent_budget`:
+
+```json
+"agent_budget": {
+  "max_context_tokens": 6000,
+  "max_tokens_per_task": 150000,
+  "keep_recent_results": 3,
+  "max_tool_result_chars": 4000,
+  "trimmed_result_chars": 800,
+  "thinking_level": "low",
+  "max_concurrent": 2
+}
+```
+
+| Setting | Effect |
+| :--- | :--- |
+| `max_context_tokens` | When the next request would exceed it, tool results older than the newest `keep_recent_results` are cut to `trimmed_result_chars`. Only tool output is trimmed: in stateless function calling the model's own turns (with their thought signatures) must be sent back exactly as received ([thinking docs](https://ai.google.dev/gemini-api/docs/thinking)). Trimming happens in one batch, so the prefix stays stable for [implicit caching](https://ai.google.dev/gemini-api/docs/caching). |
+| `max_tokens_per_task` | Input tokens one task may spend. When reached - or at the last step - the model is told to answer with what it has, with tools switched off, instead of failing with nothing. |
+| `thinking_level` | Thinking tokens are billed as output. `low` suits tool-driven steps; override per agent with `sub_agents.<type>.thinking_level`. Dropped automatically for a model that does not support it. |
+| `max_concurrent` | Agents running at once. More share the same per-minute quota, so extras wait in a queue (shown as "queued"). |
+
+Measured on a simulated 8-step research task with 4,000-character tool results,
+the defaults cut input tokens by about 17% (41k to 34k) and keep every request
+under about 6k tokens, where the untrimmed history reaches about 9k; on a 12-step
+task the saving is about 32% (87k to 59k). `check_agents` and the dashboard's
+agent events report each job's requests and input tokens (with cached tokens).
 
 A process-wide, thread-safe scheduler paces Gemini text/vision generation from
 missions, nested browser agents, Trading Lab, ambient watch, context suggestions,

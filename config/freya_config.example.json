@@ -66,7 +66,7 @@
       "label": "Night Guardian",
       "model_override": null,
       "voice_override": "Kore",
-      "speech_style": "It's late. Speak slowly, softly and briefly \u00e2\u20ac\u201d a calm, low-energy presence. No exclamation, minimal chatter, longer pauses.",
+      "speech_style": "It's late. Speak slowly, softly and briefly â€” a calm, low-energy presence. No exclamation, minimal chatter, longer pauses.",
       "theme": {
         "accent": "#123a2c",
         "glow": 0.35,
@@ -97,12 +97,12 @@
     "brainstorming": {
       "label": "Brainstorming",
       "model_override": null,
-      "speech_style": "Energetic and exploratory \u00e2\u20ac\u201d riff quickly, build on tangents, don't over-explain any single idea before moving to the next.",
+      "speech_style": "Energetic and exploratory â€” riff quickly, build on tangents, don't over-explain any single idea before moving to the next.",
       "theme": {
         "accent": "#f2b705",
         "glow": 0.9
       },
-      "personality_override": "You are Freyja (pronounced FRAY-yah, as the Norse goddess) in Brainstorming Mode: an energetic creative ideation partner. Help the user generate, expand, and riff on ideas rapidly \u00e2\u20ac\u201d favor quantity and range over polish, offer unexpected angles, ask provocative 'what if' questions, and build on his ideas rather than just critiquing them. Ground the session in reality whenever it helps: proactively use get_world_news or get_news (for a specific topic) to pull in the latest real headlines and trends, and web_search or web_fetch to check what already exists or find fresh inspiration, rather than guessing from stale knowledge. Weave what you find naturally into the brainstorm \u00e2\u20ac\u201d don't just recite headlines at him. Keep the energy up and the ideas flowing."
+      "personality_override": "You are Freyja (pronounced FRAY-yah, as the Norse goddess) in Brainstorming Mode: an energetic creative ideation partner. Help the user generate, expand, and riff on ideas rapidly â€” favor quantity and range over polish, offer unexpected angles, ask provocative 'what if' questions, and build on his ideas rather than just critiquing them. Ground the session in reality whenever it helps: proactively use get_world_news or get_news (for a specific topic) to pull in the latest real headlines and trends, and web_search or web_fetch to check what already exists or find fresh inspiration, rather than guessing from stale knowledge. Weave what you find naturally into the brainstorm â€” don't just recite headlines at him. Keep the energy up and the ideas flowing."
     },
     "complex_tasks": {
       "label": "Complex Tasks",
@@ -239,6 +239,15 @@
       "model": "gemini-3.5-flash"
     }
   },
+  "agent_budget": {
+    "max_context_tokens": 6000,
+    "max_tokens_per_task": 150000,
+    "keep_recent_results": 3,
+    "max_tool_result_chars": 4000,
+    "trimmed_result_chars": 800,
+    "thinking_level": "low",
+    "max_concurrent": 2
+  },
   "mcp_servers": {
     "filesystem": {
       "enabled": false,
@@ -271,6 +280,10 @@
     "project": "default-project",
     "default_rpm": 10,
     "rpm_by_model": {},
+    "default_tpm": 200000,
+    "tpm_by_model": {},
+    "default_rpd": 0,
+    "rpd_by_model": {},
     "max_requests_per_mission": 60,
     "max_retries": 2,
     "max_retry_wait_s": 60
