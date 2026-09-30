@@ -128,7 +128,9 @@ _last_gesture_touch_ts = 0.0
 # The dashboard is the only browser origin allowed in. CORS covers fetch();
 # WebSockets ignore CORS entirely, so /ws checks the same list itself —
 # otherwise any page open in the browser could connect and approve actions.
-DASHBOARD_ORIGINS = ["http://localhost:3000", "http://127.0.0.1:3000"]
+# Its port is picked at start (config/ports.py), so the list follows it.
+from config.ports import api_port, dashboard_origins
+DASHBOARD_ORIGINS = dashboard_origins()
 
 # Allow Next.js dev server to connect
 app.add_middleware(
@@ -1355,4 +1357,5 @@ async def _dispatch_ws_message(websocket: WebSocket, msg_type, data: dict):
 if __name__ == "__main__":
     # Loopback only: the API can approve actions, change the file sandbox and
     # drive the desktop, and it has no authentication of its own.
-    uvicorn.run("server:app", host="127.0.0.1", port=8000, reload=False)
+    # The port comes from start-freya (FREYA_API_PORT) when 8000 is taken.
+    uvicorn.run("server:app", host="127.0.0.1", port=api_port(), reload=False)

@@ -1,5 +1,6 @@
 "use client";
 import { useEffect, useState } from "react";
+import { BACKEND } from "../lib/backend";
 type Feed = {
   items: {
     title: string;
@@ -39,7 +40,7 @@ export default function NewsPanel({
       setBusy(true);
       try {
         const r = await fetch(
-          `http://localhost:8000/trading/news?symbol=${encodeURIComponent(filter)}`,
+          `${BACKEND}/trading/news?symbol=${encodeURIComponent(filter)}`,
           { signal: abort.signal },
         );
         if (!r.ok)

@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
+import { BACKEND } from "../lib/backend";
 
 interface SkillEntry {
     id: string;
@@ -14,7 +15,7 @@ interface SkillEntry {
 
 async function fetchSkills(): Promise<SkillEntry[] | null> {
     try {
-        const res = await fetch("http://localhost:8000/skills");
+        const res = await fetch(`${BACKEND}/skills`);
         const data = await res.json();
         return data.skills ?? [];
     } catch (e) {
@@ -44,7 +45,7 @@ export default function SkillsPanel() {
     }, []);
 
     const toggle = async (id: string) => {
-        const res = await fetch(`http://localhost:8000/skills/${id}/toggle`, { method: "POST" });
+        const res = await fetch(`${BACKEND}/skills/${id}/toggle`, { method: "POST" });
         if (res.ok) {
             setNote("Change applies on next session start.");
             load();

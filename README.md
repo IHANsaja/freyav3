@@ -279,8 +279,8 @@ File-touching tools pass through a sandbox (`core/safety.py`), editable in **Set
 > [!IMPORTANT]
 > The API can approve actions and drive your desktop and has no login, so it is locked to this
 > machine: the backend listens on `127.0.0.1` only, and the WebSocket accepts browsers only from the
-> dashboard origin (`localhost:3000`). Opening the dashboard from another device needs a deliberate
-> change.
+> dashboard's own origin (`localhost:<dashboard port>`). Opening the dashboard from another device
+> needs a deliberate change.
 
 > [!IMPORTANT]
 > Everything under `memory/`, plus `config/freya_config.json` and `.env`, is gitignored. Her memory
@@ -342,12 +342,21 @@ Third-party agent-standard skills can be dropped into `skills/` and used essenti
 ### Running manually
 
 ```powershell
-.\start-freya.cmd                        # backend + dashboard, opens the browser
+.\start-freya.cmd                        # backend + dashboard on free ports, opens the browser
 
 .\venv\Scripts\python.exe server.py      # or: backend only   (127.0.0.1:8000)
 cd freya-ui; npm.cmd run dev             #     dashboard only (localhost:3000)
 
 .\venv\Scripts\python.exe main.py        # headless CLI; Ctrl+C stops and saves memory
+```
+
+`start-freya` uses ports 8000 (backend) and 3000 (dashboard) when they are free and the next free
+ones when another app holds them, records them in `freya-ports.json`, and just opens the dashboard
+if this Freya is already running. To pick ports by hand, set them before starting each half:
+
+```powershell
+$env:FREYA_API_PORT = 8001; $env:FREYA_UI_PORT = 3001; .\venv\Scripts\python.exe server.py
+$env:NEXT_PUBLIC_FREYA_API = "http://localhost:8001"; cd freya-ui; npm.cmd run dev -- -p 3001
 ```
 
 Useful startup lines:

@@ -21,7 +21,8 @@ import NewsPanel from "./NewsPanel";
 import PracticeCoach from "./PracticeCoach";
 import DrawingInspector from "./DrawingInspector";
 import { RANGES, visibleRange } from "./practiceMath";
-const API = "http://localhost:8000/trading";
+import { BACKEND } from "../lib/backend";
+const API = `${BACKEND}/trading`;
 async function api(path: string, body?: unknown, signal?: AbortSignal) {
   const r = await fetch(API + path, {
     method: body === undefined ? "GET" : "POST",

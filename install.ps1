@@ -177,9 +177,27 @@ function Test-InWindowsDir ($path) {
 
 # Fast-forwards an existing install to the latest commit on GitHub and says
 # plainly when that did not happen - it used to print "Pulled latest" either way.
+# True when this install's backend is running: the port start-freya recorded
+# in freya-ports.json is held by a process started from $repo (a venv's
+# python.exe hands off to the base interpreter, so parents are checked too).
+function Test-FreyaRunning ($repo) {
+    $file = Join-Path $repo "freya-ports.json"
+    if (-not (Test-Path $file)) { return $false }
+    try { $apiPort = (Get-Content $file -Raw | ConvertFrom-Json).api } catch { return $false }
+    $conn = Get-NetTCPConnection -LocalPort $apiPort -State Listen -ErrorAction SilentlyContinue | Select-Object -First 1
+    $procId = if ($conn) { $conn.OwningProcess } else { $null }
+    for ($depth = 0; $procId -and $depth -lt 3; $depth++) {
+        $proc = Get-CimInstance Win32_Process -Filter "ProcessId=$procId" -ErrorAction SilentlyContinue
+        if (-not $proc) { break }
+        if ("$($proc.CommandLine) $($proc.ExecutablePath)".IndexOf($repo, [StringComparison]::OrdinalIgnoreCase) -ge 0) { return $true }
+        $procId = $proc.ParentProcessId
+    }
+    return $false
+}
+
 function Update-Checkout ($repo) {
-    if (Get-NetTCPConnection -LocalPort 8000 -State Listen -ErrorAction SilentlyContinue) {
-        Write-Warn2 "Freya looks like it is running. Close her windows first if the update fails."
+    if (Test-FreyaRunning $repo) {
+        Write-Warn2 "Freya is running. Close her windows first if the update fails."
     }
     $before = Invoke-Git $repo rev-parse --short HEAD
     # npm install rewrites package-lock.json; that churn must not block a pull.
@@ -220,7 +238,7 @@ $legacyRoot = Join-Path $env:windir "System32\freyav3"
 # checkout into another. Only files git does not track are copied, minus what
 # gets rebuilt anyway, and nothing already present in $to is overwritten.
 function Copy-PersonalData ($from, $to) {
-    $rebuilt = '^(venv|freya-ui/node_modules|freya-ui/\.next|freya-ui/next-env\.d\.ts|(start|update)-freya\.(ps1|cmd))(/|$)|(^|/)__pycache__/'
+    $rebuilt = '^(venv|freya-ui/node_modules|freya-ui/\.next|freya-ui/next-env\.d\.ts|(start|update)-freya\.(ps1|cmd)|freya-ports\.json)(/|$)|(^|/)__pycache__/'
     $copied = 0
     foreach ($rel in (Invoke-Git $from ls-files --others --directory)) {
         if ($LASTEXITCODE -ne 0 -or $rel -match $rebuilt) { continue }
@@ -517,20 +535,95 @@ if (-not (Test-Path $idFile)) {
 # -- 6. Launch helper ------------------------------------------------------
 $startScript = Join-Path $root "start-freya.ps1"
 $startBody = @'
-# Starts both halves of Freya: the FastAPI backend and the Next.js dashboard.
+# Starts both halves of Freya - the backend and the dashboard - and opens it.
+# Ports: 8000 and 3000 when they are free, otherwise the next free ones, so
+# another app (or another copy of Freya) holding a port never stops her.
 $root = Split-Path -Parent $MyInvocation.MyCommand.Path
-Start-Process powershell -ArgumentList "-NoExit","-ExecutionPolicy","Bypass","-Command","cd '$root'; .\venv\Scripts\python.exe server.py"
-Start-Process powershell -ArgumentList "-NoExit","-ExecutionPolicy","Bypass","-Command","cd '$root\freya-ui'; npm.cmd run dev"
+$portsFile = Join-Path $root "freya-ports.json"
+
+# Free = nothing listens on it (any address) and it can be bound here.
+function Test-PortFree ($port) {
+    if (Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue) { return $false }
+    $listener = $null
+    try {
+        $listener = [Net.Sockets.TcpListener]::new([Net.IPAddress]::Loopback, $port)
+        $listener.Start()
+        return $true
+    } catch {
+        return $false
+    } finally {
+        if ($listener) { $listener.Stop() }
+    }
+}
+
+function Find-FreePort ($preferred, $avoid) {
+    for ($p = $preferred; $p -lt $preferred + 50; $p++) {
+        if ($p -ne $avoid -and (Test-PortFree $p)) { return $p }
+    }
+    # Everything near it is busy: let Windows pick one.
+    $listener = [Net.Sockets.TcpListener]::new([Net.IPAddress]::Loopback, 0)
+    $listener.Start()
+    $p = $listener.LocalEndpoint.Port
+    $listener.Stop()
+    return $p
+}
+
+# True when the process on $port was started from this folder (a venv's
+# python.exe hands off to the base interpreter, so its parents are checked too).
+function Test-OursOnPort ($port) {
+    $conn = Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue | Select-Object -First 1
+    $procId = if ($conn) { $conn.OwningProcess } else { $null }
+    for ($depth = 0; $procId -and $depth -lt 3; $depth++) {
+        $proc = Get-CimInstance Win32_Process -Filter "ProcessId=$procId" -ErrorAction SilentlyContinue
+        if (-not $proc) { break }
+        $text = "$($proc.CommandLine) $($proc.ExecutablePath)"
+        if ($text.IndexOf($root, [StringComparison]::OrdinalIgnoreCase) -ge 0) { return $true }
+        $procId = $proc.ParentProcessId
+    }
+    return $false
+}
+
+$previous = $null
+if (Test-Path $portsFile) {
+    try { $previous = Get-Content $portsFile -Raw | ConvertFrom-Json } catch { $previous = $null }
+}
+
+# Already running from this folder: just bring the dashboard up.
+if ($previous -and (Test-OursOnPort $previous.api)) {
+    Write-Host "Freya is already running - opening her dashboard (http://localhost:$($previous.ui))."
+    Start-Process "http://localhost:$($previous.ui)"
+    return
+}
+
+$api = Find-FreePort 8000 -1
+$ui = Find-FreePort 3000 $api
+if ($api -ne 8000) { Write-Host "Port 8000 is busy - the backend uses port $api." }
+if ($ui -ne 3000) { Write-Host "Port 3000 is busy - the dashboard uses port $ui." }
+
+# The dashboard bakes the backend's address into its dev build; when that
+# address changes, a cached build would keep calling the old one.
+$nextCache = Join-Path $root "freya-ui\.next"
+if ($previous -and $previous.api -ne $api -and (Test-Path $nextCache)) {
+    try { Remove-Item $nextCache -Recurse -Force -ErrorAction Stop } catch { }
+}
+@{ api = $api; ui = $ui } | ConvertTo-Json | Out-File -FilePath $portsFile -Encoding utf8
+
+Start-Process powershell -ArgumentList "-NoExit","-ExecutionPolicy","Bypass","-Command",
+    "`$env:FREYA_API_PORT='$api'; `$env:FREYA_UI_PORT='$ui'; cd '$root'; .\venv\Scripts\python.exe server.py"
+Start-Process powershell -ArgumentList "-NoExit","-ExecutionPolicy","Bypass","-Command",
+    "`$env:NEXT_PUBLIC_FREYA_API='http://localhost:$api'; `$env:FREYA_UI_PORT='$ui'; cd '$root\freya-ui'; npm.cmd run dev -- -p $ui"
+
 # The dashboard's first compile can take 15+ seconds; open it once it answers
 # instead of after a fixed delay that often landed on an error page.
-Write-Host "Waiting for the dashboard to come up..."
-for ($i = 0; $i -lt 90; $i++) {
+Write-Host "Waiting for the dashboard to come up on port $ui..."
+for ($i = 0; $i -lt 120; $i++) {
     try {
-        Invoke-WebRequest "http://127.0.0.1:3000" -UseBasicParsing -TimeoutSec 2 | Out-Null
+        Invoke-WebRequest "http://127.0.0.1:$ui" -UseBasicParsing -TimeoutSec 2 | Out-Null
         break
     } catch { Start-Sleep -Seconds 1 }
 }
-Start-Process "http://localhost:3000"
+Start-Process "http://localhost:$ui"
+Write-Host "Freya is up: dashboard http://localhost:$ui (backend port $api)."
 '@
 $startBody | Out-File -FilePath $startScript -Encoding utf8
 Write-Ok "Created start-freya.ps1"
@@ -572,42 +665,15 @@ if ((Get-Content $envPath -Raw) -match "(?m)^\s*GEMINI_API_KEY\s*=\s*(.*?)\s*$")
     $finalKey = $Matches[1].Trim().Trim('"', "'").Trim()
     $needsKey = (-not $finalKey) -or $finalKey -eq $placeholderKey -or (Test-GeminiKey $finalKey) -eq "rejected"
 }
-# Who holds Freya's backend port: nobody, this install, or some other program.
-# Anything on the port used to count as "Freya is already running", even a
-# different copy or an unrelated app, and then nothing was started.
-function Get-PortOwner ($port) {
-    $conn = Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue | Select-Object -First 1
-    if (-not $conn) { return @{ state = "free" } }
-    $proc = Get-CimInstance Win32_Process -Filter "ProcessId=$($conn.OwningProcess)" -ErrorAction SilentlyContinue
-    # A venv's python.exe hands off to the base interpreter, so the listener's
-    # own command line may not show the install path - its parent's does.
-    $parent = if ($proc) { Get-CimInstance Win32_Process -Filter "ProcessId=$($proc.ParentProcessId)" -ErrorAction SilentlyContinue }
-    $text = (@($proc, $parent) | Where-Object { $_ } | ForEach-Object { "$($_.CommandLine) $($_.ExecutablePath)" }) -join " "
-    if ($text -and $text.IndexOf($root, [StringComparison]::OrdinalIgnoreCase) -ge 0) { return @{ state = "ours" } }
-    # Started some other way (or from another folder): if it answers like
-    # Freya's backend, it is another copy of her rather than a stranger.
-    try {
-        $status = Invoke-RestMethod "http://127.0.0.1:$port/status" -TimeoutSec 3
-        if ($null -ne $status.running) { return @{ state = "other-freya"; pid = $conn.OwningProcess } }
-    } catch { }
-    $name = if ($proc) { $proc.Name } else { "another program" }
-    return @{ state = "other"; name = $name; pid = $conn.OwningProcess }
-}
-
-$port = Get-PortOwner 8000
 if ($needsKey) {
     Write-Host " Freya needs a working Gemini API key before she can start." -ForegroundColor Yellow
     Write-Host " Get one at https://aistudio.google.com/apikey and run the same command" -ForegroundColor Yellow
     Write-Host " again - it will ask for the key and then start her." -ForegroundColor Yellow
-} elseif ($port.state -eq "ours") {
+} elseif (Test-FreyaRunning $root) {
+    # Other apps on 8000/3000 no longer matter - start-freya picks free ports.
+    # Only this same install already running needs a restart to update.
     Write-Host " Freya is already running. Close her windows, then start her again" -ForegroundColor Yellow
     Write-Host " (command below) to use this version." -ForegroundColor Yellow
-} elseif ($port.state -eq "other-freya") {
-    Write-Host " Another copy of Freya is running on port 8000 (process $($port.pid))." -ForegroundColor Yellow
-    Write-Host " Close its windows, then start this one with the command below." -ForegroundColor Yellow
-} elseif ($port.state -eq "other") {
-    Write-Host " Freya can't start yet: port 8000 is in use by $($port.name) (process $($port.pid))." -ForegroundColor Yellow
-    Write-Host " Close that program (or another copy of Freya), then start her with the command below." -ForegroundColor Yellow
 } elseif (-not $NoStart) {
     # The one command ends with Freya running: backend, dashboard, browser.
     Write-Host " Starting Freya - the dashboard opens in your browser when it is ready." -ForegroundColor Green

@@ -224,5 +224,6 @@ async def market_news(symbol:str='ALL'):
 
 # Offline launch without importing audio, desktop automation or Gemini Live.
 app=FastAPI(title='Freya Trading Lab (simulation only)')
-app.add_middleware(CORSMiddleware,allow_origins=['http://localhost:3000'],allow_methods=['*'],allow_headers=['*'])
+from config.ports import dashboard_origins
+app.add_middleware(CORSMiddleware,allow_origins=dashboard_origins(),allow_methods=['*'],allow_headers=['*'])
 app.include_router(router)

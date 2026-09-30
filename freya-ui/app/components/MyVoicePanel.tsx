@@ -2,8 +2,9 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { AudioDevice } from "../hooks/useFreyaSocket";
+import { BACKEND } from "../lib/backend";
 
-const API = "http://localhost:8000/voice";
+const API = `${BACKEND}/voice`;
 
 interface ChecklistItem {
   id: string;

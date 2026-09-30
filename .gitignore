@@ -276,3 +276,6 @@ update-freya.cmd
 # everything Freya said in your voice
 memory/voice/
 memory/voice_log.jsonl
+
+# Ports start-freya picked for this run (backend, dashboard)
+freya-ports.json
