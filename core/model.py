@@ -306,6 +306,16 @@ _ROTATION_MARKERS = (
 )
 
 
+def _duck_call_mic(on: bool) -> None:
+    """Silence the user's mic passthrough into a call while Freya herself
+    speaks on the speakers (core/voice_clone/passthrough.py); no-op when off."""
+    try:
+        from core.voice_clone import passthrough
+        passthrough.duck(on)
+    except Exception:
+        pass
+
+
 def is_rotation(exc: Exception) -> bool:
     """True when a dropped session is a routine lifecycle event, not a fault.
 
@@ -1664,12 +1674,14 @@ class FreyaModel:
                             if detector is not None and isinstance(data, (bytes, bytearray)):
                                 detector.playback(_rms(data), len(data) / 48000, time.monotonic())
                             echo_gate.begin_playback()
+                            _duck_call_mic(True)     # her own voice never goes into a call
                             turns.chunk_started(len(data))
                             rest = b""
                             try:
                                 rest = await loop.run_in_executor(audio_pool, speaker_stream.write, data)
                             finally:
                                 echo_gate.end_playback()
+                                _duck_call_mic(False)
                                 rest = rest if isinstance(rest, (bytes, bytearray)) else b""
                                 turns.chunk_finished(len(data) - len(rest), epoch == turns.epoch)
                             # Held mid-chunk: finish it if she resumes.

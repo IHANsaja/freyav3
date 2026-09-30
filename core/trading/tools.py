@@ -11,7 +11,8 @@ MUTATION={**SESSION,'key':P(STR,'Unique command id; reuse only for an identical 
     'revision':P(INT,'Current backend revision')}
 
 
-LAB_URL='http://localhost:3000/trading'
+from config.ports import ui_url
+LAB_URL=ui_url('/trading')    # the dashboard's port is picked at start (config/ports.py)
 
 
 @tool('open_trading_lab','Open the Trading Lab in the user\'s browser (or find the one already open) and return the '

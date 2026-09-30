@@ -404,6 +404,13 @@ def _inside_project(path: str) -> bool:
 def needs_approval(tool_name: str, args: dict, entry: dict | None, config: dict) -> bool:
     """True when this call must wait for the user's explicit approval."""
     cfg = _cfg(config)
+    # A tool's own rule comes first, so "approvals off" / unrestricted cannot
+    # silence the few tools that must never run unconfirmed.
+    rule = entry.get("approval_fn") if entry else None
+    if callable(rule):
+        decided = rule(tool_name, args or {}, config)
+        if decided is not None:
+            return bool(decided)
     if cfg.get("unrestricted") or cfg.get("approval_mode", "confirm") == "off":
         return False
     if tool_name in (cfg.get("never_confirm") or []):
@@ -441,5 +448,8 @@ def describe_action(tool_name: str, args: dict) -> str:
         return f"run the command: {cmd}"
     if tool_name == "browser_task":
         return f"do this in the browser: {str(args.get('task'))[:100]}"
+    if tool_name in ("answer_call", "speak_in_my_voice"):
+        from core.voice_clone.policy import describe
+        return describe(tool_name, args)
     preview = ", ".join(f"{k}={v}" for k, v in list(args.items())[:3])
     return f"run {tool_name}({preview[:80]})"

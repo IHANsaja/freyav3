@@ -3,6 +3,7 @@
 import { useState, useSyncExternalStore } from "react";
 import { CLOSE_CODES, type LinkError, type LinkStats } from "../../hooks/useFreyaSocket";
 import HudCard from "./HudCard";
+import { BACKEND_WS } from "../../lib/backend";
 
 const SOURCE_LABEL: Record<LinkError["source"], string> = {
   socket: "SOCKET",
@@ -144,7 +145,7 @@ export default function LinkHealthCard({
               : `CLOSED · retry #${stats.reconnectAttempts}`
           }
           color={connected ? OK : BAD}
-          title="ws://localhost:8000/ws"
+          title={BACKEND_WS}
         />
         <Row
           label="Msgs · Last"

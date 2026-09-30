@@ -77,6 +77,9 @@ BUILTIN_SKILLS: list[tuple[str, SkillManifest]] = [
      "Claude-style SKILL.md capability packs loaded on demand")),
     ("core.career_ops", SkillManifest("career", "Career Ops",
      "Job search: portal scanning, A-G offer evaluation, CV tailoring and tracking")),
+    ("core.voice_clone.tools", SkillManifest("voice_clone", "My Voice",
+     "Answer WhatsApp / Phone Link calls and say dictated messages in your cloned voice",
+     gate="voice_clone.enabled")),
 ]
 
 _manifests: dict[str, SkillManifest] = {}

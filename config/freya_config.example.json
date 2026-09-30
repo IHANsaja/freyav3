@@ -248,6 +248,32 @@
     "thinking_level": "low",
     "max_concurrent": 2
   },
+  "voice_clone": {
+    "enabled": false,
+    "voicebox_url": "http://127.0.0.1:17493",
+    "voicebox_profile_id": null,
+    "voicebox_engine": "auto",
+    "gemini_tts_model": "gemini-3.8-flash-tts",
+    "gemini_fallback_voice": "Kore",
+    "allow_fallback_voice": true,
+    "cable_output_index": null,
+    "cable_output_name": "CABLE Input",
+    "passthrough": {
+      "enabled": true,
+      "muted_during_handled_call": true
+    },
+    "confirm": "first_per_call",
+    "max_chars": 400,
+    "max_lines_per_minute": 6,
+    "answer_settle_ms": 1200,
+    "disclosure": {
+      "en": "Hi, this is {name}'s assistant, speaking in {name}'s voice.",
+      "si": "ආයුබෝවන්, මේ {name}ගේ සහායකයා, {name}ගේ කටහඬින් කතා කරනවා.",
+      "ta": "வணக்கம், இது {name} அவர்களின் உதவியாளர், {name} அவர்களின் குரலில் பேசுகிறேன்."
+    },
+    "apps": {},
+    "audit_log": true
+  },
   "mcp_servers": {
     "filesystem": {
       "enabled": false,

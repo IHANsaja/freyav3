@@ -230,13 +230,19 @@ def _rank(name: str, q: str) -> float:
     return 0.0
 
 
-def _find_control(query: str, max_depth: int = 18):
-    """Search the foreground window's UIA tree for the best element matching `query`."""
+def _find_control(query: str, max_depth: int = 18, root=None):
+    """Search a window's UIA tree for the best element matching `query`.
+
+    Defaults to the foreground window. Pass `root` to search a window that is
+    not focused - an incoming-call popup usually isn't.
+    """
     auto = _uia()
-    try:
-        win = auto.GetForegroundControl()
-    except Exception:
-        win = auto.GetRootControl()
+    win = root
+    if win is None:
+        try:
+            win = auto.GetForegroundControl()
+        except Exception:
+            win = auto.GetRootControl()
     if win is None:
         return None, []
     q = query.lower().strip()
@@ -257,6 +263,39 @@ def _find_control(query: str, max_depth: int = 18):
         except Exception:
             continue
     return best, names
+
+
+def find_top_windows(process_names=(), title_substrings=()) -> list:
+    """Top-level windows owned by one of `process_names` (case-insensitive exe
+    names) or whose title contains one of `title_substrings`, focused or not."""
+    auto = _uia()
+    procs = {p.lower() for p in process_names}
+    titles = [t.lower() for t in title_substrings]
+    exe_by_pid: dict[int, str] = {}
+    found = []
+    try:
+        children = auto.GetRootControl().GetChildren()
+    except Exception:
+        return found
+    for win in children:
+        try:
+            title = (win.Name or "").lower()
+            pid = win.ProcessId
+            if pid not in exe_by_pid:
+                exe_by_pid[pid] = _exe_name(pid)
+            if exe_by_pid[pid] in procs or any(t and t in title for t in titles):
+                found.append(win)
+        except Exception:
+            continue
+    return found
+
+
+def _exe_name(pid: int) -> str:
+    try:
+        import psutil
+        return psutil.Process(pid).name().lower()
+    except Exception:
+        return ""
 
 
 def _pattern(ctrl, getter: str):

@@ -59,6 +59,8 @@ def load_config():
             json.dump(config, f, indent=2)
     # New simulation-only capability defaults without rewriting existing installs.
     config.setdefault("trading", {"enabled": True})
+    # Speaking in the user's cloned voice stays off until he records his voice.
+    config.setdefault("voice_clone", {"enabled": False})
     
     if "modes" not in config:
         config["modes"] = {}

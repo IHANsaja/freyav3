@@ -12,6 +12,7 @@ import type {
     PersonaPayload,
     SuggestionPayload,
 } from "../types/events";
+import { BACKEND, BACKEND_WS } from "../lib/backend";
 
 export type AvatarIntent = AvatarIntentPayload & { seq: number };
 
@@ -232,7 +233,7 @@ export function useFreyaSocketConnection() {
         const ping = async () => {
             const t0 = performance.now();
             try {
-                const res = await fetch("http://localhost:8000/status", {
+                const res = await fetch(`${BACKEND}/status`, {
                     cache: "no-store",
                     signal: AbortSignal.timeout(3000),
                 });
@@ -251,7 +252,7 @@ export function useFreyaSocketConnection() {
                         "server.py is running but not answering. Its event loop may be blocked by a slow tool or a hung audio call.");
                 } else if (e instanceof TypeError) {
                     pushLinkError("ping", "GET /status failed: network error (connection refused)",
-                        "server.py isn't reachable on localhost:8000. Start it, or check whether it crashed in its terminal.");
+                        `server.py isn't reachable at ${BACKEND}. Start it, or check whether it crashed in its terminal.`);
                 } else {
                     pushLinkError("ping", `GET /status failed: ${e instanceof Error ? e.message : String(e)}`,
                         "The server answered with an error. Check the server.py log for a traceback.");
@@ -273,7 +274,7 @@ export function useFreyaSocketConnection() {
         // console.warn rather than console.error: the Next.js dev overlay counts
         // console.error as an issue and would bury real errors under a stack
         // trace on every reload. Same reasoning as socket.onerror below.
-        fetch("http://localhost:8000/config", { signal: AbortSignal.timeout(4000) })
+        fetch(`${BACKEND}/config`, { signal: AbortSignal.timeout(4000) })
             .then((r) => r.json())
             .then((cfg: FreyaConfig) => {
                 setConfig(cfg);
@@ -282,7 +283,7 @@ export function useFreyaSocketConnection() {
             .catch(() => {
                 console.warn("Freyja config unavailable — backend offline, will retry on reconnect.");
             });
-        fetch("http://localhost:8000/audio/devices", { signal: AbortSignal.timeout(4000) })
+        fetch(`${BACKEND}/audio/devices`, { signal: AbortSignal.timeout(4000) })
             .then((r) => r.json())
             .then((devices: { input: AudioDevice[]; output: AudioDevice[] }) => setAudioDevices(devices))
             .catch(() => {
@@ -292,7 +293,7 @@ export function useFreyaSocketConnection() {
         // Jobs already running before this tab opened: the WS events only
         // describe jobs that START while connected, so without this a reload
         // mid-task shows an empty agent list.
-        fetch("http://localhost:8000/agents", { signal: AbortSignal.timeout(4000) })
+        fetch(`${BACKEND}/agents`, { signal: AbortSignal.timeout(4000) })
             .then((r) => r.json())
             .then((d: { agents: AgentJob[] }) =>
                 // Merge, don't replace: the socket connects in parallel and
@@ -305,11 +306,11 @@ export function useFreyaSocketConnection() {
                 })
             )
             .catch(() => {});
-        fetch("http://localhost:8000/status", { signal: AbortSignal.timeout(4000) })
+        fetch(`${BACKEND}/status`, { signal: AbortSignal.timeout(4000) })
             .then((r) => r.json())
             .then((s: SessionInfo) => setSession(s))
             .catch(() => {});
-        fetch("http://localhost:8000/health", { signal: AbortSignal.timeout(4000) })
+        fetch(`${BACKEND}/health`, { signal: AbortSignal.timeout(4000) })
             .then((r) => (r.ok ? r.json() : null))
             .then((h: HealthPayload | null) => { if (h?.overall) setHealth(h); })
             .catch(() => {});
@@ -349,7 +350,7 @@ export function useFreyaSocketConnection() {
         let reconnectTimer: ReturnType<typeof setTimeout>;
         const connect = () => {
             if (disposed) return;
-            const socket = new WebSocket("ws://localhost:8000/ws");
+            const socket = new WebSocket(BACKEND_WS);
 
             socket.onopen = () => {
                 setConnected(true);
@@ -377,7 +378,7 @@ export function useFreyaSocketConnection() {
                 if (!disposed) {
                     const meaning = CLOSE_CODES[ev.code] ?? "Unknown close code";
                     pushLinkError("socket",
-                        `ws://localhost:8000/ws closed: code ${ev.code} (${meaning})${ev.reason ? `, reason "${ev.reason}"` : ""}. Retrying every 2 s`,
+                        `${BACKEND_WS} closed: code ${ev.code} (${meaning})${ev.reason ? `, reason "${ev.reason}"` : ""}. Retrying every 2 s`,
                         ev.code === 1013
                             ? "The tab fell behind the server's broadcast queue, often because the tab was in the background or busy."
                             : ev.code === 1006
@@ -392,7 +393,7 @@ export function useFreyaSocketConnection() {
             // console.warn keeps it out of the Next.js dev-overlay issue count.
             socket.onerror = () => {
                 console.warn("Freyja WebSocket connection failed — will retry.");
-                pushLinkError("socket", "WebSocket handshake to ws://localhost:8000/ws failed",
+                pushLinkError("socket", `WebSocket handshake to ${BACKEND_WS} failed`,
                     "The browser couldn't open the socket. Usually the backend is down or still starting.");
             };
 

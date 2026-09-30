@@ -1,8 +1,9 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { BACKEND } from "../lib/backend";
 
-const API = "http://localhost:8000";
+const API = BACKEND;
 
 type TraitKey = "warmth" | "humor" | "detail" | "initiative";
 type Traits = Record<TraitKey, number>;

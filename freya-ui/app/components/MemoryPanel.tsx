@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
+import { BACKEND } from "../lib/backend";
 
 interface MemoryItem {
     id: number;
@@ -19,7 +20,7 @@ async function fetchMemoryItems(kind: string, query: string): Promise<MemoryItem
     if (kind !== "all") params.set("kind", kind);
     if (query.trim()) params.set("q", query.trim());
     try {
-        const res = await fetch(`http://localhost:8000/memory/items?${params}`);
+        const res = await fetch(`${BACKEND}/memory/items?${params}`);
         const data = await res.json();
         return data.items ?? [];
     } catch (e) {
@@ -61,7 +62,7 @@ export default function MemoryPanel({ refreshKey = 0 }: MemoryPanelProps) {
     }, [kind, query, refreshKey]);
 
     const saveEdit = async (id: number) => {
-        await fetch(`http://localhost:8000/memory/items/${id}`, {
+        await fetch(`${BACKEND}/memory/items/${id}`, {
             method: "PATCH",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ content: draft }),
@@ -71,13 +72,13 @@ export default function MemoryPanel({ refreshKey = 0 }: MemoryPanelProps) {
     };
 
     const forget = async (id: number) => {
-        await fetch(`http://localhost:8000/memory/items/${id}`, { method: "DELETE" });
+        await fetch(`${BACKEND}/memory/items/${id}`, { method: "DELETE" });
         load();
     };
 
     const addItem = async () => {
         if (!newItem.content.trim()) return;
-        await fetch("http://localhost:8000/memory/items", {
+        await fetch(`${BACKEND}/memory/items`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify(newItem),

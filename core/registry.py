@@ -92,17 +92,27 @@ _skills_loaded = False
 _current_skill: str | None = None
 
 
-def register(name, handler, decl=None, *, gate=None, dangerous=False, approval="none"):
+def register(name, handler, decl=None, *, gate=None, dangerous=False, approval="none",
+             approval_fn=None, ui_only=None):
     """Register a handler. If `decl` is None it's a handler-only override of an
     existing (statically declared) tool — dispatch will use it but it won't be
     re-declared to Gemini. `approval="confirm"` forces the human approval gate
-    for every call regardless of arguments."""
+    for every call regardless of arguments.
+
+    `approval_fn(name, args, config) -> bool | None` decides per call and is
+    consulted before the user's global "approvals off" settings: a tool that
+    must never run unconfirmed (speaking in the user's cloned voice) returns
+    True there. None falls through to the normal rules.
+    `ui_only(args) -> bool`: when True, the pending approval can only be
+    granted from the dashboard, never by a spoken "yes"."""
     _REGISTRY[name] = {"decl": decl, "handler": handler, "gate": gate,
                        "dangerous": dangerous, "approval": approval,
+                       "approval_fn": approval_fn, "ui_only": ui_only,
                        "skill": _current_skill}
 
 
-def tool(name, description, parameters=None, *, gate=None, dangerous=False, approval="none"):
+def tool(name, description, parameters=None, *, gate=None, dangerous=False, approval="none",
+         approval_fn=None, ui_only=None):
     """Decorator: declare + register a brand-new tool in one step."""
     decl = types.FunctionDeclaration(
         name=name,
@@ -111,7 +121,8 @@ def tool(name, description, parameters=None, *, gate=None, dangerous=False, appr
     )
 
     def deco(fn):
-        register(name, fn, decl=decl, gate=gate, dangerous=dangerous, approval=approval)
+        register(name, fn, decl=decl, gate=gate, dangerous=dangerous, approval=approval,
+                 approval_fn=approval_fn, ui_only=ui_only)
         return fn
 
     return deco
@@ -305,7 +316,16 @@ async def dispatch(name: str, args: dict, ctx: ToolContext) -> str:
             async def thunk(name=name, args=args, ctx=ctx, entry=entry):
                 return await _execute(name, args, ctx, entry)
 
-            pid = approvals.request_deferred(summary, name, args, thunk, timeout=timeout)
+            ui_only = bool(entry and callable(entry.get("ui_only")) and entry["ui_only"](args))
+            pid = approvals.request_deferred(summary, name, args, thunk, timeout=timeout,
+                                             ui_only=ui_only)
+            if ui_only:
+                return (
+                    f"APPROVAL_REQUIRED[{pid}]: This is a sensitive action ({summary}) and it "
+                    f"has NOT run yet. It can only be approved by clicking Approve on the "
+                    f"dashboard - a spoken yes does not count here. Tell the user briefly that "
+                    f"it is waiting for his click; do not call approve_action."
+                )
             return (
                 f"APPROVAL_REQUIRED[{pid}]: This is a sensitive action ({summary}) and it "
                 f"has NOT run yet. Briefly tell the user what you're about to do and ask for a "

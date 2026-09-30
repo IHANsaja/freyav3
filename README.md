@@ -152,6 +152,7 @@ says which: `Jev: on` or `Jev: off - running on Gemini only`.
 | **Browser** | Drives a real Chromium window like a person: search, curved mouse moves, typing, scrolling, reading. | `browser_task`, `browser_research` |
 | **Web and news** | Quota-free search and page reading, plus live headlines projected into the dashboard. | `web_search`, `web_fetch`, `get_world_news` |
 | **Watch video** | Watches a YouTube link or local file and answers questions about it. | `use_skill("watch")` |
+| **Calls in your voice** | Answers WhatsApp / Phone Link calls and says what you dictate in your own cloned voice (via [Voicebox](https://github.com/jamiepine/voicebox)); every line confirmed and logged. See [docs/VOICE_CLONE.md](docs/VOICE_CLONE.md). | `answer_call`, `speak_in_my_voice` |
 
 ### Agents and missions
 
@@ -203,6 +204,7 @@ says which: `Jev: on` or `Jev: off - running on Gemini only`.
 | *"What did I work on yesterday?"* | An answer from the rotated day summary, not a guess |
 | *"Watch this video and tell me what happens at 2:30"* + a link | She analyses the frames and audio |
 | *"Open the trading lab"* | Opens in your browser (or reuses your tab) and follows the chart you are on |
+| *"Answer the WhatsApp call and tell them I'll call back at 5"* | After your OK, she picks up and says it in your own voice |
 
 ### Hand gestures
 
@@ -277,8 +279,8 @@ File-touching tools pass through a sandbox (`core/safety.py`), editable in **Set
 > [!IMPORTANT]
 > The API can approve actions and drive your desktop and has no login, so it is locked to this
 > machine: the backend listens on `127.0.0.1` only, and the WebSocket accepts browsers only from the
-> dashboard origin (`localhost:3000`). Opening the dashboard from another device needs a deliberate
-> change.
+> dashboard's own origin (`localhost:<dashboard port>`). Opening the dashboard from another device
+> needs a deliberate change.
 
 > [!IMPORTANT]
 > Everything under `memory/`, plus `config/freya_config.json` and `.env`, is gitignored. Her memory
@@ -340,12 +342,21 @@ Third-party agent-standard skills can be dropped into `skills/` and used essenti
 ### Running manually
 
 ```powershell
-.\start-freya.cmd                        # backend + dashboard, opens the browser
+.\start-freya.cmd                        # backend + dashboard on free ports, opens the browser
 
 .\venv\Scripts\python.exe server.py      # or: backend only   (127.0.0.1:8000)
 cd freya-ui; npm.cmd run dev             #     dashboard only (localhost:3000)
 
 .\venv\Scripts\python.exe main.py        # headless CLI; Ctrl+C stops and saves memory
+```
+
+`start-freya` uses ports 8000 (backend) and 3000 (dashboard) when they are free and the next free
+ones when another app holds them, records them in `freya-ports.json`, and just opens the dashboard
+if this Freya is already running. To pick ports by hand, set them before starting each half:
+
+```powershell
+$env:FREYA_API_PORT = 8001; $env:FREYA_UI_PORT = 3001; .\venv\Scripts\python.exe server.py
+$env:NEXT_PUBLIC_FREYA_API = "http://localhost:8001"; cd freya-ui; npm.cmd run dev -- -p 3001
 ```
 
 Useful startup lines:
@@ -404,6 +415,7 @@ freyav3/
 | `GET /agents` | Live sub-agent and browser jobs with their current step |
 | `GET` `POST` `/config` | Model, voice, mode and audio devices (unknown values return HTTP 400) |
 | `GET` `POST` `/persona` | Personality setup: style, sliders, voice, accent, name |
+| `/voice/*` | My Voice: status, enrollment, test, call settings, delete ([docs](docs/VOICE_CLONE.md)) |
 | `GET` `POST` `/safety` | The access-control sandbox |
 | `GET` `POST` `PATCH` `DELETE` `/memory/items` | Structured memory |
 | `GET /skills` | Skill catalog with tools and gate state |
@@ -428,7 +440,8 @@ Offline: no microphone, no API quota, no network. Run from the project root.
 .\venv\Scripts\python.exe -m pytest -q test_scripts\test_live_routing.py test_scripts\test_voice_lifecycle.py `
   test_scripts\test_session_resilience.py test_scripts\test_find_documents.py test_scripts\test_systemone.py `
   test_scripts\test_activity_overlay.py test_scripts\test_trading_open.py test_scripts\test_quota_fixes.py `
-  test_scripts\test_api_key_auth.py test_scripts\test_audio_devices.py test_scripts\test_persona.py
+  test_scripts\test_api_key_auth.py test_scripts\test_audio_devices.py test_scripts\test_persona.py `
+  test_scripts\test_token_budget.py test_scripts\test_voice_clone.py
 ```
 
 They cover the live loop against a fake Gemini session (including the one-job-at-a-time queue),

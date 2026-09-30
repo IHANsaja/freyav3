@@ -4,6 +4,7 @@ import { useState } from "react";
 import { AudioDevice, FreyaConfig, FreyaState } from "../hooks/useFreyaSocket";
 import AccessControlPanel from "./AccessControlPanel";
 import MemoryPanel from "./MemoryPanel";
+import MyVoicePanel from "./MyVoicePanel";
 import SkillsPanel from "./SkillsPanel";
 
 interface SettingsModalProps {
@@ -271,6 +272,15 @@ export default function SettingsModal({
               <span>LONG_TERM_MEMORY_CORE</span>
             </div>
             <MemoryPanel refreshKey={memoryVersion} />
+          </div>
+
+          {/* MY_VOICE — speaking in the user's cloned voice on calls:
+              setup checklist, recording, test, and the log. Full width. */}
+          <div className="flex flex-col gap-2 lg:col-span-2">
+            <div className="flex items-center gap-2 text-[11px] font-bold text-outline uppercase tracking-wider">
+              <span>MY_VOICE</span>
+            </div>
+            <MyVoicePanel outputs={audioDevices.output} />
           </div>
 
           {/* SKILL_MODULES — capability catalog with gates. Full width: the

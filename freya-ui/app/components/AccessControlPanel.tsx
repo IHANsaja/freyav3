@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
+import { BACKEND } from "../lib/backend";
 
 interface SafetyConfig {
   allowed_roots: string[];
@@ -10,7 +11,7 @@ interface SafetyConfig {
   defaults: string[];
 }
 
-const API = "http://localhost:8000/safety";
+const API = `${BACKEND}/safety`;
 
 /**
  * Editor for `safety.allowed_roots` and the approval gate.

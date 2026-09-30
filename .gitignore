@@ -271,3 +271,11 @@ start-freya.ps1
 update-freya.ps1
 start-freya.cmd
 update-freya.cmd
+
+# Speaking in your cloned voice (core/voice_clone): recordings and the log of
+# everything Freya said in your voice
+memory/voice/
+memory/voice_log.jsonl
+
+# Ports start-freya picked for this run (backend, dashboard)
+freya-ports.json
