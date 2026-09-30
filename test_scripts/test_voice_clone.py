@@ -274,8 +274,9 @@ def test_audit_log(tmp_path):
 # -- calls -------------------------------------------------------------------
 
 class Ctrl:
-    def __init__(self, name):
+    def __init__(self, name, kind="ButtonControl"):
         self.Name = name
+        self.ControlTypeName = kind
 
 
 def fake_screen(monkeypatch, windows, pressed):
@@ -288,7 +289,8 @@ def fake_screen(monkeypatch, windows, pressed):
     def find_control(label, max_depth=18, root=None):
         for name in windows.get(root.Name, []):
             if name.lower().startswith(label.lower()):
-                return Ctrl(name), [name]
+                kind = "ListItemControl" if name.startswith("chat:") else "ButtonControl"
+                return Ctrl(name.removeprefix("chat:"), kind), [name]
         return None, []
 
     def invoke(ctrl):
@@ -323,9 +325,21 @@ def test_no_call_is_reported_honestly(monkeypatch):
 
 
 def test_labels_can_be_overridden(monkeypatch):
-    fake_screen(monkeypatch, {"WhatsApp": ["Aceptar"]}, [])
-    cfg = {"voice_clone": {"apps": {"whatsapp": {"accept": ["Aceptar"], "hangup": ["Colgar"]}}}}
+    fake_screen(monkeypatch, {"WhatsApp": ["Aceptar", "Rechazar"]}, [])
+    cfg = {"voice_clone": {"apps": {"whatsapp": {"accept": ["Aceptar"], "hangup": ["Colgar"],
+                                                 "decline": ["Rechazar"]}}}}
     assert calls.answer("whatsapp", cfg).ok
+
+
+@pytest.mark.parametrize("controls", [
+    ["Answer"],                        # no decline next to it: not a ringing call
+    ["chat:Answer from Kamal", "Decline"],   # a chat row, not a button
+])
+def test_never_presses_something_that_is_not_a_ringing_call(monkeypatch, controls):
+    pressed = []
+    fake_screen(monkeypatch, {"WhatsApp": controls}, pressed)
+    assert not calls.answer("whatsapp", {}).ok
+    assert pressed == []
 
 
 # -- tools -------------------------------------------------------------------

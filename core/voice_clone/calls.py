@@ -18,6 +18,10 @@ class AppSpec:
     titles: list
     accept: list
     hangup: list
+    # An incoming call always offers both answer and decline. Requiring the
+    # pair keeps a chat or button that merely starts with "Answer" from being
+    # pressed when no call is ringing.
+    decline: list = field(default_factory=lambda: ["Decline", "Reject", "Ignore"])
 
 
 APPS = {
@@ -73,11 +77,13 @@ def _specs(app: str, config: dict) -> list[tuple[str, AppSpec]]:
         extra = overrides.get(name) or {}
         out.append((name, AppSpec(base.name, base.processes, base.titles,
                                   list(extra.get("accept") or base.accept),
-                                  list(extra.get("hangup") or base.hangup))))
+                                  list(extra.get("hangup") or base.hangup),
+                                  list(extra.get("decline") or base.decline))))
     return out
 
 
-def _find(labels: list, windows: list):
+def _find(labels: list, windows: list, button_only: bool = True):
+    """First window + button whose name starts with one of `labels`."""
     from core import screen
     for win in windows:
         for label in labels:
@@ -85,8 +91,20 @@ def _find(labels: list, windows: list):
                 ctrl, _ = screen._find_control(label, root=win)
             except Exception:
                 ctrl = None
-            if ctrl is not None and (ctrl.Name or "").strip().lower().startswith(label.lower()):
-                return win, ctrl
+            if ctrl is None or not (ctrl.Name or "").strip().lower().startswith(label.lower()):
+                continue
+            if button_only and getattr(ctrl, "ControlTypeName", "") not in ("ButtonControl", "SplitButtonControl"):
+                continue
+            return win, ctrl
+    return None, None
+
+
+def _incoming(spec: "AppSpec", windows: list):
+    """The window and answer button of a ringing call: answer AND decline together."""
+    for win in windows:
+        _, accept = _find(spec.accept, [win])
+        if accept is not None and _find(spec.decline, [win])[1] is not None:
+            return win, accept
     return None, None
 
 
@@ -103,7 +121,7 @@ def answer(app: str, config: dict) -> CallResult:
         return CallResult(False, None, f"I can answer WhatsApp and Phone Link calls, not '{app}'.")
     for name, spec in _specs(app, config):
         windows = screen.find_top_windows(spec.processes, spec.titles)
-        win, ctrl = _find(spec.accept, windows)
+        win, ctrl = _incoming(spec, windows)
         if ctrl is None:
             continue
         try:
