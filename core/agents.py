@@ -28,7 +28,7 @@ from config import get_agent_api_key
 from core import runtime
 from core.registry import register, tool, dispatch as registry_dispatch, ToolContext, OBJ, P, STR
 from core.execution import ExecutionError, Exhausted, bounded
-from core.quota import generate
+from core.quota import describe_failure, estimate_tokens, generate, usage
 from core.task_policy import TOOLS_FIRST
 
 # Built-in agent specs (config `sub_agents.<type>` may override model/system/tools).
@@ -88,6 +88,70 @@ MAX_STEPS = 8
 _counter = itertools.count(1)
 _jobs: dict[str, dict] = {}  # id -> {type, task, status, result, started}
 
+# Token budget for every background ReAct loop (sub-agents and mission steps).
+# Override any key under config `agent_budget`.
+#
+# Each step re-sends the system prompt, every tool declaration and the whole
+# history, and Gemini's tokens-per-minute limit counts all of that as input,
+# so a loop that keeps pasting 4,000-character tool results grows until it
+# runs into the limit. Two rules keep it bounded:
+#   - Past max_context_tokens, tool results older than the last
+#     keep_recent_results are cut to a short head. Only our own tool output is
+#     trimmed: the model's turns go back exactly as received, which stateless
+#     function calling requires (thought signatures). They are trimmed in one
+#     go, so the history keeps a stable prefix for implicit caching afterwards.
+#   - Past max_tokens_per_task input tokens, or at the last step, the model is
+#     told to answer with what it has, with tools switched off. A partial
+#     answer is worth more than an exhausted budget and nothing to show.
+#
+# Defaults measured on a simulated 8-step research task with 4,000-character
+# tool results: input drops ~17% (41k -> 34k tokens) and no single request
+# grows past ~6k, where untrimmed ones reach ~9k; at 12 steps the saving is
+# ~32% (87k -> 59k). Keeping the 3 newest results whole and 800 characters of
+# older ones leaves the evidence a final answer needs.
+AGENT_BUDGET = {
+    "max_context_tokens": 6_000,
+    "max_tokens_per_task": 150_000,
+    "keep_recent_results": 3,
+    "max_tool_result_chars": 4_000,
+    "trimmed_result_chars": 800,
+    # Thinking tokens are billed as output. "low" suits tool-driven steps;
+    # raise it per agent type with sub_agents.<type>.thinking_level.
+    "thinking_level": "low",
+    "max_concurrent": 2,
+}
+
+_WRAP_UP = ("[BUDGET] You are out of steps or token budget for this task. Do not call any more "
+            "tools. Answer now with what you have found or done, and say plainly what is still "
+            "unfinished.")
+_TRIM_MARK = " ...[older tool result trimmed to stay within the token budget]"
+
+
+def _budget(config: dict) -> dict:
+    return {**AGENT_BUDGET, **((config or {}).get("agent_budget") or {})}
+
+
+def _compact(contents: list, keep_recent: int, head_chars: int) -> int:
+    """Cut the text of every tool result except the newest `keep_recent` turns.
+    Returns the number of characters removed."""
+    result_turns = [c for c in contents
+                    if any(getattr(p, "function_response", None) for p in (c.parts or []))]
+    removed = 0
+    for content in result_turns[:max(0, len(result_turns) - keep_recent)]:
+        parts = []
+        for part in content.parts:
+            fr = getattr(part, "function_response", None)
+            text = str(((fr.response or {}) if fr else {}).get("result", ""))
+            if fr is None or text.endswith(_TRIM_MARK) or len(text) <= head_chars:
+                parts.append(part)
+                continue
+            removed += len(text) - head_chars
+            parts.append(types.Part(function_response=types.FunctionResponse(
+                id=getattr(fr, "id", None), name=fr.name,
+                response={"result": text[:head_chars] + _TRIM_MARK})))
+        content.parts = parts
+    return removed
+
 
 def _spec(agent_type: str, config: dict) -> dict:
     override = (config or {}).get("sub_agents", {}).get(agent_type, {})
@@ -123,14 +187,19 @@ def _declarations(spec: dict, config: dict):
 
 async def react_loop(system: str, task: str, tool_names: list[str], model: str,
                      config: dict, ctx: ToolContext, max_steps: int = MAX_STEPS,
-                     on_tool=None) -> str:
+                     on_tool=None, thinking_level: str | None = None) -> str:
     """Shared ReAct executor: a background Gemini text model calling registry
     tools until it answers in plain text. Used by quick sub-agents AND by each
     mission step (core/missions.py). `on_tool(name, args, result)` — optional
     async callback fired after every tool call (evidence collection, UI events).
 
+    Token use is bounded by AGENT_BUDGET (see above).
     Raises on API errors — callers decide how to phrase failures.
     """
+    if max_steps <= 0:
+        raise Exhausted("Agent exhausted its step budget before completion")
+    budget = _budget(config)
+    level = thinking_level or budget.get("thinking_level")
     client = genai.Client(api_key=get_agent_api_key(), http_options=types.HttpOptions(retry_options=types.HttpRetryOptions(attempts=1)))
     try:
         decls = _declarations({"tools": tool_names}, config)
@@ -139,13 +208,58 @@ async def react_loop(system: str, task: str, tool_names: list[str], model: str,
             system_instruction=system + "\n" + TOOLS_FIRST,
             tools=[types.Tool(function_declarations=decls)] if decls else None,
             temperature=0.4,
+            thinking_config=types.ThinkingConfig(thinking_level=level) if level else None,
         )
+        # Same tools stay declared (so the cached prefix is unchanged); the
+        # model is just not allowed to call them.
+        wrap_cfg = cfg.model_copy(update={"tool_config": types.ToolConfig(
+            function_calling_config=types.FunctionCallingConfig(mode="NONE"))}) if decls else cfg
         contents = [types.Content(role="user", parts=[types.Part(text=task)])]
+        timeout = (config or {}).get("missions", {}).get("model_timeout_s", 90)
+        result_chars = int(budget["max_tool_result_chars"])
+        spent = 0          # input tokens used by this task so far
+        last_prompt = 0    # exact input size of the previous request
+        sent = 0           # how many contents that request carried
 
-        for _step in range(max_steps):
-            resp = await bounded(generate(client, quota_config=config,
-                model=model, contents=contents, config=cfg
-            ), (config or {}).get("missions", {}).get("model_timeout_s", 90))
+        for step in range(max_steps):
+            # Size of the next request: the last exact count plus what was
+            # added since, or a full estimate when there is no count to go on.
+            if last_prompt:
+                projected = last_prompt + estimate_tokens(contents[sent:])
+            else:
+                projected = estimate_tokens(contents, cfg)
+            if projected > budget["max_context_tokens"]:
+                if _compact(contents, int(budget["keep_recent_results"]),
+                            int(budget["trimmed_result_chars"])):
+                    last_prompt = 0
+            wrap_up = step == max_steps - 1 or spent >= budget["max_tokens_per_task"]
+            if wrap_up:
+                contents[-1].parts = [*(contents[-1].parts or []), types.Part(text=_WRAP_UP)]
+
+            sent = len(contents)
+            try:
+                resp = await bounded(generate(client, quota_config=config,
+                    model=model, contents=contents, config=wrap_cfg if wrap_up else cfg
+                ), timeout)
+            except Exception as exc:
+                # A model without thinking levels rejects the setting; drop it
+                # once rather than failing the whole task.
+                if not level or "thinking" not in str(exc).lower():
+                    raise
+                level = None
+                cfg = cfg.model_copy(update={"thinking_config": None})
+                wrap_cfg = wrap_cfg.model_copy(update={"thinking_config": None})
+                resp = await bounded(generate(client, quota_config=config,
+                    model=model, contents=contents, config=wrap_cfg if wrap_up else cfg
+                ), timeout)
+            prompt = getattr(getattr(resp, "usage_metadata", None), "prompt_token_count", None)
+            if isinstance(prompt, int):
+                last_prompt = prompt
+                spent += prompt
+            else:
+                last_prompt = 0
+                spent += projected
+
             cand = (resp.candidates or [None])[0]
             if cand is None or cand.content is None:
                 raise ExecutionError("Model returned no candidate")
@@ -155,6 +269,8 @@ async def react_loop(system: str, task: str, tool_names: list[str], model: str,
                 if not resp.text or not resp.text.strip():
                     raise ExecutionError("Model returned no completion summary")
                 return resp.text
+            if wrap_up:
+                break
             contents.append(cand.content)
             tool_parts = []
             for fc in fcalls:
@@ -178,7 +294,8 @@ async def react_loop(system: str, task: str, tool_names: list[str], model: str,
                     except Exception:
                         pass
                 tool_parts.append(types.Part(function_response=types.FunctionResponse(
-                    name=fc.name, response={"result": str(result)[:4000]})))
+                    id=getattr(fc, "id", None), name=fc.name,
+                    response={"result": str(result)[:result_chars]})))
             contents.append(types.Content(role="user", parts=tool_parts))
         raise Exhausted("Agent exhausted its step budget before completion")
     finally:
@@ -224,8 +341,51 @@ def _run_agent_thread(job_id: str, agent_type: str, task: str, config: dict,
     voice path no longer share a scheduler. Same isolation core/browser_agent.py
     already uses, and for exactly the same reason.
     """
+    # Its own usage bucket: requests and tokens (nested browser calls included)
+    # are counted per job, and max_requests_per_mission caps a runaway agent.
+    config = {**(config or {}), "_quota_mission": job_id}
     ctx = ToolContext(config, session=None, source=f"agent:{job_id}")
 
+    # Parallel agents share one per-minute quota; more at once only makes each
+    # wait longer and raises the chance of a 429. Extra jobs queue here.
+    slots = _slots(config)
+    if not slots.acquire(blocking=False):
+        _jobs[job_id]["status"] = "queued"
+        _emit_threadsafe(main_loop, runtime.emit(
+            "agent", {"id": job_id, "agent": agent_type, "task": task, "status": "queued"}))
+        slots.acquire()
+        _jobs[job_id]["status"] = "working"
+        _emit_threadsafe(main_loop, runtime.emit(
+            "agent", {"id": job_id, "agent": agent_type, "task": task, "status": "working"}))
+    try:
+        _run_agent(job_id, agent_type, task, config, ctx, main_loop)
+    finally:
+        slots.release()
+
+
+_slot_lock = threading.Lock()
+_slot_state: dict = {"size": None, "sem": None}
+
+
+def _slots(config: dict) -> threading.Semaphore:
+    size = max(1, int(_budget(config)["max_concurrent"]))
+    with _slot_lock:
+        if _slot_state["size"] != size:
+            _slot_state.update(size=size, sem=threading.Semaphore(size))
+        return _slot_state["sem"]
+
+
+def _usage_line(stats: dict) -> str:
+    if not stats.get("requests"):
+        return ""
+    line = f"{stats['requests']} request{'s' if stats['requests'] != 1 else ''}, {stats.get('input_tokens', 0):,} input tokens"
+    if stats.get("cached_tokens"):
+        line += f" ({stats['cached_tokens']:,} cached)"
+    return line
+
+
+def _run_agent(job_id: str, agent_type: str, task: str, config: dict, ctx: ToolContext,
+               main_loop: asyncio.AbstractEventLoop):
     async def _do_run():
         spec = _spec(agent_type, config)
 
@@ -241,23 +401,25 @@ def _run_agent_thread(job_id: str, agent_type: str, task: str, config: dict,
                           "step": name, "status": "working"}))
 
         return await react_loop(spec["system"], task, spec.get("tools", []),
-                                spec["model"], config, ctx, on_tool=on_tool)
+                                spec["model"], config, ctx, on_tool=on_tool,
+                                thinking_level=spec.get("thinking_level"))
 
     try:
         final = asyncio.run(_do_run())
         status = "done"
     except Exception as e:
         status = getattr(e, "outcome", "failed")
-        if quota_hit(e):
-            final = ("I hit the daily free-tier Gemini quota, so I couldn't finish. Try again "
-                     "later, or add billing / a second API key to lift the limit.")
+        reason = describe_failure(e) if quota_hit(e) else None
+        if reason:
+            final = f"I couldn't finish: {reason}"
         else:
             final = f"My {agent_type} agent hit an error: {e}"
 
-    _jobs[job_id].update(status=status, result=final, step=None)
+    stats = usage(job_id)
+    _jobs[job_id].update(status=status, result=final, step=None, usage=stats)
     _emit_threadsafe(main_loop, runtime.emit(
         "agent", {"id": job_id, "agent": agent_type, "task": task,
-                  "status": status, "result": str(final)[:400]}))
+                  "status": status, "result": str(final)[:400], "usage": stats}))
     _emit_threadsafe(main_loop, runtime.inject(
         f"Your {agent_type} agent finished the task '{task}'. Here's the result: {final}"))
 
@@ -301,8 +463,14 @@ def check_agents(args, ctx) -> str:
     lines = []
     for jid, j in _jobs.items():
         age = int(time.time() - j["started"])
+        spent = _usage_line(j.get("usage") or usage(jid))
+        spent = f" [{spent}]" if spent else ""
         if j["status"] == "done":
-            lines.append(f"{jid} ({j['type']}): done — {str(j['result'])[:160]}")
+            lines.append(f"{jid} ({j['type']}): done{spent} — {str(j['result'])[:160]}")
+        elif j["status"] == "queued":
+            lines.append(f"{jid} ({j['type']}): queued behind other agents ({age}s) on '{j['task'][:60]}'")
+        elif j["status"] not in ("working",):
+            lines.append(f"{jid} ({j['type']}): {j['status']}{spent} — {str(j['result'])[:160]}")
         else:
-            lines.append(f"{jid} ({j['type']}): still working ({age}s) on '{j['task'][:60]}'")
+            lines.append(f"{jid} ({j['type']}): still working ({age}s){spent} on '{j['task'][:60]}'")
     return "\n".join(lines)
